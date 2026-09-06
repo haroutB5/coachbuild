@@ -1,0 +1,566 @@
+[
+ {
+  "patch": "16.16",
+  "champion_id": 875,
+  "role": 0,
+  "keystone_id": 8010,
+  "core_item_ids": [
+   6631,
+   3071,
+   3053
+  ],
+  "captured_at": "2026-08-21T12:37:49.107Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 14,
+  "role": 0,
+  "keystone_id": 8437,
+  "core_item_ids": [
+   2502,
+   6664,
+   3748
+  ],
+  "captured_at": "2026-08-21T12:37:50.860Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 106,
+  "role": 0,
+  "keystone_id": 8005,
+  "core_item_ids": [
+   2510,
+   6675,
+   3075
+  ],
+  "captured_at": "2026-08-21T12:37:52.756Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 50,
+  "role": 0,
+  "keystone_id": 8010,
+  "core_item_ids": [
+   3116,
+   6653,
+   3157
+  ],
+  "captured_at": "2026-08-21T12:37:53.836Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 904,
+  "role": 0,
+  "keystone_id": 8010,
+  "core_item_ids": [
+   6631,
+   6333,
+   3156
+  ],
+  "captured_at": "2026-08-21T12:37:55.294Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 85,
+  "role": 0,
+  "keystone_id": 8112,
+  "core_item_ids": [
+   3152,
+   4646,
+   4645
+  ],
+  "captured_at": "2026-08-21T12:37:57.722Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 235,
+  "role": 4,
+  "keystone_id": 8992,
+  "core_item_ids": [
+   3071,
+   3087,
+   3094
+  ],
+  "captured_at": "2026-08-21T12:38:00.642Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 526,
+  "role": 4,
+  "keystone_id": 8439,
+  "core_item_ids": [
+   3050,
+   3190,
+   3109
+  ],
+  "captured_at": "2026-08-21T12:38:01.524Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 24,
+  "role": 0,
+  "keystone_id": 8008,
+  "core_item_ids": [
+   2510,
+   3146,
+   6333
+  ],
+  "captured_at": "2026-08-21T12:38:05.930Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 62,
+  "role": 0,
+  "keystone_id": 8010,
+  "core_item_ids": [
+   3078,
+   3071,
+   6333
+  ],
+  "captured_at": "2026-08-21T12:38:08.379Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 17,
+  "role": 0,
+  "keystone_id": 8005,
+  "core_item_ids": [
+   3087,
+   3115,
+   6653
+  ],
+  "captured_at": "2026-08-21T12:38:10.841Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 112,
+  "role": 0,
+  "keystone_id": 8992,
+  "core_item_ids": [
+   2503,
+   6653,
+   3157
+  ],
+  "captured_at": "2026-08-21T21:21:10.718Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 75,
+  "role": 0,
+  "keystone_id": 8021,
+  "core_item_ids": [
+   6662,
+   3078,
+   3110
+  ],
+  "captured_at": "2026-08-22T05:10:07.948Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 6,
+  "role": 0,
+  "keystone_id": 8005,
+  "core_item_ids": [
+   3071,
+   3053,
+   3742
+  ],
+  "captured_at": "2026-08-22T05:10:09.229Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 103,
+  "role": 0,
+  "keystone_id": 8112,
+  "core_item_ids": [
+   2503,
+   3100,
+   3089
+  ],
+  "captured_at": "2026-08-22T05:10:10.471Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 36,
+  "role": 0,
+  "keystone_id": 8437,
+  "core_item_ids": [
+   3083,
+   3065,
+   3748
+  ],
+  "captured_at": "2026-08-22T23:46:42.137Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 887,
+  "role": 0,
+  "keystone_id": 8010,
+  "core_item_ids": [
+   3100,
+   2510,
+   3089
+  ],
+  "captured_at": "2026-08-22T23:46:43.419Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 31,
+  "role": 0,
+  "keystone_id": 8437,
+  "core_item_ids": [
+   3084,
+   3742,
+   2502
+  ],
+  "captured_at": "2026-08-23T05:46:47.567Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 134,
+  "role": 2,
+  "keystone_id": 8229,
+  "core_item_ids": [
+   2503,
+   4646,
+   3089
+  ],
+  "captured_at": "2026-08-23T17:51:42.429Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 112,
+  "role": 2,
+  "keystone_id": 8992,
+  "core_item_ids": [
+   2503,
+   3100,
+   4645
+  ],
+  "captured_at": "2026-08-23T23:10:06.990Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 133,
+  "role": 0,
+  "keystone_id": 8112,
+  "core_item_ids": [
+   6672,
+   3814,
+   3036
+  ],
+  "captured_at": "2026-08-24T17:10:14.194Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 2,
+  "role": 0,
+  "keystone_id": 8010,
+  "core_item_ids": [
+   3074,
+   6333,
+   2512
+  ],
+  "captured_at": "2026-08-24T20:12:12.252Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 126,
+  "role": 0,
+  "keystone_id": 8230,
+  "core_item_ids": [
+   3142,
+   3004,
+   6699
+  ],
+  "captured_at": "2026-08-24T23:10:07.316Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 21,
+  "role": 3,
+  "keystone_id": 8005,
+  "core_item_ids": [
+   6697,
+   6676,
+   3036
+  ],
+  "captured_at": "2026-08-24T23:10:08.141Z"
+ },
+ {
+  "patch": "16.16",
+  "champion_id": 82,
+  "role": 0,
+  "keystone_id": 8010,
+  "core_item_ids": [
+   4633,
+   3152,
+   3073
+  ],
+  "captured_at": "2026-08-25T05:10:07.811Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 112,
+  "role": 3,
+  "keystone_id": 8992,
+  "core_item_ids": [
+   2503,
+   3100,
+   3089
+  ],
+  "captured_at": "2026-08-28T23:20:13.460Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 804,
+  "role": 3,
+  "keystone_id": 8008,
+  "core_item_ids": [
+   2523,
+   3085,
+   3036
+  ],
+  "captured_at": "2026-08-28T23:20:14.086Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 74,
+  "role": 0,
+  "keystone_id": 8010,
+  "core_item_ids": [
+   2503,
+   6653,
+   3157
+  ],
+  "captured_at": "2026-08-28T23:20:14.586Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 102,
+  "role": 1,
+  "keystone_id": 8005,
+  "core_item_ids": [
+   3078,
+   3161,
+   6333
+  ],
+  "captured_at": "2026-08-28T23:20:15.501Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 17,
+  "role": 0,
+  "keystone_id": 8005,
+  "core_item_ids": [
+   3087,
+   6653,
+   3118
+  ],
+  "captured_at": "2026-08-28T23:20:16.332Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 63,
+  "role": 4,
+  "keystone_id": 8992,
+  "core_item_ids": [
+   3116,
+   6653,
+   3165
+  ],
+  "captured_at": "2026-08-28T23:20:17.311Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 235,
+  "role": 4,
+  "keystone_id": 8992,
+  "core_item_ids": [
+   3071,
+   3087,
+   2523
+  ],
+  "captured_at": "2026-08-28T23:20:18.182Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 6,
+  "role": 0,
+  "keystone_id": 8005,
+  "core_item_ids": [
+   3071,
+   3053,
+   6665
+  ],
+  "captured_at": "2026-08-28T23:20:20.234Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 2,
+  "role": 0,
+  "keystone_id": 8010,
+  "core_item_ids": [
+   6631,
+   6333,
+   2512
+  ],
+  "captured_at": "2026-08-28T23:20:21.662Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 516,
+  "role": 0,
+  "keystone_id": 8437,
+  "core_item_ids": [
+   2502,
+   2504,
+   6665
+  ],
+  "captured_at": "2026-08-28T23:20:22.970Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 267,
+  "role": 4,
+  "keystone_id": 8214,
+  "core_item_ids": [
+   6616,
+   6620,
+   3107
+  ],
+  "captured_at": "2026-08-29T05:20:24.330Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 37,
+  "role": 4,
+  "keystone_id": 8214,
+  "core_item_ids": [
+   6620,
+   2526,
+   6617
+  ],
+  "captured_at": "2026-08-29T05:20:24.604Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 904,
+  "role": 0,
+  "keystone_id": 8010,
+  "core_item_ids": [
+   6631,
+   6333,
+   3156
+  ],
+  "captured_at": "2026-08-29T05:20:24.972Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 31,
+  "role": 0,
+  "keystone_id": 9923,
+  "core_item_ids": [
+   3084,
+   4633,
+   2502
+  ],
+  "captured_at": "2026-08-29T05:20:28.071Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 98,
+  "role": 0,
+  "keystone_id": 8437,
+  "core_item_ids": [
+   3748,
+   2510,
+   2504
+  ],
+  "captured_at": "2026-09-02T20:29:35.902Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 106,
+  "role": 0,
+  "keystone_id": 8005,
+  "core_item_ids": [
+   3087,
+   4633,
+   3065
+  ],
+  "captured_at": "2026-09-02T20:29:38.599Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 112,
+  "role": 2,
+  "keystone_id": 8992,
+  "core_item_ids": [
+   2503,
+   3100,
+   4645
+  ],
+  "captured_at": "2026-09-04T23:10:06.297Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 3,
+  "role": 2,
+  "keystone_id": 8230,
+  "core_item_ids": [
+   8020,
+   4633,
+   3157
+  ],
+  "captured_at": "2026-09-05T05:11:41.000Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 134,
+  "role": 3,
+  "keystone_id": 8229,
+  "core_item_ids": [
+   4646,
+   4629,
+   4645
+  ],
+  "captured_at": "2026-09-05T05:11:42.013Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 147,
+  "role": 4,
+  "keystone_id": 8214,
+  "core_item_ids": [
+   4005,
+   2526,
+   6617
+  ],
+  "captured_at": "2026-09-05T11:15:16.020Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 90,
+  "role": 2,
+  "keystone_id": 8992,
+  "core_item_ids": [
+   2503,
+   6653,
+   3116
+  ],
+  "captured_at": "2026-09-05T23:20:23.552Z"
+ },
+ {
+  "patch": "16.17",
+  "champion_id": 103,
+  "role": 3,
+  "keystone_id": 8112,
+  "core_item_ids": [
+   3118,
+   3100,
+   3089
+  ],
+  "captured_at": "2026-09-05T23:20:24.592Z"
+ }
+]
