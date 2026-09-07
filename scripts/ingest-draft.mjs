@@ -154,6 +154,26 @@ async function runRoleIndexProbes(champions) {
   return failures;
 }
 
+// ── Cloudflare challenge waves + coverage-honest health (2026-09-07) ──────
+// Since 2026-09-03 u.gg's Cloudflare challenges MOST requests from this
+// machine in waves (~a batch long), then lets a window through: 148/173
+// champions failed on 09-03, 160/173 on 09-07, with the failing ids
+// DIFFERENT each run and failures starting at the very first request — not
+// a burst/rate pattern (pacing has been 1500ms throughout, and 08-31 ran
+// nearly clean at the same pace), and not stale/alternate-art ids (the
+// 60000+ filter holds; the failing ids are Annie/Olaf/Galio...). Per the
+// hard rule we do NOT evade the protection. Two legitimate mitigations:
+//   1. retryFailedAfterMs: each challenged champion gets ONE more honest,
+//      paced attempt after a quiet delay — waves pass, so a later window
+//      often serves the identical request cleanly.
+//   2. Coverage-honest health: a run that landed >= MIN_COVERAGE of the
+//      roster with all data-integrity guards passing is recorded healthy
+//      (with the challenged ids listed in the health record + summary),
+//      instead of one transient challenge flipping /draft's unhealthy
+//      notice. Guard/tripwire failures and DB errors are NEVER excused.
+const RETRY_FAILED_AFTER_MS = 30_000;
+const MIN_COVERAGE = 0.98;
+
 async function main() {
   const champions = (await getAllChampions()).filter((c) => c.id < MAX_REAL_CHAMPION_ID);
   console.log(`resolved ${champions.length} champions`);
@@ -170,6 +190,7 @@ async function main() {
   let guardOk = null;
   let lolalyticsVerdict = null;
   const allErrors = [];
+  const failedChampionIds = new Set();
 
   for (;;) {
     console.log(`batch: cursor=${cursor}`);
@@ -177,6 +198,7 @@ async function main() {
       cursor,
       champions,
       transport: uggCurlTransport,
+      retryFailedAfterMs: RETRY_FAILED_AFTER_MS,
       onProgress: (msg) => console.log(`  ${msg}`),
     });
     patch = result.patch;
@@ -184,6 +206,7 @@ async function main() {
     totalStatsUpserted += result.statsUpserted;
     totalSkippedRows += result.skippedRows;
     allErrors.push(...result.errors);
+    for (const id of result.failedChampionIds) failedChampionIds.add(id);
     console.log(
       `  champs ${result.champStart}..+${result.champCount}: ${result.rowsUpserted} matchup rows, ` +
         `${result.statsUpserted} stats rows, ${result.skippedRows} skipped` +
@@ -222,6 +245,22 @@ async function main() {
   const roleProbeFailures = await runRoleIndexProbes(champions);
   await runSpotChecks();
 
+  // Coverage-honest health (see the header note above main): the failed-id
+  // set is fetch coverage; everything else in `errors` (DB upserts, tier
+  // missing, guard/tripwire lines) is a data-integrity error and always
+  // fails the run. One fetch line per failed champion, so the subtraction
+  // below isolates the non-fetch errors without string parsing.
+  const failedIds = [...failedChampionIds].sort((a, b) => a - b);
+  const ingestedChampions = champions.length - failedIds.length;
+  const coverage = champions.length > 0 ? ingestedChampions / champions.length : 0;
+  const otherErrorCount = allErrors.length - failedIds.length;
+  const healthy =
+    guardOk === true &&
+    lolalyticsVerdict !== "fail" &&
+    roleProbeFailures.length === 0 &&
+    otherErrorCount === 0 &&
+    coverage >= MIN_COVERAGE;
+
   console.log("\n=== summary ===");
   console.log(
     JSON.stringify(
@@ -231,9 +270,12 @@ async function main() {
         totalStatsUpserted,
         totalSkippedRows,
         errorCount: allErrors.length,
+        failedChampionIds: failedIds,
+        coverage: `${ingestedChampions}/${champions.length}`,
         roleProbeFailures,
         guardOk,
         lolalyticsVerdict,
+        healthy,
       },
       null,
       2
@@ -242,16 +284,25 @@ async function main() {
   if (allErrors.length > 0) {
     console.log(`\nfirst 5 errors:\n  ${allErrors.slice(0, 5).join("\n  ")}`);
   }
-  const failed = allErrors.length > 0 || roleProbeFailures.length > 0 || guardOk === false || lolalyticsVerdict === "fail";
-  if (failed) {
+  if (!healthy) {
     process.exitCode = 1;
     const summary = [
-      ...allErrors.slice(0, 3),
+      `coverage ${ingestedChampions}/${champions.length}`,
+      failedIds.length > 0 ? `u.gg-challenged champ ids: ${failedIds.slice(0, 40).join(",")}` : null,
+      ...allErrors.filter((e) => !/^champ \d+: u\.gg returned a non-JSON/.test(e)).slice(0, 3),
       guardOk === false ? "ingest guard failed" : null,
       lolalyticsVerdict === "fail" ? "lolalytics tripwire failed" : null,
       roleProbeFailures.length > 0 ? `${roleProbeFailures.length} role-probe failure(s)` : null,
     ].filter(Boolean).join("; ");
     await recordHealth(false, summary);
+  } else if (failedIds.length > 0) {
+    // Healthy WITH a partial: the note rides in last_error (last_error_at
+    // stays null and ok=true — see lib/ingestHealth.ts) so the health
+    // record itself names the ids that did not land this run.
+    await recordHealth(
+      true,
+      `partial: ${ingestedChampions}/${champions.length} champions ingested; u.gg-challenged champ ids: ${failedIds.join(",")}`
+    );
   } else {
     await recordHealth(true);
   }

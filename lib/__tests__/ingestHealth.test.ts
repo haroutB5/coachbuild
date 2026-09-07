@@ -40,6 +40,24 @@ describe("recordIngestRun", () => {
     expect(calls[0].values.filter((v) => v === false).length).toBeGreaterThanOrEqual(2);
   });
 
+  it("ok=true WITH an error string stores it as a note (2026-09-07 partial-coverage record) while still recording success", async () => {
+    const calls: { text: string; values: unknown[] }[] = [];
+    const mockSql = vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => {
+      calls.push({ text: sqlText(strings), values });
+      return Promise.resolve([]);
+    });
+    await recordIngestRun(mockSql as never, "draft", {
+      ok: true,
+      error: "partial: 171/173 champions ingested; u.gg-challenged champ ids: 12,34",
+    });
+    expect(calls).toHaveLength(1);
+    // the note is stored...
+    expect(calls[0].values).toContain("partial: 171/173 champions ingested; u.gg-challenged champ ids: 12,34");
+    // ...and the run still records as a success (ok appears true in both the
+    // INSERT values and the ON CONFLICT SET clause).
+    expect(calls[0].values.filter((v) => v === true).length).toBeGreaterThanOrEqual(2);
+  });
+
   it("truncates an oversized error rather than storing it unbounded", async () => {
     const calls: { text: string; values: unknown[] }[] = [];
     const mockSql = vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => {

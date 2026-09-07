@@ -52,11 +52,20 @@ interface IngestHealthRow {
 const MAX_ERROR_LEN = 2000;
 
 /**
- * ONE upsert per completed run. `ok=true` clears `last_error`/`last_error_at`
- * and stamps `last_success_at`; `ok=false` stamps `last_error`/`last_error_at`
- * and leaves `last_success_at` at whatever it was (so a consumer can always
- * answer both "did the LAST run succeed" and "when did this last actually
- * work"). `last_run_at` is unconditional — a run happened either way.
+ * ONE upsert per completed run. `ok=true` stamps `last_success_at` and clears
+ * `last_error_at`; `ok=false` stamps `last_error`/`last_error_at` and leaves
+ * `last_success_at` at whatever it was (so a consumer can always answer both
+ * "did the LAST run succeed" and "when did this last actually work").
+ * `last_run_at` is unconditional — a run happened either way.
+ *
+ * 2026-09-07: an `error` string passed WITH `ok=true` is stored in
+ * `last_error` as a note (e.g. the draft ingest's "partial: 171/173
+ * champions; u.gg-challenged ids: ..." coverage record) instead of being
+ * silently dropped — `last_error_at` stays NULL, so "when did this last
+ * FAIL" is still answered honestly. Every read path that drives a user-facing
+ * unhealthy notice keys on `ok`, never on `last_error` being non-null (see
+ * lib/draft/recommend.ts), so a note never fabricates an unhealthy state.
+ * Callers that pass no error on success are byte-identical to before.
  *
  * Never throws on its own account past the DB call itself failing — callers
  * (ingest scripts) already run this as the very last step of a long walk;
@@ -74,13 +83,13 @@ export async function recordIngestRun(
     VALUES (
       ${ingest}, now(),
       ${result.ok ? new Date().toISOString() : null},
-      ${result.ok}, ${result.ok ? null : error}, ${result.ok ? null : new Date().toISOString()}
+      ${result.ok}, ${error}, ${result.ok ? null : new Date().toISOString()}
     )
     ON CONFLICT (ingest) DO UPDATE SET
       last_run_at = now(),
       last_success_at = CASE WHEN ${result.ok} THEN now() ELSE coachbuild.ingest_health.last_success_at END,
       ok = ${result.ok},
-      last_error = CASE WHEN ${result.ok} THEN NULL ELSE ${error} END,
+      last_error = ${error},
       last_error_at = CASE WHEN ${result.ok} THEN NULL ELSE now() END
   `;
 }

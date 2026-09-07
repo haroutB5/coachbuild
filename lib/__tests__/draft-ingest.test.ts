@@ -369,6 +369,87 @@ describe("runDraftIngest", () => {
     expect(result.errors.length).toBe(1);
   });
 
+  describe("single delayed retry + failedChampionIds (2026-09-07 Cloudflare challenge waves)", () => {
+    it("default (no retryFailedAfterMs): one attempt, failure recorded in failedChampionIds", async () => {
+      vi.mocked(fetchMatchups)
+        .mockRejectedValueOnce(new Error("u.gg returned a non-JSON response (Cloudflare challenge?)"))
+        .mockResolvedValueOnce({ byRole: {}, skippedRows: 0, tierMissing: false });
+
+      const result = await runDraftIngest({ cursor: 0, champions: [{ id: 1 }, { id: 2 }] });
+      expect(fetchMatchups).toHaveBeenCalledTimes(2); // champ 1 once (no retry), champ 2 once
+      expect(result.failedChampionIds).toEqual([1]);
+      expect(result.errors).toEqual(["champ 1: u.gg returned a non-JSON response (Cloudflare challenge?)"]);
+    });
+
+    it("retryFailedAfterMs: a challenged champion is retried exactly once and a retry success clears it", async () => {
+      vi.mocked(fetchMatchups)
+        .mockRejectedValueOnce(new Error("u.gg returned a non-JSON response (Cloudflare challenge?)"))
+        .mockResolvedValue({ byRole: {}, skippedRows: 3, tierMissing: false });
+
+      const result = await runDraftIngest({
+        cursor: 0,
+        champions: [{ id: 1 }, { id: 2 }],
+        retryFailedAfterMs: 1,
+      });
+      // champ 1 attempt + champ 2 attempt + champ 1 retry
+      expect(fetchMatchups).toHaveBeenCalledTimes(3);
+      expect(fetchMatchups).toHaveBeenLastCalledWith(1, expect.any(String), expect.anything(), expect.anything());
+      expect(result.failedChampionIds).toEqual([]);
+      expect(result.errors).toEqual([]);
+    });
+
+    it("a champion that fails the retry too is recorded ONCE, marked as retried", async () => {
+      vi.mocked(fetchMatchups).mockRejectedValue(
+        new Error("u.gg returned a non-JSON response (Cloudflare challenge?)")
+      );
+
+      const result = await runDraftIngest({
+        cursor: 0,
+        champions: [{ id: 7 }],
+        retryFailedAfterMs: 1,
+      });
+      expect(fetchMatchups).toHaveBeenCalledTimes(2); // one attempt + one retry, never more
+      expect(result.failedChampionIds).toEqual([7]);
+      expect(result.errors).toEqual([
+        "champ 7: u.gg returned a non-JSON response (Cloudflare challenge?) (retried once)",
+      ]);
+    });
+
+    it("a failed-then-retried champion never double-counts skippedRows or tierMissing (both fetches precede accounting)", async () => {
+      // matchups succeeds but rankings fails on the FIRST attempt -- the
+      // champion must contribute nothing until the retry lands cleanly.
+      vi.mocked(fetchMatchups).mockResolvedValue({ byRole: {}, skippedRows: 2, tierMissing: true });
+      vi.mocked(fetchRankings)
+        .mockRejectedValueOnce(new Error("u.gg returned a non-JSON response (Cloudflare challenge?)"))
+        .mockResolvedValue({ byRole: {} });
+
+      const result = await runDraftIngest({
+        cursor: 0,
+        champions: [{ id: 5 }],
+        retryFailedAfterMs: 1,
+      });
+      expect(result.failedChampionIds).toEqual([]);
+      expect(result.skippedRows).toBe(2); // once, not twice
+      expect(result.tierMissingChamps).toBe(1); // once, not twice
+    });
+
+    it("fastFail (route path) still records the champion in failedChampionIds without any retry", async () => {
+      class FakeUggError extends Error {
+        status = 403;
+      }
+      vi.mocked(fetchMatchups).mockRejectedValue(new FakeUggError("blocked"));
+
+      const result = await runDraftIngest({
+        cursor: 0,
+        champions: [{ id: 1 }, { id: 2 }],
+        fastFailOnRatelimit: true,
+        retryFailedAfterMs: 1,
+      });
+      expect(fetchMatchups).toHaveBeenCalledTimes(1);
+      expect(result.failedChampionIds).toEqual([1]);
+    });
+  });
+
   it("throws DbUnavailableError when getSql() returns null", async () => {
     vi.mocked(getSql).mockReturnValueOnce(null);
     await expect(runDraftIngest({ cursor: 0, champions: [{ id: 1 }] })).rejects.toThrow();

@@ -103,6 +103,18 @@ export interface DraftIngestOptions {
    *  batch immediately (route, tight 60s budget) vs. is logged per-champion
    *  and the walk continues (script, default, long-running). */
   fastFailOnRatelimit?: boolean;
+  /** 2026-09-07 (u.gg Cloudflare challenge waves, see the scheduled-run log
+   *  entries for 09-03/09-07): when > 0, a champion whose FETCH failed
+   *  (challenge page, curl failure — never a DB error) gets exactly ONE
+   *  retry, after this many ms of quiet at the end of its batch. Observed
+   *  challenge waves last roughly a batch (~30-60s), so a delayed re-request
+   *  often lands in a clear window. This is the same honest request made
+   *  again later — NOT header spoofing or challenge evasion (the hard rule
+   *  in CLAUDE.md stands: the honest fix for a bot challenge is to stop
+   *  making the request, never to defeat the protection; a bounded, slower,
+   *  politer retry stops short of that line). Default 0 = off (route
+   *  callers keep their tight 60s budget and existing behavior). */
+  retryFailedAfterMs?: number;
   /** Injectable HTTP transport for lib/draft/lolalyticsCheck.ts's external
    *  matchup-direction tripwire -- defaults to plain fetch (confirmed
    *  reachable from this box, see that module's header); a script/future
@@ -130,6 +142,15 @@ export interface DraftIngestResult {
   tierMissingChamps: number;
   nextCursor: number | null;
   errors: string[];
+  /** 2026-09-07 — champion ids in THIS batch whose u.gg fetch failed (after
+   *  the optional single retry, see retryFailedAfterMs). Structured so the
+   *  scheduled script can compute roster COVERAGE per run instead of
+   *  parsing error strings: 148 of 173 champions challenged and 2 of 173
+   *  are very different runs, and both used to record identically as
+   *  "unhealthy". Every id here also has a line in `errors`. DB upsert
+   *  failures and tier-missing champs are deliberately NOT in this list —
+   *  those are data-integrity errors, not fetch coverage. */
+  failedChampionIds: number[];
   /** True only on the batch where nextCursor became null AND retention
    *  pruning (keep last 2 distinct patch labels) actually ran. */
   retentionRan: boolean;
@@ -262,6 +283,7 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
     tierMissingChamps: 0,
     nextCursor: null,
     errors: [],
+    failedChampionIds: [],
     retentionRan: false,
     guardOk: null,
     lolalyticsVerdict: null,
@@ -282,29 +304,32 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
   result.champCount = batch.length;
   result.nextCursor = cursor + BATCH_SIZE < champIds.length ? cursor + BATCH_SIZE : null;
 
-  for (const champId of batch) {
-    try {
-      const matchups = await pacedUggCall(() => fetchMatchups(champId, seg, schema, transport));
-      result.skippedRows += matchups.skippedRows;
+  // Per-champion ingest body, extracted so the single delayed retry pass
+  // below can re-run it verbatim. Throws ONLY on a fetch failure (both
+  // fetches happen before any accounting or DB write, so a thrown champion
+  // has contributed nothing and a re-run is a clean second attempt against
+  // idempotent upserts). DB row failures are caught inside, per row.
+  const ingestChampion = async (champId: number): Promise<void> => {
+    const matchups = await pacedUggCall(() => fetchMatchups(champId, seg, schema, transport));
+    const rankings = await pacedUggCall(() => fetchRankings(champId, seg, schema, transport));
+    result.skippedRows += matchups.skippedRows;
 
-      // A retired/renumbered u.gg tier decodes to zero rows and zero skips —
-      // indistinguishable from a clean run — unless it says so. It says so.
-      // This app shipped Platinum+ data under an "Emerald+" belief for months
-      // because a guessed tier id was wrong; the next renumber gets to be an
-      // error on the first run instead of a silent no-op (see
-      // DecodeMatchupsResult.tierMissing).
-      if (matchups.tierMissing) {
-        result.tierMissingChamps += 1;
-        result.errors.push(
-          `champ ${champId}: u.gg tier ${DIAMOND_2_PLUS_TIER} partition ABSENT from an otherwise valid matchups payload ` +
-            `(region ${WORLD_REGION} present) -- tier retired or renumbered? Re-read u.gg's bundle before ingesting again.`
-        );
-        log(`champ ${champId}: TIER ${DIAMOND_2_PLUS_TIER} MISSING from payload`);
-      }
+    // A retired/renumbered u.gg tier decodes to zero rows and zero skips —
+    // indistinguishable from a clean run — unless it says so. It says so.
+    // This app shipped Platinum+ data under an "Emerald+" belief for months
+    // because a guessed tier id was wrong; the next renumber gets to be an
+    // error on the first run instead of a silent no-op (see
+    // DecodeMatchupsResult.tierMissing).
+    if (matchups.tierMissing) {
+      result.tierMissingChamps += 1;
+      result.errors.push(
+        `champ ${champId}: u.gg tier ${DIAMOND_2_PLUS_TIER} partition ABSENT from an otherwise valid matchups payload ` +
+          `(region ${WORLD_REGION} present) -- tier retired or renumbered? Re-read u.gg's bundle before ingesting again.`
+      );
+      log(`champ ${champId}: TIER ${DIAMOND_2_PLUS_TIER} MISSING from payload`);
+    }
 
-      const rankings = await pacedUggCall(() => fetchRankings(champId, seg, schema, transport));
-
-      for (const role of APP_ROLES) {
+    for (const role of APP_ROLES) {
         const rows = matchups.byRole[role];
         if (!rows || rows.length === 0) continue;
 
@@ -345,16 +370,50 @@ export async function runDraftIngest(opts: DraftIngestOptions = {}): Promise<Dra
         }
       }
 
-      log(`champ ${champId}: ${matchups.skippedRows} skipped rows`);
+    log(`champ ${champId}: ${matchups.skippedRows} skipped rows`);
+  };
+
+  const retryDelayMs = opts.retryFailedAfterMs ?? 0;
+  const fetchFailures: { champId: number; message: string }[] = [];
+
+  for (const champId of batch) {
+    try {
+      await ingestChampion(champId);
     } catch (err) {
       const message = (err as Error).message ?? String(err);
-      result.errors.push(`champ ${champId}: ${message}`);
       const status = (err as { status?: number }).status;
       if (fastFail && (status === 403 || status === 429)) {
+        result.errors.push(`champ ${champId}: ${message}`);
+        result.failedChampionIds.push(champId);
         log(`champ ${champId}: fast-failing batch on ${status}`);
         break;
       }
+      fetchFailures.push({ champId, message });
     }
+  }
+
+  // Single delayed retry pass (see DraftIngestOptions.retryFailedAfterMs):
+  // one quiet delay for the whole batch, then each failed champion gets
+  // exactly one more attempt through the same paced transport. A champion
+  // that fails twice is recorded once, as failed.
+  if (fetchFailures.length > 0 && retryDelayMs > 0) {
+    log(
+      `${fetchFailures.length} champion(s) failed fetch -- single delayed retry in ${Math.round(retryDelayMs / 1000)}s`
+    );
+    await sleep(retryDelayMs);
+  }
+  for (const failure of fetchFailures) {
+    if (retryDelayMs > 0) {
+      try {
+        await ingestChampion(failure.champId);
+        log(`champ ${failure.champId}: delayed retry succeeded`);
+        continue;
+      } catch (err) {
+        failure.message = `${(err as Error).message ?? String(err)} (retried once)`;
+      }
+    }
+    result.errors.push(`champ ${failure.champId}: ${failure.message}`);
+    result.failedChampionIds.push(failure.champId);
   }
 
   if (result.nextCursor === null) {

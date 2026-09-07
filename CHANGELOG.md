@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.129.0 -- draft ingest rides out u.gg Cloudflare challenge waves honestly (2026-09-07)
+
+Since 2026-09-03 u.gg's Cloudflare has challenged MOST of the scheduled
+draft ingest's requests in waves (148/173 champions failed on 09-03, 160/173
+on 09-07, different ids each run, failures from the very first request --
+not a rate/burst pattern: pacing has been 1500ms throughout and 08-31 ran
+nearly clean at the same pace; not stale or alternate-art ids: the 60000+
+filter holds and the failing ids are Annie/Olaf/Galio...). The hard rule
+stands: we do not evade bot protection. Two legitimate changes:
+
+- **Single delayed retry per champion** (`retryFailedAfterMs`, script passes
+  30s): a challenged champion gets exactly one more honest, paced attempt at
+  the end of its batch. Observed challenge waves last roughly a batch, so a
+  later window often serves the identical request cleanly. Route callers
+  (tight 60s budget) are untouched -- default 0.
+- **Coverage-honest ingest health**: `DraftIngestResult.failedChampionIds`
+  (structured, per batch) lets `scripts/ingest-draft.mjs` compute roster
+  coverage per run. A run is now recorded healthy iff >= 98% of the roster
+  landed AND the P0 guard passed AND the lolalytics tripwire did not fail
+  AND there were zero non-fetch errors -- with the challenged ids listed in
+  the health record (`last_error` now carries a note alongside `ok=true`;
+  `last_error_at` stays null, and every unhealthy-notice read keys on `ok`).
+  Before this, ONE challenged champion out of 173 flipped /draft's unhealthy
+  notice identically to a 92%-failed run.
+
+The 2026-09-03/09-07 runs themselves stay honestly unhealthy under the new
+semantics (coverage ~8-14%); this release changes what is *reported*, and
+gives each champion a second window, not what is *claimed*.
+
 ## 0.128.0 -- marking your lane opponent no longer freezes live champ select (2026-09-06)
 
 Live repro from a real ranked champ select (2026-09-05): the user tagged

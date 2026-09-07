@@ -39,6 +39,7 @@ function batchResult(overrides: Partial<Awaited<ReturnType<typeof runDraftIngest
     tierMissingChamps: 0,
     nextCursor: null,
     errors: [],
+    failedChampionIds: [],
     retentionRan: false,
     guardOk: null,
     lolalyticsVerdict: null,
