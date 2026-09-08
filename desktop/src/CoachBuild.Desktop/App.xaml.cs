@@ -1172,6 +1172,7 @@ public partial class App : WpfApplication
             window = await Dispatcher.InvokeAsync(() =>
             {
                 if (_isShuttingDown) return (WebView2Window?)null;
+                var coreServices = _services as CoreDesktopHostServices;
                 var createdWindow = new WebView2Window(
                     environment,
                     AppOrigin,
@@ -1180,8 +1181,11 @@ public partial class App : WpfApplication
                     OnWebViewRepairCompleted,
                     preferenceStore?.Read(),
                     preferenceStore is null ? null : preferenceStore.Save,
-                    (_services as CoreDesktopHostServices)?.CreateSiteImportHost());
-                if (_services is CoreDesktopHostServices coreServices)
+                    coreServices?.CreateSiteImportHost(),
+                    coreServices is null
+                        ? null
+                        : new Func<CancellationToken, Task<Uri?>>(coreServices.ResolveOpGgProfileAsync));
+                if (coreServices is not null)
                 {
                     // The automatic item import rides the window (the only
                     // place that may touch a WebView) and the bridge's
@@ -1660,6 +1664,14 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     /// </summary>
     public ISiteImportHost CreateSiteImportHost() =>
         new SiteImportHost(_bridge.RuneApplyService, _bridge.ItemSetApplyService, _champions, _state);
+
+    /// <summary>
+    /// Resolves the account-specific op.gg destination through the bridge-owned
+    /// LCU client. Null is intentional: the window opens op.gg home whenever
+    /// League is closed or either identity field is unavailable.
+    /// </summary>
+    public Task<Uri?> ResolveOpGgProfileAsync(CancellationToken cancellationToken) =>
+        new OpGgProfileResolver(_lcu).ResolveAsync(cancellationToken);
 
     /// <summary>
     /// The bridge's item-set service for the window's automatic import. The

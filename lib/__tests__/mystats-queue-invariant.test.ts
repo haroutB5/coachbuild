@@ -136,27 +136,6 @@ describe("lib/mystats/queues.ts — the constant itself", () => {
     expect(isCountedQueue(99999)).toBe(false);
   });
 
-  it("the manual My Stats report filters every my_matches statement", async () => {
-    const { main } = await import("../../scripts/ingest-mystats.mjs");
-    const collected: Statement[] = [];
-    const sql = recordingSql(collected);
-
-    await main({
-      runIngest: async () => ({
-        accountUnresolved: false,
-        matchesSeen: 0,
-        matchesUpserted: 0,
-        nextStart: null,
-        errors: [],
-        historyComplete: true,
-        truncatedBy: null,
-        pagesWalked: 0,
-      }),
-      getSqlFn: () => sql as never,
-      getActiveAccountFn: async () => ACTIVE,
-    });
-    assertEveryMyMatchesReadIsQueueFiltered(collected);
-  });
 });
 
 describe("queue invariant: GET /api/mystats/summary", () => {

@@ -81,6 +81,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     private readonly string _userDataFolder;
     private readonly Action<RepairResult>? _repairCompleted;
     private readonly Action<CompanionTabsPreferences>? _preferencesChanged;
+    private readonly Func<CancellationToken, Task<Uri?>>? _opGgProfileResolver;
     private readonly Dictionary<CompanionTab, BrowserTabState> _tabs = new();
     private CompanionTabsPreferences _preferences;
     private ChampSelectContext? _champSelectContext;
@@ -115,7 +116,8 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         Action<RepairResult>? repairCompleted = null,
         CompanionTabsPreferences? preferences = null,
         Action<CompanionTabsPreferences>? preferencesChanged = null,
-        ISiteImportHost? siteImport = null)
+        ISiteImportHost? siteImport = null,
+        Func<CancellationToken, Task<Uri?>>? opGgProfileResolver = null)
     {
         _environmentService = environmentService ?? throw new ArgumentNullException(nameof(environmentService));
         _policy = new HostedPagePolicy(appOrigin);
@@ -124,6 +126,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         _userDataFolder = userDataFolder ?? throw new ArgumentNullException(nameof(userDataFolder));
         _repairCompleted = repairCompleted;
         _preferencesChanged = preferencesChanged;
+        _opGgProfileResolver = opGgProfileResolver;
         _preferences = preferences ?? CompanionTabsPreferences.Default;
         // Null (no host, e.g. the client never connected at startup) leaves
         // the import button present but disabled with a tooltip saying why.
@@ -230,7 +233,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         }
         else if (!state.HasNavigated && state.Core is not null)
         {
-            NavigateSiteHome(state);
+            await NavigateSiteHome(state, cancellationToken).ConfigureAwait(true);
         }
         else
         {
@@ -252,7 +255,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         cancellationToken.ThrowIfCancellationRequested();
         if (_disposed) return;
 
-        // Freshness checks may run while the user is reading u.gg or Coachless.
+        // Freshness checks may run while the user is reading any site tab.
         // Initialize and refresh Companion in the background, preserving the
         // selected tab and the user's window activation state.
         if (!_hasActiveTab)
@@ -418,7 +421,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             if (tab == CompanionTab.Companion)
                 NavigateHosted(state, new ReopenTarget(ReopenDestination.Home));
             else
-                NavigateSiteHome(state);
+                await NavigateSiteHome(state, cancellationToken).ConfigureAwait(true);
         }
 
         if (changed)
@@ -822,11 +825,32 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         Navigate(state, url);
     }
 
-    private void NavigateSiteHome(BrowserTabState state)
+    private async Task NavigateSiteHome(
+        BrowserTabState state,
+        CancellationToken cancellationToken = default)
     {
         var site = CompanionTabs.SiteFor(state.Tab);
         if (site is null) return;
-        Navigate(state, site.Home);
+        var target = site.Home;
+        if (state.Tab == CompanionTab.OpGg && _opGgProfileResolver is not null)
+        {
+            try
+            {
+                target = await _opGgProfileResolver(cancellationToken).ConfigureAwait(true)
+                    ?? site.Home;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                // Profile resolution is an enhancement over a usable site tab.
+                // Any LCU or payload failure deliberately degrades to op.gg home.
+                target = site.Home;
+            }
+        }
+        Navigate(state, target);
     }
 
     private void Navigate(BrowserTabState state, Uri url)
@@ -906,6 +930,9 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     private async void OnCoachlessTabClick(object sender, RoutedEventArgs e) =>
         await SwitchToTabAsync(CompanionTab.Coachless).ConfigureAwait(true);
 
+    private async void OnOpGgTabClick(object sender, RoutedEventArgs e) =>
+        await SwitchToTabAsync(CompanionTab.OpGg).ConfigureAwait(true);
+
     private void OnBackClick(object sender, RoutedEventArgs e) => GoBack();
 
     private void OnForwardClick(object sender, RoutedEventArgs e) => GoForward();
@@ -926,17 +953,17 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (state.Tab == CompanionTab.Companion)
             NavigateHosted(state, _lastTarget);
         else
-            NavigateSiteHome(state);
+            await NavigateSiteHome(state, _shutdownToken).ConfigureAwait(true);
     }
 
-    private void OnHomeClick(object sender, RoutedEventArgs e)
+    private async void OnHomeClick(object sender, RoutedEventArgs e)
     {
         var state = GetState(ActiveTab);
         if (state is null) return;
         if (state.Tab == CompanionTab.Companion)
             NavigateHosted(state, new ReopenTarget(ReopenDestination.Home));
         else
-            NavigateSiteHome(state);
+            await NavigateSiteHome(state, _shutdownToken).ConfigureAwait(true);
     }
 
     private async void OnUggOfferClick(object sender, RoutedEventArgs e) =>
@@ -1580,6 +1607,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         SetTabVisual(CompanionTabButton, CompanionTab.Companion);
         SetTabVisual(UggTabButton, CompanionTab.UGg);
         SetTabVisual(CoachlessTabButton, CompanionTab.Coachless);
+        SetTabVisual(OpGgTabButton, CompanionTab.OpGg);
         UpdateOfferBar();
     }
 

@@ -203,7 +203,7 @@ Set-Location $Root
 #     script name appears - every one of them is just "node.exe" by image name.
 $ingestTasks = @(
     'CoachBuildOtpPriority', 'CoachBuildOtpIngest', 'CoachBuildMatchIngest',
-    'CoachBuildProstageIngest', 'CoachBuildDraftIngest', 'CoachBuildOtpWalkOneShot',
+    'CoachBuildProstageIngest', 'CoachBuildOtpWalkOneShot',
     'CoachBuildRebuildPhase1'
 )
 $running = @()

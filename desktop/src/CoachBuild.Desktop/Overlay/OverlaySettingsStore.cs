@@ -13,7 +13,8 @@ public sealed class OverlaySettings
 
     /// <summary>
     /// The last companion-window tab selected by the user. This is a stable
-    /// key (for example <c>companion</c>, <c>ugg</c>, or <c>coachless</c>),
+    /// key (for example <c>companion</c>, <c>ugg</c>, <c>coachless</c>, or
+    /// <c>opgg</c>),
     /// rather than the enum name, so changing the native UI's type names does
     /// not strand an existing profile. Unknown keys are normalised to
     /// <c>companion</c> when the settings are read.
@@ -95,6 +96,7 @@ public sealed class OverlaySettingsStore : ICompanionTabsPreferencesStore
     public const string CompanionTabKey = "companion";
     public const string UggTabKey = "ugg";
     public const string CoachlessTabKey = "coachless";
+    public const string OpGgTabKey = "opgg";
 
     // Keep the persistence boundary in lockstep with the typed tab model. A
     // corrupt profile can therefore never make a WebView zoom operation leave
@@ -612,6 +614,7 @@ public sealed class OverlaySettingsStore : ICompanionTabsPreferencesStore
         {
             UggTabKey => UggTabKey,
             CoachlessTabKey => CoachlessTabKey,
+            OpGgTabKey => OpGgTabKey,
             _ => CompanionTabKey,
         };
 
@@ -620,7 +623,7 @@ public sealed class OverlaySettingsStore : ICompanionTabsPreferencesStore
         if (string.IsNullOrWhiteSpace(siteKey)) return null;
 
         var value = siteKey.Trim().ToLowerInvariant();
-        return value is CompanionTabKey or UggTabKey or CoachlessTabKey
+        return value is CompanionTabKey or UggTabKey or CoachlessTabKey or OpGgTabKey
             ? value
             : null;
     }

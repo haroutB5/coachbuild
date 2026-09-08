@@ -26,9 +26,8 @@
 // is the only reason it is in phase 1. It is also the cheapest stage there:
 // Leaguepedia Cargo, zero Riot calls.
 //
-// Everything else in the schema — draft_matchup, draft_champ_stats, my_*,
-// team_comps, prostage timelines, the audit tables — backs a *browsing*
-// surface. None of it can reach the shop export. It is phase 2.
+// Everything else in the schema backs a browsing surface and cannot reach the
+// shop export. The remaining prostage timeline backfill is phase 2.
 //
 // ── The ledger tables are not stages ────────────────────────────────────────
 //
@@ -259,19 +258,6 @@ export const REBUILD_STAGES: RebuildStageSpec[] = [
     writes: ["pro_matches"],
   },
   {
-    id: "draft",
-    phase: 2,
-    title: "draft matchups (u.gg, wholesale per patch)",
-    script: "scripts/ingest-draft.mjs",
-    units: () => 1,
-    unitArgs: () => [],
-    maxMs: () => 3 * HOUR,
-    drainOnCleanExit: true,
-    usesRiot: false,
-    usesChrome: false,
-    writes: ["draft_matchup", "draft_champ_stats"],
-  },
-  {
     id: "prostage-timelines",
     phase: 2,
     title: "pro-stage timeline backfill",
@@ -283,19 +269,6 @@ export const REBUILD_STAGES: RebuildStageSpec[] = [
     usesRiot: true,
     usesChrome: false,
     writes: ["prostage_matches"],
-  },
-  {
-    id: "mystats",
-    phase: 2,
-    title: "personal match history (needs my_account re-entered first)",
-    script: "scripts/ingest-mystats.mjs",
-    units: () => 1,
-    unitArgs: () => [],
-    maxMs: () => 2 * HOUR,
-    drainOnCleanExit: true,
-    usesRiot: true,
-    usesChrome: false,
-    writes: ["my_matches", "my_ingest_cursor"],
   },
 ];
 

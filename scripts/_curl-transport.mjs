@@ -50,12 +50,11 @@ export function curlTransport(url) {
 }
 
 /**
- * Same shape/contract as curlTransport, plus arbitrary extra headers — used
- * by scripts/ingest-draft.mjs for u.gg's stats2 CDN, which REQUIRES
- * `Referer: https://u.gg/` (403s without it; see lib/draft/ugg.ts's header
- * comment). Kept as a separate function rather than adding an optional
- * `headers` param to curlTransport so that function's call shape (and every
- * existing caller/test) stays byte-identical.
+ * Same shape/contract as curlTransport, plus arbitrary extra headers. The
+ * retired u.gg writer required `Referer: https://u.gg/` (403s without it;
+ * see lib/draft/ugg.ts's header comment). Kept as a separate function rather
+ * than adding an optional `headers` param to curlTransport so that function's
+ * call shape (and every existing caller/test) stays byte-identical.
  *
  * @param {string} url
  * @param {Record<string,string>} [headers]

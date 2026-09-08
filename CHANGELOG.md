@@ -22,6 +22,25 @@
   cache behavior are fixture/unit tested. The fixture is a four-card extract
   from the captured Viktor middle Emerald+ 16.17 SSR page.
 
+## Desktop 1.3.1 — op.gg profile tab + retired legacy ingests (2026-09-08)
+
+- The companion window now has a fourth lazy tab, **op.gg**, after Coachless,
+  with its own `WebView2/opgg` profile and the same HTTPS-only navigation,
+  remembered-tab and per-site zoom behavior as the other site tabs.
+- Opening/homeing op.gg resolves `gameName` + `tagLine` from LCU
+  `current-summoner` and the platform id from `LoginDataPacket`, maps platform
+  ids explicitly (for example `EUW1` to `euw`), and opens the encoded
+  `https://op.gg/summoners/{region}/{name}-{tag}` profile. Missing League,
+  incomplete identity, failed platform resolution, or an unknown platform
+  safely falls back to op.gg home.
+- op.gg is profile-only: it adds no champ-select offer chip, participates in
+  no automatic build import, and introduces no WebView script call site.
+- Retired the Cloudflare-blocked u.gg draft ingest and the home-grown My Stats
+  ingest: their npm commands and `.mjs` entry points are gone, as is the draft
+  scheduled wrapper, registration/re-bake wiring, and both rebuild-plan stages.
+  Match, OTP, prostage, and consensus jobs remain unchanged; no tables were
+  dropped and the web routes are intentionally untouched for the next v2 brief.
+
 ## Desktop 1.3.0 — auto item import from both sites + runes-only button (2026-09-08)
 
 Item sets now import themselves; the offer-bar button keeps only the runes:

@@ -126,9 +126,9 @@ export const AS_FOUND_INGESTS: readonly ScheduledIngest[] = [
  * duty-cycle table cannot see this: it would have called prostage a rounding
  * error at 2.8% and left it alone.
  *
- * All five tasks are Disabled as of 2026-08-21. These entries describe the
- * shape they resume in when enabled, which is the thing worth asserting:
- * enabling is a one-click action and re-registering is not.
+ * The u.gg draft ingest was retired on 2026-09-08; it remains in the
+ * AS_FOUND history above but not in this current scheduled fleet. These
+ * entries describe only jobs that can still be registered from this repo.
  */
 export const SCHEDULED_INGESTS: readonly ScheduledIngest[] = [
   {
@@ -157,13 +157,6 @@ export const SCHEDULED_INGESTS: readonly ScheduledIngest[] = [
     intervalHours: 6,
     startOffsetMinutes: 15,
     runMinutes: 5,
-    registeredBy: "scripts/register-ingest-tasks.ps1",
-  },
-  {
-    task: "CoachBuildDraftIngest",
-    intervalHours: 84, // Monday + Thursday, NOT weekly -- see AS_FOUND_INGESTS
-    startOffsetMinutes: 9 * 60,
-    runMinutes: 63,
     registeredBy: "scripts/register-ingest-tasks.ps1",
   },
   {

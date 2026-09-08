@@ -11,7 +11,7 @@
 # answer HTTP 200 {rowsSeen:0, errors:[]}, indistinguishable from a healthy
 # no-op. Pro-play data went stale for weeks (user report 2026-07-25: Caps's LEC
 # Summer games missing; the split had started 07-24). This box is not blocked —
-# same reasoning as CoachBuildDraftIngest / ingest-draft-scheduled.ps1.
+# the local wrapper is therefore the durable path for this upstream.
 #
 # Scheduled cadence: every 3 hours. Pro games land throughout the day across
 # LEC/LCK/LPL/LCS, and the run is cheap — CargoExport is paced 5s apart and the
@@ -21,7 +21,7 @@
 #   Run now: schtasks /run   /tn CoachBuildProstageIngest
 #   Remove:  schtasks /delete /tn CoachBuildProstageIngest /f
 #
-# GOTCHA this file exists to encode (inherited from ingest-draft-scheduled.ps1):
+# GOTCHA this file exists to encode:
 # Task Scheduler's environment does NOT carry the interactive PATH, and this
 # machine has a corporate node shadow ("MDXT Connect" node64) earlier in PATH
 # than the real Node.js. Pin the real Node.js dir FIRST or tsx resolves against

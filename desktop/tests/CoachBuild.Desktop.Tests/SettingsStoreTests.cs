@@ -66,11 +66,13 @@ public sealed class SettingsStoreTests
             store.SetLastCompanionTab(" UGG ");
             store.SetZoomFactor(" UGG ", 1.35);
             store.SetZoomFactor("coachless", 1.8);
+            store.SetZoomFactor("opgg", 1.15);
 
             var afterRestart = new OverlaySettingsStore(path);
             Assert.Equal(OverlaySettingsStore.UggTabKey, afterRestart.Read().LastCompanionTab);
             Assert.Equal(1.35, afterRestart.GetZoomFactor("ugg"), precision: 3);
             Assert.Equal(1.8, afterRestart.GetZoomFactor("COACHLESS"), precision: 3);
+            Assert.Equal(1.15, afterRestart.GetZoomFactor("OPGG"), precision: 3);
             Assert.Equal(
                 OverlaySettingsStore.DefaultZoomFactor,
                 afterRestart.GetZoomFactor("companion"));
@@ -95,6 +97,7 @@ public sealed class SettingsStoreTests
                 "companion": -4,
                 "ugg": 99,
                 "coachless": 0.1,
+                "opgg": 1.25,
                 "future-site": 2
               }
             }
@@ -106,6 +109,7 @@ public sealed class SettingsStoreTests
             Assert.Equal(OverlaySettingsStore.MinZoomFactor, store.GetZoomFactor("companion"));
             Assert.Equal(OverlaySettingsStore.MaxZoomFactor, store.GetZoomFactor("ugg"));
             Assert.Equal(OverlaySettingsStore.MinZoomFactor, store.GetZoomFactor("coachless"));
+            Assert.Equal(1.25, store.GetZoomFactor("opgg"), precision: 3);
             Assert.Equal(
                 OverlaySettingsStore.DefaultZoomFactor,
                 store.GetZoomFactor("future-site"));
@@ -154,7 +158,8 @@ public sealed class SettingsStoreTests
             var selected = preferencesStore.Read()
                 .WithLastTab(CompanionTab.Coachless)
                 .WithZoom(CompanionTab.UGg, 3)
-                .WithZoom(CompanionTab.Coachless, 0.1);
+                .WithZoom(CompanionTab.Coachless, 0.1)
+                .WithZoom(CompanionTab.OpGg, 1.2);
             preferencesStore.Save(selected);
 
             var afterRestart = (ICompanionTabsPreferencesStore)new OverlaySettingsStore(path);
@@ -162,6 +167,7 @@ public sealed class SettingsStoreTests
             Assert.Equal(CompanionTab.Coachless, preferences.LastTab);
             Assert.Equal(CompanionTabsPreferences.MaxZoomFactor, preferences.ZoomFor(CompanionTab.UGg));
             Assert.Equal(CompanionTabsPreferences.MinZoomFactor, preferences.ZoomFor(CompanionTab.Coachless));
+            Assert.Equal(1.2, preferences.ZoomFor(CompanionTab.OpGg), precision: 3);
             Assert.Equal("MID", new OverlaySettingsStore(path).Read().LaneOverride);
         }
         finally

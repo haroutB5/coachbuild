@@ -1,3 +1,6 @@
+using System.Net.Http;
+using System.Text.Json;
+using CoachBuild.Core;
 using CoachBuild.Desktop.Web;
 using Xunit;
 
@@ -14,18 +17,21 @@ public sealed class CompanionTabsIntegrationTests
     public void Tab_order_and_labels_are_stable()
     {
         Assert.Equal(
-            [CompanionTab.Companion, CompanionTab.UGg, CompanionTab.Coachless],
+            [CompanionTab.Companion, CompanionTab.UGg, CompanionTab.Coachless, CompanionTab.OpGg],
             CompanionTabs.Order);
         Assert.Equal("Companion", CompanionTabs.LabelFor(CompanionTab.Companion));
         Assert.Equal("u.gg", CompanionTabs.LabelFor(CompanionTab.UGg));
         Assert.Equal("Coachless", CompanionTabs.LabelFor(CompanionTab.Coachless));
-        Assert.Equal(2, CompanionTabs.Sites.Count);
+        Assert.Equal("op.gg", CompanionTabs.LabelFor(CompanionTab.OpGg));
+        Assert.Equal(3, CompanionTabs.Sites.Count);
+        Assert.Equal([CompanionTabs.UGg, CompanionTabs.Coachless], CompanionTabs.BuildSites);
     }
 
     [Theory]
     [InlineData("companion", CompanionTab.Companion)]
     [InlineData(" UGG ", CompanionTab.UGg)]
     [InlineData("coachless", CompanionTab.Coachless)]
+    [InlineData("OPGG", CompanionTab.OpGg)]
     [InlineData("future-tab", CompanionTab.Companion)]
     [InlineData(null, CompanionTab.Companion)]
     public void Persisted_tab_keys_fail_closed_to_companion(string? key, CompanionTab expected)
@@ -35,6 +41,7 @@ public sealed class CompanionTabsIntegrationTests
         {
             CompanionTab.UGg => "ugg",
             CompanionTab.Coachless => "coachless",
+            CompanionTab.OpGg => "opgg",
             _ => "companion",
         }, CompanionTabs.KeyFor(expected));
     }
@@ -51,10 +58,17 @@ public sealed class CompanionTabsIntegrationTests
             Assert.DoesNotContain("session", site.Home.Query, StringComparison.OrdinalIgnoreCase);
 
             var link = site.BuildUrl("MonkeyKing", roleId: 1);
-            Assert.NotNull(link);
-            Assert.Equal(Uri.UriSchemeHttps, link!.Scheme);
-            Assert.DoesNotContain(token, link.ToString(), StringComparison.Ordinal);
-            Assert.DoesNotContain("session=", link.ToString(), StringComparison.OrdinalIgnoreCase);
+            if (site.Tab == CompanionTab.OpGg)
+            {
+                Assert.Null(link);
+            }
+            else
+            {
+                Assert.NotNull(link);
+                Assert.Equal(Uri.UriSchemeHttps, link!.Scheme);
+                Assert.DoesNotContain(token, link.ToString(), StringComparison.Ordinal);
+                Assert.DoesNotContain("session=", link.ToString(), StringComparison.OrdinalIgnoreCase);
+            }
         }
     }
 
@@ -66,14 +80,18 @@ public sealed class CompanionTabsIntegrationTests
         var companion = CompanionTabs.ProfileFolder(root, CompanionTab.Companion);
         var ugg = CompanionTabs.ProfileFolder(root, CompanionTab.UGg);
         var coachless = CompanionTabs.ProfileFolder(root, CompanionTab.Coachless);
+        var opgg = CompanionTabs.ProfileFolder(root, CompanionTab.OpGg);
 
         Assert.Equal(Path.GetFullPath(root), companion);
         Assert.Equal(Path.Combine(Path.GetFullPath(root), "ugg"), ugg);
         Assert.Equal(Path.Combine(Path.GetFullPath(root), "coachless"), coachless);
+        Assert.Equal(Path.Combine(Path.GetFullPath(root), "opgg"), opgg);
         Assert.NotEqual(companion, ugg);
         Assert.NotEqual(ugg, coachless);
+        Assert.NotEqual(coachless, opgg);
         Assert.DoesNotContain("session", ugg, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("session", coachless, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("session", opgg, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -118,6 +136,62 @@ public sealed class CompanionTabsIntegrationTests
         Assert.Null(SiteDeepLink.Build(CompanionTab.Companion, "Urgot", roleId: 0));
         Assert.Equal("https://u.gg/lol/champions/urgot/build", SiteDeepLink.Build(CompanionTab.UGg, "Urgot", roleId: 99)?.ToString());
         Assert.Null(SiteDeepLink.Build(CompanionTab.UGg, "", roleId: 0));
+        Assert.Null(SiteDeepLink.Build(CompanionTab.OpGg, "Urgot", roleId: 0));
+    }
+
+    [Theory]
+    [InlineData("EUW1", "euw")]
+    [InlineData("eun1", "eune")]
+    [InlineData("NA1", "na")]
+    [InlineData("OC1", "oce")]
+    [InlineData("ME1", "me")]
+    [InlineData("unknown", null)]
+    [InlineData(null, null)]
+    public void Opgg_region_comes_from_an_explicit_platform_mapping(string? platformId, string? expected)
+    {
+        Assert.Equal(expected, OpGgProfileLink.RegionForPlatform(platformId));
+    }
+
+    [Fact]
+    public void Opgg_profile_link_encodes_the_riot_id_components()
+    {
+        var profile = OpGgProfileLink.Build(" K1ayer Name ", "swift/tag", "EUW1");
+
+        Assert.Equal(
+            "https://op.gg/summoners/euw/K1ayer%20Name-swift%2Ftag",
+            profile?.AbsoluteUri);
+        Assert.Null(OpGgProfileLink.Build("K1ayer", "swift", "unknown"));
+        Assert.Null(OpGgProfileLink.Build("", "swift", "EUW1"));
+    }
+
+    [Fact]
+    public async Task Opgg_resolver_reads_current_summoner_then_platform_id()
+    {
+        var lcu = new RecordingLcuApi(new Dictionary<string, LcuResponse>
+        {
+            [OpGgProfileResolver.CurrentSummonerPath] = Ok("""
+                { "gameName": "K1ayer Name", "tagLine": "swift", "puuid": "local-id" }
+                """),
+            [OpGgProfileResolver.PlatformIdPath] = Ok("\"EUW1\""),
+        });
+
+        var profile = await new OpGgProfileResolver(lcu).ResolveAsync();
+
+        Assert.Equal("https://op.gg/summoners/euw/K1ayer%20Name-swift", profile?.AbsoluteUri);
+        Assert.Equal(
+            [OpGgProfileResolver.CurrentSummonerPath, OpGgProfileResolver.PlatformIdPath],
+            lcu.Paths);
+    }
+
+    [Fact]
+    public async Task Opgg_resolver_returns_home_signal_without_a_live_client()
+    {
+        var lcu = new RecordingLcuApi(new Dictionary<string, LcuResponse>());
+
+        var profile = await new OpGgProfileResolver(lcu).ResolveAsync();
+
+        Assert.Null(profile);
+        Assert.Equal([OpGgProfileResolver.CurrentSummonerPath], lcu.Paths);
     }
 
     [Fact]
@@ -170,5 +244,31 @@ public sealed class CompanionTabsIntegrationTests
             "https://coachless.gg/builds/urgot?role=jungle", offer));
         Assert.False(SiteNavigationPolicy.IsAlreadyThere(
             "https://coachless.gg/builds/urgot", offer));
+    }
+
+    private static LcuResponse Ok(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return new LcuResponse(true, 200, document.RootElement.Clone(), json);
+    }
+
+    private sealed class RecordingLcuApi(IReadOnlyDictionary<string, LcuResponse> responses) : ILcuApi
+    {
+        public List<string> Paths { get; } = [];
+
+        public Task<LcuResponse> SendAsync(
+            HttpMethod method,
+            string path,
+            object? body = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(HttpMethod.Get, method);
+            Paths.Add(path);
+            return Task.FromResult(
+                responses.TryGetValue(path, out var response)
+                    ? response
+                    : new LcuResponse(false, 0));
+        }
     }
 }

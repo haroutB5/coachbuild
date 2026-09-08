@@ -32,7 +32,6 @@ const WRAPPERS = [
   "ingest-otp-featured-scheduled.ps1",
   "ingest-matches-scheduled.ps1",
   "ingest-prostage-scheduled.ps1",
-  "ingest-draft-scheduled.ps1",
 ];
 
 const task = (name: string): ScheduledIngest => {
@@ -143,7 +142,6 @@ describe("the registered cadence matches the scripts that register it", () => {
     ["CoachBuildOtpIngest", "OtpIngestIntervalHours"],
     ["CoachBuildMatchIngest", "MatchIngestIntervalHours"],
     ["CoachBuildProstageIngest", "ProstageIntervalHours"],
-    ["CoachBuildDraftIngest", "DraftIntervalHours"],
   ])("uses the sibling script's default for %s", (taskName, param) => {
     expect(task(taskName).intervalHours).toBe(psDefault(siblingScript, param, SIBLING_SCRIPT));
   });
@@ -179,13 +177,9 @@ describe("the registered cadence matches the scripts that register it", () => {
     expect(rebake).not.toMatch(/RepetitionInterval/);
     expect(task("CoachBuildConsensusRebake").intervalHours).toBe(24);
 
-    // THE DAY FILTER MUST STAY GONE. While this job was weekly, the collision
-    // check skipped any busy window whose Days did not include its single fire
-    // day -- which let a Sunday slot ignore CoachBuildDraftIngest (Mon+Thu)
-    // entirely. A daily job fires on those days too, so that filter is a hole
-    // in the guard, not a refinement. If someone reinstates a `$b.Days`
-    // skip while the task is still daily, the slot stops being checked against
-    // the only day-specific writer on the machine.
+    // THE DAY FILTER MUST STAY GONE. A daily job must be checked against every
+    // remaining writer. Reintroducing a `$b.Days` skip would make the guard
+    // conditional on metadata the current fleet does not need.
     expect(rebake).not.toMatch(/\$b\.Days\s+-notcontains/);
     expect(rebake).not.toMatch(/\[string\]\$DayOfWeek/);
   });
@@ -195,8 +189,8 @@ describe("the registered cadence matches the scripts that register it", () => {
     // cadence table rather than the script's own copy of it -- so the two
     // cannot drift into agreeing with each other and disagreeing with reality.
     //
-    // A daily job has no day to hide behind: it must clear CoachBuildDraftIngest
-    // (Mon+Thu 09:00, 63 min) exactly as it clears the every-6h walks.
+    // A daily job has no day to hide behind: it must clear every remaining
+    // writer exactly as it clears the every-6h walks.
     const rebakeTask = task("CoachBuildConsensusRebake");
     const slotStart = rebakeTask.startOffsetMinutes;
     // The ceiling the wrapper is actually given, not its measured runtime: a

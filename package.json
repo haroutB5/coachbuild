@@ -15,8 +15,6 @@
     "db:migrate": "node scripts/db-migrate.mjs",
     "ingest:roster": "tsx scripts/ingest-roster.mjs",
     "ingest:matches": "tsx scripts/ingest-matches.mjs",
-    "ingest:draft": "tsx scripts/ingest-draft.mjs",
-    "ingest:mystats": "tsx scripts/ingest-mystats.mjs",
     "consensus:generate": "tsx scripts/generate-consensus-artifact.mts",
     "kits:refresh": "tsx scripts/refresh-champion-kits.mts",
     "rebuild": "tsx scripts/rebuild-controller.mjs",

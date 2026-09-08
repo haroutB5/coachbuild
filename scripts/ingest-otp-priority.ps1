@@ -161,8 +161,8 @@
 #
 # Whenever this job "did not run" and left nothing behind, check
 # (Get-CimInstance -Namespace root\wmi BatteryStatus).PowerOnline BEFORE
-# reading any application log. The sibling CoachBuildMatchIngest,
-# CoachBuildDraftIngest and CoachBuildProstageIngest tasks still carry the
+# reading any application log. The sibling CoachBuildMatchIngest and
+# CoachBuildProstageIngest tasks still carry the
 # default and will skip the same way; CoachBuildOtpIngest was already corrected.
 #
 # NOTE: CoachBuildOtpPriority is deliberately NOT added to

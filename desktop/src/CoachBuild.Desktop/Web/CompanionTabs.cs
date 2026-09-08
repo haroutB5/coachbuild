@@ -2,13 +2,14 @@ using CoachBuild.Core;
 
 namespace CoachBuild.Desktop.Web;
 
-/// <summary>The three destinations the companion window can show.</summary>
+/// <summary>The four destinations the companion window can show.</summary>
 public enum CompanionTab
 {
     /// <summary>The hosted CoachBuild web app. The only tab with a session token.</summary>
     Companion,
     UGg,
     Coachless,
+    OpGg,
 }
 
 /// <summary>
@@ -59,16 +60,26 @@ public static class CompanionTabs
         "Coachless",
         new Uri("https://coachless.gg/", UriKind.Absolute));
 
-    public static IReadOnlyList<SiteDefinition> Sites { get; } = [UGg, Coachless];
+    public static readonly SiteDefinition OpGg = new(
+        CompanionTab.OpGg,
+        "opgg",
+        "op.gg",
+        new Uri("https://op.gg/", UriKind.Absolute));
+
+    public static IReadOnlyList<SiteDefinition> Sites { get; } = [UGg, Coachless, OpGg];
+
+    /// <summary>Sites that accept champion+role links and participate in build import.</summary>
+    public static IReadOnlyList<SiteDefinition> BuildSites { get; } = [UGg, Coachless];
 
     /// <summary>The tab order the strip renders, left to right. Companion is always first.</summary>
     public static IReadOnlyList<CompanionTab> Order { get; } =
-        [CompanionTab.Companion, CompanionTab.UGg, CompanionTab.Coachless];
+        [CompanionTab.Companion, CompanionTab.UGg, CompanionTab.Coachless, CompanionTab.OpGg];
 
     public static SiteDefinition? SiteFor(CompanionTab tab) => tab switch
     {
         CompanionTab.UGg => UGg,
         CompanionTab.Coachless => Coachless,
+        CompanionTab.OpGg => OpGg,
         _ => null,
     };
 
@@ -87,6 +98,7 @@ public static class CompanionTabs
     {
         "ugg" => CompanionTab.UGg,
         "coachless" => CompanionTab.Coachless,
+        "opgg" => CompanionTab.OpGg,
         _ => CompanionTab.Companion,
     };
 
@@ -105,6 +117,118 @@ public static class CompanionTabs
         var fullRoot = Path.GetFullPath(root);
         var site = SiteFor(tab);
         return site is null ? fullRoot : Path.Combine(fullRoot, site.Key);
+    }
+}
+
+/// <summary>Builds the account-specific op.gg profile URL from LCU-owned identity.</summary>
+public static class OpGgProfileLink
+{
+    /// <summary>
+    /// Maps Riot's platform id to op.gg's route token. Unknown platforms are
+    /// refused rather than guessed, because a valid Riot ID can exist on more
+    /// than one platform and the wrong route silently opens the wrong player.
+    /// </summary>
+    public static string? RegionForPlatform(string? platformId) =>
+        platformId?.Trim().ToUpperInvariant() switch
+        {
+            "BR1" => "br",
+            "EUN1" => "eune",
+            "EUW1" => "euw",
+            "JP1" => "jp",
+            "KR" => "kr",
+            "LA1" => "lan",
+            "LA2" => "las",
+            "ME1" => "me",
+            "NA1" => "na",
+            "OC1" => "oce",
+            "PBE1" => "pbe",
+            "PH2" => "ph",
+            "RU" => "ru",
+            "SG2" => "sg",
+            "TH2" => "th",
+            "TR1" => "tr",
+            "TW2" => "tw",
+            "VN2" => "vn",
+            _ => null,
+        };
+
+    public static Uri? Build(string? gameName, string? tagLine, string? platformId)
+    {
+        var name = gameName?.Trim();
+        var tag = tagLine?.Trim();
+        var region = RegionForPlatform(platformId);
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(tag) || region is null)
+            return null;
+
+        return new Uri(
+            $"https://op.gg/summoners/{region}/{Uri.EscapeDataString(name)}-{Uri.EscapeDataString(tag)}",
+            UriKind.Absolute);
+    }
+
+    internal static string? ReadPlatformId(System.Text.Json.JsonElement value)
+    {
+        if (value.ValueKind == System.Text.Json.JsonValueKind.String)
+            return NonBlank(value.GetString());
+        if (value.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return null;
+        if (value.TryGetProperty("platformId", out var direct)
+            && direct.ValueKind == System.Text.Json.JsonValueKind.String)
+            return NonBlank(direct.GetString());
+        if (value.TryGetProperty("LoginDataPacket", out var login)
+            && login.ValueKind == System.Text.Json.JsonValueKind.Object
+            && login.TryGetProperty("platformId", out var nested)
+            && nested.ValueKind == System.Text.Json.JsonValueKind.String)
+            return NonBlank(nested.GetString());
+        return null;
+    }
+
+    private static string? NonBlank(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+}
+
+/// <summary>
+/// Resolves the local user's op.gg profile from the same LCU client the
+/// loopback bridge owns. No result means the caller should open op.gg home.
+/// </summary>
+public sealed class OpGgProfileResolver
+{
+    internal const string CurrentSummonerPath = "/lol-summoner/v1/current-summoner";
+    internal const string PlatformIdPath = "/lol-platform-config/v1/namespaces/LoginDataPacket/platformId";
+
+    private readonly ILcuApi _lcu;
+
+    public OpGgProfileResolver(ILcuApi lcu)
+    {
+        _lcu = lcu ?? throw new ArgumentNullException(nameof(lcu));
+    }
+
+    public async Task<Uri?> ResolveAsync(CancellationToken cancellationToken = default)
+    {
+        var summoner = await _lcu.SendAsync(
+            HttpMethod.Get,
+            CurrentSummonerPath,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (!summoner.Ok || summoner.Content is not { } summonerJson)
+            return null;
+
+        var identity = OwnIdentityConverter.TryConvert(summonerJson);
+        if (identity is null)
+            return null;
+
+        var platform = await _lcu.SendAsync(
+            HttpMethod.Get,
+            PlatformIdPath,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (!platform.Ok || platform.Content is not { } platformJson)
+            return null;
+
+        return OpGgProfileLink.Build(
+            identity.GameName,
+            identity.TagLine,
+            OpGgProfileLink.ReadPlatformId(platformJson));
     }
 }
 
@@ -152,7 +276,7 @@ public sealed record CompanionTabsPreferences
     }
 
     public static bool IsKnownTab(CompanionTab tab) =>
-        tab is CompanionTab.Companion or CompanionTab.UGg or CompanionTab.Coachless;
+        tab is CompanionTab.Companion or CompanionTab.UGg or CompanionTab.Coachless or CompanionTab.OpGg;
 
     public static double NormalizeZoom(double value)
     {
@@ -314,14 +438,14 @@ public sealed record ChampSelectContext(
 ///   Windows a <c>steam:</c>/<c>riot:</c>/<c>ms-settings:</c> URI and have this
 ///   app launch it. WebView2 does not follow those itself, but
 ///   <c>NewWindowRequested</c> hands us the URI and a naive handler would.</item>
-///   <item><b>Plain http.</b> Both sites are https; a downgrade is either a
+///   <item><b>Plain http.</b> All sites are https; a downgrade is either a
 ///   typo or a hostile redirect.</item>
 /// </list>
 ///
 /// <para>It does NOT restrict the host. A stats site that cannot reach its own
 /// patch notes or a wiki entry is a worse product than a tab that can, and the
 /// window has no address bar, so every navigation still starts from a link on
-/// one of the two sites the user asked for.</para>
+/// one of the sites the user asked for.</para>
 /// </summary>
 public static class SiteNavigationPolicy
 {

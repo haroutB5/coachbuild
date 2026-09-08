@@ -24,6 +24,7 @@ namespace CoachBuild.Desktop.Tests;
 public sealed class SiteTabComplianceTests
 {
     private const string WindowSource = "Web/WebView2Window.xaml.cs";
+    private const string WindowMarkup = "Web/WebView2Window.xaml";
     private const string TabsSource = "Web/CompanionTabs.cs";
     private const string AutoImportSource = "Web/SiteAutoImport.cs";
 
@@ -35,6 +36,22 @@ public sealed class SiteTabComplianceTests
         Assert.Contains("class WebView2Window", ReadSource(WindowSource), StringComparison.Ordinal);
         Assert.Contains("class SiteNavigationPolicy", ReadSource(TabsSource), StringComparison.Ordinal);
         Assert.Contains("class AutoImportCoordinator", ReadSource(AutoImportSource), StringComparison.Ordinal);
+        Assert.Contains("OpGgTabButton", ReadSource(WindowMarkup), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Opgg_is_a_profile_tab_not_an_offer_or_auto_import_site()
+    {
+        var markup = ReadSource(WindowMarkup);
+        var autoImport = ReadSource(AutoImportSource);
+
+        Assert.Contains("OpGgTabButton", markup, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpGgOfferButton", markup, StringComparison.Ordinal);
+        Assert.Contains(
+            "BothSites = [CompanionTab.UGg, CompanionTab.Coachless]",
+            autoImport,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("CompanionTab.OpGg", autoImport, StringComparison.Ordinal);
     }
 
     /// <summary>

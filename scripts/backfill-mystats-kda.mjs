@@ -19,9 +19,9 @@
 // 100/2min budget is per-key, shared across every caller regardless of which
 // process makes the call). A plain `for` loop awaiting each row -- never
 // Promise.all, never a second concurrent instance of this script or any
-// other Riot-calling script/cron -- is what keeps this correctly paced; see
-// scripts/ingest-mystats.mjs's own header for the same operator-responsible-
-// for-serializing posture.
+// other Riot-calling script/cron -- is what keeps this correctly paced. The
+// operator is responsible for serializing separate processes that share the
+// same Riot key.
 //
 // RESUMABLE BY CONSTRUCTION: the SELECT is `WHERE kills IS NULL`, so any row
 // this run (or a prior interrupted one) already updated is never re-selected

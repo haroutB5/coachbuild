@@ -254,6 +254,10 @@
                             Style="{StaticResource TabButton}"
                             Content="Coachless"
                             Click="OnCoachlessTabClick" />
+                    <Button x:Name="OpGgTabButton"
+                            Style="{StaticResource TabButton}"
+                            Content="op.gg"
+                            Click="OnOpGgTabClick" />
                 </StackPanel>
                 <TextBlock x:Name="TabStateText"
                            Text="Companion"

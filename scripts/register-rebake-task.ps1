@@ -29,7 +29,6 @@
 #   CoachBuildProstage      every 6h at :15   ~5 min    00:15 06:15 12:15 18:15
 #   CoachBuildMatchIngest   daily  01:20      40-110 min (measured range)
 #   CoachBuildOtpIngest     daily  04:20      ~73 min
-#   CoachBuildDraftIngest   Mon+Thu 09:00     ~63 min
 #   Vercel cron /api/ingest/otp  09:00 UTC = 10:00 local, daily
 #
 # 15:00 is the widest gap that exists on EVERY day of the week: 13:10 (the
@@ -38,11 +37,8 @@
 # is given a 60-minute ceiling. It is also the slot the weekly version already
 # used, so the cadence change moves no times - only the frequency.
 #
-# GOING DAILY MADE THE Mon/Thu WINDOW LOAD-BEARING. A weekly Sunday job could
-# ignore CoachBuildDraftIngest because Sunday is not one of its days. A daily job
-# runs on Monday and Thursday too, so the collision check below no longer skips
-# day-specific windows - it demands the slot be clear on every day it can fire.
-# 15:00 clears 09:00-10:03 by five hours, but the check is what proves it.
+# The collision check below demands that the slot be clear on every day it can
+# fire. It models every remaining local writer plus the Vercel OTP cron.
 #
 # THE ARITHMETIC IS IN LOCAL TIME BECAUSE Get-ScheduledTaskInfo REPORTS
 # NextRunTime IN LOCAL TIME. Mixing it with a UTC "now" reads an hour of
@@ -139,8 +135,7 @@ if ($wrapperText -notmatch 'coverage\.otp REGRESSED') {
 
 # ── slot collision guard ────────────────────────────────────────────────────
 # Busy windows in LOCAL minutes-past-midnight, mirroring lib/ingestCadence.ts.
-# Every-N-hours jobs are expanded across the day; the two day-specific ones are
-# tagged for the refusal message only - see the NO DAY FILTER note below.
+# Every-N-hours job is expanded across the day.
 $busy = @(
     @{ Task = 'CoachBuildOtpPriority';   Start = 10;        Run = 60; Every = 360; Days = $null },
     @{ Task = 'CoachBuildProstageIngest'; Start = 15;       Run = 5;  Every = 360; Days = $null },
@@ -149,7 +144,6 @@ $busy = @(
     # job overruns into it.
     @{ Task = 'CoachBuildMatchIngest';   Start = 80;        Run = 110; Every = 1440; Days = $null },
     @{ Task = 'CoachBuildOtpIngest';     Start = 260;       Run = 73; Every = 1440; Days = $null },
-    @{ Task = 'CoachBuildDraftIngest';   Start = 540;       Run = 63; Every = 1440; Days = @('Monday','Thursday') },
     # Vercel cron /api/ingest/otp, 09:00 UTC. Not a local task, but it drives
     # the same Neon compute and the same Riot key.
     @{ Task = 'vercel cron /api/ingest/otp'; Start = 600;   Run = 30; Every = 1440; Days = $null }
@@ -159,11 +153,7 @@ $startDt = [datetime]$StartBoundary
 $slotStart = $startDt.Hour * 60 + $startDt.Minute
 $slotEnd = $slotStart + $DeadlineMinutes
 
-# NO DAY FILTER. The weekly version skipped any busy window whose Days did not
-# include its single fire day, which let a Sunday slot ignore CoachBuildDraftIngest
-# entirely. A DAILY job fires on Monday and Thursday as well, so every window in
-# the table applies and the filter would be a hole in the guard rather than a
-# refinement of it. $b.Days now only decorates the refusal message.
+# NO DAY FILTER. A daily job must clear every remaining writer on every day.
 foreach ($b in $busy) {
     for ($s = $b.Start; $s -lt 1440; $s += $b.Every) {
         $e = $s + $b.Run

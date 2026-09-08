@@ -36,7 +36,7 @@ if (-not $window) { throw "No CoachBuild window carrying the tab chrome (pid $($
 Write-Output "window: '$($window.Current.Name)'"
 
 $interesting = @(
-    'CompanionTabButton', 'UggTabButton', 'CoachlessTabButton',
+    'CompanionTabButton', 'UggTabButton', 'CoachlessTabButton', 'OpGgTabButton',
     'BackButton', 'ForwardButton', 'RefreshButton',
     'ZoomOutButton', 'ZoomInButton', 'ZoomText',
     'OfferBar', 'OfferHintText', 'UggOfferButton', 'CoachlessOfferButton',

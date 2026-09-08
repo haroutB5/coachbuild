@@ -1,25 +1,19 @@
 # CoachBuild SIBLING INGESTS — Task Scheduler registration, idempotent.
 #
 # THE POINT OF THIS FILE. scripts/register-otp-priority-task.ps1 took ONE task
-# out of the GUI and put its cadence in the repo. The other four had no
+# out of the GUI and put its cadence in the repo. The other three had no
 # registration script at all: their cadence existed only as Task Scheduler
 # state on one machine, unreviewable, un-diffable, and unrecoverable after a
 # rebuild. That is the precondition the 2026-08-20 Neon outage write-up named,
-# and leaving four of five tasks in it would have guaranteed the next drift.
+# and leaving three of four tasks in it would have guaranteed the next drift.
 #
 # What that gap was already hiding, found while writing this file:
 #
-#   * CoachBuildMatchIngest, CoachBuildProstageIngest and CoachBuildDraftIngest
-#     all carried ExecutionTimeLimit = PT72H. A wedged run could therefore
+#   * CoachBuildMatchIngest and CoachBuildProstageIngest carried
+#     ExecutionTimeLimit = PT72H. A wedged run could therefore
 #     bridge 24 consecutive 3-hourly slots and hold the Neon compute awake for
 #     three days, which is the ~100% duty cycle the incident was about,
 #     arriving through a setting nobody had ever looked at.
-#   * CoachBuildDraftIngest is NOT weekly. Its StartBoundary falls on a Friday,
-#     which is what a casual read of the XML suggests, but DaysOfWeek is 18 =
-#     Monday|Thursday, so it fires TWICE a week. Confirmed against
-#     draft-ingest.log (27 Jul Mon, 30 Jul Thu, 3 Aug Mon, 6 Aug Thu, ...).
-#     Any budget that modelled it as weekly understated it by half.
-#
 # ── THE CADENCE, AND THE ARITHMETIC BEHIND IT ───────────────────────────────
 # The Neon Free quota is 100 CU-hours per PROJECT per calendar month, and Neon
 # bills compute as wall-clock ACTIVE seconds. These walks issue statements
@@ -41,7 +35,6 @@
 #                                         windows and cost nothing; at 3h the
 #                                         four extra slots land in gaps and each
 #                                         wakes the compute alone.
-#   CoachBuildDraftIngest     unchanged   Mon+Thu, ~2.3 CU-hours. Irrelevant.
 #
 # The full overlap-aware model, and the tests that hold these numbers to the
 # ones below, live in lib/ingestCadence.ts and lib/__tests__/ingestCadence.ts.
@@ -64,7 +57,7 @@
 # that object, so a settings set fresh from New-ScheduledTaskSettingsSet
 # carries Enabled = True and re-cadencing a DISABLED task silently starts it.
 # Measured on a throwaway task 2026-08-21: Disabled -> Set-ScheduledTask ->
-# Ready. All five ingest tasks were disabled on 2026-08-20 to stop the Neon
+# Ready. All ingest tasks were disabled on 2026-08-20 to stop the Neon
 # burn, and StartWhenAvailable is true, so a re-enabled task with a missed slot
 # behind it does not wait for its next tick — it fires within minutes, into
 # whatever the shared Riot key is doing at the time. "Fix the cadence" must
@@ -72,7 +65,7 @@
 # enabling stays a separate, deliberate act.
 #
 # ── NO ELEVATION NEEDED ─────────────────────────────────────────────────────
-# All four run as the interactive user at RunLevel Limited. If you see "Access
+# All three run as the interactive user at RunLevel Limited. If you see "Access
 # is denied", something re-created a task elevated — do not fight it from a
 # normal prompt, re-run this in an Administrator terminal. A half-applied
 # scheduler change is worse than none.
@@ -87,22 +80,16 @@
 
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    # Restrict the run to one task. Default: all four.
+    # Restrict the run to one task. Default: all three.
     [string]$TaskName,
 
-    # ── THE CADENCE. These four defaults ARE the registered cadence, and
+    # ── THE CADENCE. These three defaults ARE the registered cadence, and
     # lib/__tests__/ingestCadence.test.ts parses them straight out of this file
     # and compares them against lib/ingestCadence.ts. Recompute the fleet total
     # before touching any of them.
     [int]$OtpIngestIntervalHours = 24,
     [int]$MatchIngestIntervalHours = 24,
-    [int]$ProstageIntervalHours = 6,
-    # 84 = twice a week. Not 168: see the header. Derived from $DraftDays and
-    # asserted against it below, so the two cannot drift apart.
-    [int]$DraftIntervalHours = 84,
-
-    # Days CoachBuildDraftIngest fires on. Unchanged from what is registered.
-    [string[]]$DraftDays = @('Monday', 'Thursday')
+    [int]$ProstageIntervalHours = 6
 )
 
 $ErrorActionPreference = 'Stop'
@@ -112,10 +99,6 @@ $ErrorActionPreference = 'Stop'
 # a machine or username migration. (Computed here, never in a param default —
 # $PSScriptRoot is empty inside a param block under Windows PowerShell 5.1.)
 $repo = Split-Path -Parent $PSScriptRoot
-
-if ((168 / $DraftDays.Count) -ne $DraftIntervalHours) {
-    throw "-DraftIntervalHours $DraftIntervalHours disagrees with $($DraftDays.Count) day(s) a week (expected $(168 / $DraftDays.Count))"
-}
 
 # ── THE TABLE ───────────────────────────────────────────────────────────────
 # runMinutes is MEASURED (median of successful August 2026 runs in
@@ -141,7 +124,6 @@ $tasks = @(
         boundary  = '2026-08-22T04:20:00'
         limitMin  = 165   # 120-min consensus budget + the ~24-min featured half + slack
         runMin    = 73
-        weekly    = $false
         desc      = 'CoachBuild OTP discovery + match ingest (consensus walk, then the featured half). Cadence is a Neon compute budget - see scripts/register-ingest-tasks.ps1.'
     },
     @{
@@ -151,7 +133,6 @@ $tasks = @(
         boundary  = '2026-08-22T01:20:00'
         limitMin  = 180   # ~3x the 63-min median
         runMin    = 63
-        weekly    = $false
         desc      = 'CoachBuild solo-queue match sweep. Cadence is a Neon compute budget - see scripts/register-ingest-tasks.ps1.'
     },
     @{
@@ -161,23 +142,12 @@ $tasks = @(
         boundary  = '2026-08-22T00:15:00'
         limitMin  = 120   # median is 5 min; this is a wedge detector, not a budget
         runMin    = 5
-        weekly    = $false
         desc      = 'CoachBuild pro-stage live feed + export ingest. Cadence is a Neon compute budget - see scripts/register-ingest-tasks.ps1.'
-    },
-    @{
-        name      = 'CoachBuildDraftIngest'
-        wrapper   = 'scripts\ingest-draft-scheduled.ps1'
-        interval  = $DraftIntervalHours
-        boundary  = '2026-08-24T09:00:00'
-        limitMin  = 180   # ~3x the 63-min median
-        runMin    = 63
-        weekly    = $true
-        desc      = "CoachBuild draft/patch ingest, $($DraftDays -join '+') 09:00. Cadence is a Neon compute budget - see scripts/register-ingest-tasks.ps1."
     }
 )
 
 # ── THE REFUSAL GUARD ───────────────────────────────────────────────────────
-# A COARSE upper bound, on purpose. This sums the four jobs plus the priority
+# A COARSE upper bound, on purpose. This sums the three jobs plus the priority
 # walk's 30 CU-hours and ignores overlap, so it always overstates the bill —
 # which is the right direction for a tripwire that must never wave through a
 # cadence that does not fit. The precise, overlap-aware figure and the 2x
@@ -228,22 +198,17 @@ foreach ($t in $selected) {
     $argument = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden ' + "-File $wrapper"
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument
 
-    if ($t.weekly) {
-        $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $DraftDays `
-                     -At ([datetime]$t.boundary) -WeeksInterval 1
-    } else {
-        # -Once + -RepetitionInterval and NO -RepetitionDuration: an unbounded
-        # repetition on a TimeTrigger. Do not add a duration "for tidiness" — a
-        # repetition that expires stops the job dead with no error, no log line
-        # and a Status that still reads "Ready".
-        $trigger = New-ScheduledTaskTrigger -Once -At ([datetime]$t.boundary) `
-                     -RepetitionInterval (New-TimeSpan -Hours $t.interval)
-        # New-ScheduledTaskTrigger writes <StopAtDurationEnd>true</> while
-        # writing NO <Duration>. Inert today (no duration means repeat forever,
-        # so there is no duration end), but one hand-edit from a repetition
-        # that silently expires. Say false and mean it.
-        $trigger.Repetition.StopAtDurationEnd = $false
-    }
+    # -Once + -RepetitionInterval and NO -RepetitionDuration: an unbounded
+    # repetition on a TimeTrigger. Do not add a duration "for tidiness" — a
+    # repetition that expires stops the job dead with no error, no log line
+    # and a Status that still reads "Ready".
+    $trigger = New-ScheduledTaskTrigger -Once -At ([datetime]$t.boundary) `
+                 -RepetitionInterval (New-TimeSpan -Hours $t.interval)
+    # New-ScheduledTaskTrigger writes <StopAtDurationEnd>true</> while
+    # writing NO <Duration>. Inert today (no duration means repeat forever,
+    # so there is no duration end), but one hand-edit from a repetition
+    # that silently expires. Say false and mean it.
+    $trigger.Repetition.StopAtDurationEnd = $false
 
     # A NAIVE, offset-free StartBoundary. New-ScheduledTaskTrigger stamps the
     # CURRENT UTC offset, which pins the schedule to absolute time so every
@@ -254,7 +219,7 @@ foreach ($t in $selected) {
     $trigger.StartBoundary = ([datetime]$t.boundary).ToString('yyyy-MM-ddTHH:mm:ss')
 
     # Set-ScheduledTask REPLACES the whole settings object, so everything worth
-    # keeping is restated here in one call. All five are load-bearing; see the
+    # keeping is restated here in one call. All are load-bearing; see the
     # header for what each prevents.
     #
     # StartWhenAvailable is true, and for a DAILY job that is the safer error:
@@ -277,8 +242,7 @@ foreach ($t in $selected) {
     # the settings object that Set-ScheduledTask replaces wholesale.
     if ($existing) { $settings.Enabled = $existing.Settings.Enabled }
 
-    $cadence = if ($t.weekly) { "$($DraftDays -join '+') at $(([datetime]$t.boundary).ToString('HH:mm'))" }
-               else { "every $($t.interval)h from $($t.boundary)" }
+    $cadence = "every $($t.interval)h from $($t.boundary)"
 
     if ($PSCmdlet.ShouldProcess($t.name, "register $cadence")) {
         if ($existing) {

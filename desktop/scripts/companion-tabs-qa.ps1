@@ -7,13 +7,13 @@ param(
     [string]$OutputDirectory,
     [string]$ApplicationPath,
     [string]$PreviewProject,
-    [ValidateSet('companion', 'ugg', 'coachless')]
-    [string[]]$Tabs = @('companion', 'ugg', 'coachless'),
+    [ValidateSet('companion', 'ugg', 'coachless', 'opgg')]
+    [string[]]$Tabs = @('companion', 'ugg', 'coachless', 'opgg'),
     [int]$WindowTimeoutSeconds = 45,
     [int]$SettleMilliseconds = 8000,
     [switch]$SkipBuild,
     [switch]$SkipTests,
-    [ValidateSet('companion', 'ugg', 'coachless')]
+    [ValidateSet('companion', 'ugg', 'coachless', 'opgg')]
     [string]$ErrorTab = 'ugg',
     [switch]$SkipError,
     [switch]$KeepProfiles
@@ -191,16 +191,18 @@ function Invoke-SourceAudit {
         $risks.Add('A third-party tab URL appears to carry the companion session token.')
     }
 
-    $usesHttpsSites = $code -match '(?i)https://u\.gg' -and $code -match '(?i)https://coachless\.gg'
+    $usesHttpsSites = $code -match '(?i)https://u\.gg' -and
+        $code -match '(?i)https://coachless\.gg' -and
+        $code -match '(?i)https://op\.gg'
     $originDetail = if ($usesHttpsSites) {
-        'Both requested site origins are explicit HTTPS URLs.'
+        'All requested site origins are explicit HTTPS URLs.'
     }
     else {
-        'Could not find explicit HTTPS origins for both requested sites.'
+        'Could not find explicit HTTPS origins for all requested sites.'
     }
-    Add-Check 'u.gg and Coachless use HTTPS origins' $usesHttpsSites $originDetail
+    Add-Check 'u.gg, Coachless and op.gg use HTTPS origins' $usesHttpsSites $originDetail
     if (-not $usesHttpsSites) {
-        $risks.Add('One or both requested site origins are missing from the tab source or are not HTTPS.')
+        $risks.Add('One or more requested site origins are missing from the tab source or are not HTTPS.')
     }
 
     $hasProfileModel = $code -match '(?i)ProfileFolder\s*\(' -and

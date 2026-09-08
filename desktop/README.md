@@ -27,8 +27,8 @@ PowerShell companion while the staged native rollout proves parity.
 - **Overlay:** transparent, borderless, topmost, non-focusable and click-through
   by default. It becomes keyboard-interactive only for calibration/adjustment.
   Calibration is stored by monitor resolution and DPI.
-- **WebView2:** one owned window with three tabs — Companion, u.gg, Coachless
-  (1.2.0). The Companion tab navigates between `/draft` and canonical Builds
+- **WebView2:** one owned window with four tabs — Companion, u.gg, Coachless,
+  op.gg (1.3.1). The Companion tab navigates between `/draft` and canonical Builds
   URLs and is same-origin only; it is the only tab carrying the session token
   and the only one whose document is ever scripted unprompted (the version meta
   tag). Site tabs are **read-mostly** with two sanctioned exceptions: the gold
@@ -46,7 +46,12 @@ PowerShell companion while the staged native rollout proves parity.
   never a tab switch, never a focus steal — and navigate only to the exact
   deep-link URLs the app builds for the locked champion+role. Runes never
   flow through the automatic path, items never flow through the button.
-  Site tabs are restricted to https. Each tab's WebView2 is created on
+  op.gg is profile-only: it never appears in the champ-select offer row or
+  automatic import. On first/home navigation it resolves current-summoner's
+  Riot ID plus LoginDataPacket's platform id and opens
+  `https://op.gg/summoners/{region}/{name}-{tag}`; if League is unavailable or
+  identity/region is incomplete it opens op.gg home. Site tabs are restricted
+  to https. Each tab's WebView2 is created on
   first visit and gets its own profile directory under `WebView2/`, so cookies
   and site preferences persist without sharing storage with the hosted app.
   A native host remains hidden until its browser is ready, and callbacks arriving
