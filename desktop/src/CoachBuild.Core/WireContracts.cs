@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -7,7 +8,53 @@ namespace CoachBuild.Core;
 public static class CompanionWire
 {
     public const string AppOrigin = "https://coachbuild.local";
-    public const string Version = "2.0.0";
+
+    /// <summary>
+    /// The version the bridge publishes on <c>/status</c>, which the Draft page
+    /// prints verbatim ("Companion {version}", <c>desktop/ui/DraftPage.tsx</c>).
+    ///
+    /// <para>THIS USED TO BE A LITERAL, AND IT DRIFTED. Screenshots
+    /// <c>_evidence/live-2.1.0/01,03,04</c>, 2026-09-08: a 2.1.0 build told the
+    /// user "Companion 2.0.0", because the constant here had simply not been
+    /// edited since 2.0.0 while the csproj moved on twice. A number restated in
+    /// two places is a number that will disagree with itself, so this one is
+    /// no longer restated: it is READ off this assembly, whose version comes
+    /// from <c>desktop/src/Directory.Build.props</c> — the single place the app
+    /// version is written. Bumping the release now updates the status field by
+    /// construction, and there is nothing left to forget.</para>
+    ///
+    /// <para>Informational version first (it is the one that carries a
+    /// prerelease suffix), with any <c>+build</c> metadata trimmed because that
+    /// is a source revision, not something to show a user; assembly version is
+    /// the fallback, and "0.0.0" the floor for a host that strips both. Never
+    /// throws: a status field is not worth a crash.</para>
+    /// </summary>
+    public static readonly string Version = ResolveVersion();
+
+    private static string ResolveVersion()
+    {
+        try
+        {
+            var assembly = typeof(CompanionWire).Assembly;
+            var informational = assembly
+                .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+                ?.InformationalVersion;
+            if (!string.IsNullOrWhiteSpace(informational))
+            {
+                var plus = informational.IndexOf('+');
+                var trimmed = (plus > 0 ? informational[..plus] : informational).Trim();
+                if (trimmed.Length > 0) return trimmed;
+            }
+            var version = assembly.GetName().Version;
+            if (version is not null) return $"{version.Major}.{version.Minor}.{version.Build}";
+        }
+        catch
+        {
+            // Fall through to the floor below.
+        }
+        return "0.0.0";
+    }
+
     public const string SessionFileName = "companion-session.txt";
     public const int AttachWindowSeconds = 150;
     public const int OpenGraceSeconds = 25;

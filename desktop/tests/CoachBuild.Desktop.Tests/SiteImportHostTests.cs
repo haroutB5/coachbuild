@@ -60,6 +60,14 @@ public sealed class SiteImportHostTests
         api.Enqueue(Ok("{\"ownedPageCount\":5}"));
         api.Enqueue(Ok("{\"id\":7}"));
         api.Enqueue(Ok("7"));
+        // The 2.1.0-round-2 prune re-reads the pages after selecting the new
+        // one (RuneApplyService.PruneOwnedPagesAsync). Handing back a list
+        // holding ONLY the page just written is also an assertion in itself:
+        // with nothing over the cap no DELETE is issued, so the verification
+        // read below is still the next call on the wire.
+        api.Enqueue(Ok(
+            "[{\"id\":7,\"name\":\"" + title + "\",\"isDeletable\":true,\"primaryStyleId\":8000," +
+            "\"subStyleId\":8200,\"selectedPerkIds\":[],\"current\":true}]"));
         api.Enqueue(Ok(
             "{\"id\":7,\"name\":\"" + title + "\",\"isDeletable\":true,\"primaryStyleId\":8000,\"subStyleId\":8200," +
             "\"selectedPerkIds\":[8021,9111,9104,8014,8233,8237,5005,5008,5011],\"current\":true}"));

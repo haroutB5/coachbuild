@@ -67,6 +67,15 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         public Task<bool>? Initialization { get; set; }
 
         /// <summary>
+        /// True once the MyStats consent dismissal has been ATTEMPTED for the
+        /// navigation currently in this tab (2.1.0 round 2). Cleared on
+        /// NavigationStarting, so the attempt is once per navigation and never
+        /// once per event: op.gg is a SPA and fires NavigationCompleted more
+        /// than once for a single page.
+        /// </summary>
+        public bool ConsentAttempted { get; set; }
+
+        /// <summary>
         /// True when the idle sweep disposed this tab's WebView2. The state
         /// row survives (the tab button stays), so this is what tells the
         /// lazy path it is RE-creating rather than creating.
@@ -742,6 +751,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (_disposed) return;
         if (state.Tab != CompanionTab.Companion && !SiteNavigationPolicy.IsAllowed(args.Uri))
             args.Cancel = true;
+        // Re-arm the one-per-navigation MyStats consent attempt. Set here, not
+        // in the completed handler, so a SPA route change that fires several
+        // completions still gets exactly one attempt.
+        else if (state.Tab == CompanionTab.OpGg) state.ConsentAttempted = false;
     }
 
     private void OnNavigationCompleted(
@@ -774,6 +787,19 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
                 if (state.Core is not null)
                     state.Browser.ZoomFactor = _preferences.ZoomFor(state.Tab);
                 UpdateChrome();
+            }
+
+            // MyStats' consent wall, dismissed once per navigation (2.1.0
+            // round 2). The import paths already do this for the two build
+            // sites; MyStats had no import path at all, so its wall sat over
+            // the whole tab with no dismissal anywhere (screenshot
+            // _evidence/live-2.1.0/02-mystats-tab.png). Fire-and-forget: a
+            // navigation handler must not await, and a failed dismissal just
+            // leaves the page as it was.
+            if (state.Tab == CompanionTab.OpGg && !state.ConsentAttempted && state.Core is not null)
+            {
+                state.ConsentAttempted = true;
+                _ = DismissMyStatsConsentAsync(state.Core, _shutdownToken);
             }
 
             return;
@@ -1427,6 +1453,66 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     }
 
     /// <summary>
+    /// The MyStats (op.gg) consent dismissal: ONE attempt per navigation,
+    /// after the same settle the import paths use.
+    ///
+    /// <para>WHY MYSTATS TOO. Screenshot <c>_evidence/live-2.1.0/02-mystats-tab.png</c>,
+    /// 2026-09-08: op.gg's consent modal covers the profile on first visit and
+    /// the tab offers no way past it — the import paths' dismissal
+    /// (<see cref="DismissConsentAsync"/>) never ran here, because MyStats has
+    /// no import path. It is LITERALLY the same dialog: op.gg runs Quantcast
+    /// Choice, the same CMP Coachless runs, and the modal in that screenshot is
+    /// the <c>coachless-jhin-adc.html</c> fixture's wall word for word — "We
+    /// value your privacy", the IABGPP_HDR_GppString sentence, MORE OPTIONS /
+    /// DISAGREE / AGREE. So the <c>#qc-cmp2-container</c> + <c>#accept-btn</c>
+    /// anchors already shipped in
+    /// <see cref="SiteImportExtractors.ConsentDismissTemplate"/> recognize it
+    /// with no new selector and no new guess. That is the whole of the change:
+    /// this tab is still never scraped, never navigated by us, and never
+    /// read — the one script it may run is the recognized-accept-control
+    /// click, once per navigation, and <c>SiteTabComplianceTests</c> pins
+    /// exactly that.</para>
+    ///
+    /// <para>Never throws, never awaits the caller: it runs off a navigation
+    /// handler.</para>
+    /// </summary>
+    private async Task DismissMyStatsConsentAsync(CoreWebView2 core, CancellationToken cancellationToken)
+    {
+        try
+        {
+            // The wall mounts after the document does, so read the page the
+            // same beat later the import paths already wait.
+            await Task.Delay(ConsentSettleDelayMs, cancellationToken).ConfigureAwait(true);
+            if (_disposed) return;
+            var raw = await core.ExecuteScriptAsync(
+                SiteImportExtractors.ConsentDismissScript).ConfigureAwait(true);
+            if (_disposed) return;
+            var outcome = ConsentDismissal.Parse(raw);
+            if (outcome.LogLine(CompanionTabs.LabelFor(CompanionTab.OpGg)) is { } line)
+            {
+                LogLifecycle(line);
+                return;
+            }
+            // A wall we recognized but could not click is worth a line: it is
+            // the difference between "no wall today" and "the wall changed".
+            if (!string.Equals(outcome.Reason, "none", StringComparison.Ordinal))
+            {
+                LogLifecycle(
+                    $"{CompanionTabs.LabelFor(CompanionTab.OpGg)}: consent dialog left alone ({outcome.Reason})");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Window closing.
+        }
+        catch
+        {
+            // A wall we could not dismiss leaves the page exactly as it was,
+            // which is the pre-2.1.0 behaviour for this tab.
+        }
+    }
+
+    /// <summary>
     /// The executor's Coachless RUNES fetch: navigate a worker to the
     /// per-slot WPA runes page and read the full page off it.
     ///
@@ -1477,7 +1563,34 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (_disposed) return null;
         await DismissConsentAsync(core, CompanionTab.Coachless, cancellationToken).ConfigureAwait(true);
         if (_disposed) return null;
-        return await core.ExecuteScriptAsync(SiteImportExtractors.CoachlessRunesScript).ConfigureAwait(true);
+
+        // SETTLE-POLL, do not read once (2.1.0 round 2). NavigationCompleted
+        // means the document arrived, not that the WPA numbers did: the page
+        // is Angular and paints its rune cards first, which is how a page that
+        // reads perfectly as a fixture produced "no keystone on the runes page
+        // carried a WPA reading" live. Re-read while the extractor says the
+        // absence is still growable; the LAST result is what is reported, so a
+        // timed-out settle returns the extractor's own typed failure with its
+        // per-row census rather than a bare "timed out".
+        var deadline = RunesSettleProbe.SettleTimeoutMs;
+        var waited = 0;
+        var raw = await core.ExecuteScriptAsync(SiteImportExtractors.CoachlessRunesScript).ConfigureAwait(true);
+        var reads = 1;
+        while (!_disposed && RunesSettleProbe.IsRetryable(raw) && waited < deadline)
+        {
+            await Task.Delay(RunesSettleProbe.SettleDelayMs, cancellationToken).ConfigureAwait(true);
+            if (_disposed) return raw;
+            waited += RunesSettleProbe.SettleDelayMs;
+            raw = await core.ExecuteScriptAsync(SiteImportExtractors.CoachlessRunesScript).ConfigureAwait(true);
+            reads++;
+        }
+        if (reads > 1)
+        {
+            LogLifecycle(
+                $"runes: settled the Coachless runes page over {reads} reads in {waited}ms " +
+                (RunesSettleProbe.IsRetryable(raw) ? "-- still no WPA readings" : "-- readings arrived"));
+        }
+        return raw;
     }
 
     /// <summary>

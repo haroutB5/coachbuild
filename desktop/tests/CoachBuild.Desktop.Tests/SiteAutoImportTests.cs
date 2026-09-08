@@ -829,21 +829,88 @@ public sealed class SiteAutoImportTests
         Assert.Equal(calls, executor.Calls.Count);
     }
 
+    /// <summary>
+    /// A client that is genuinely absent is still reported, exactly once — but
+    /// not on the FIRST tick. Field log 2026-09-08, first seconds after launch:
+    /// <c>auto-import: League client not connected</c>, immediately followed by
+    /// a successful poll. Nothing was wrong — LCU credential discovery had not
+    /// finished its first cycle when the first 750 ms snapshot arrived. The
+    /// line now waits
+    /// <see cref="SiteAutoImportService.DisconnectedNoteAfterEvaluations"/>
+    /// ticks. The "touches nothing" half is unchanged throughout, which is the
+    /// control: the new silence must not have cost a fetch or a write.
+    /// </summary>
     [Fact]
-    public async Task No_client_tick_logs_once_and_touches_nothing()
+    public async Task No_client_ticks_stay_silent_through_discovery_then_log_once()
     {
         var api = new StubLcu();
         var executor = new FakeExecutor { Worker = (_, _) => AhriUggJson };
         var sink = new FakeSink();
         var service = NewService(executor, api, sink);
 
+        // The threshold must outlast LCU discovery, so it is pinned as a
+        // NUMBER and not merely read back from the constant: a test written
+        // only in terms of the constant would pass just as happily at 1, which
+        // is the pre-fix behaviour it exists to rule out. The tick is the
+        // existing 750 ms snapshot, so 8 is ~6s.
+        Assert.True(
+            SiteAutoImportService.DisconnectedNoteAfterEvaluations >= 5,
+            "the settle must outlast credential discovery, not merely exist");
+
+        // The very first tick after launch -- the one the field log complained
+        // about -- says nothing at all.
+        await service.OnSnapshotAsync(LockedAhri(lcu: false));
+        Assert.Empty(sink.Logs);
+
+        // ...and so does every tick up to the threshold.
+        for (var tick = 1; tick < SiteAutoImportService.DisconnectedNoteAfterEvaluations - 1; tick++)
+        {
+            await service.OnSnapshotAsync(LockedAhri(lcu: false));
+            Assert.Empty(sink.Logs);
+        }
+
+        // ...and then the client really is absent, so it is said. Once.
+        await service.OnSnapshotAsync(LockedAhri(lcu: false));
         await service.OnSnapshotAsync(LockedAhri(lcu: false));
         await service.OnSnapshotAsync(LockedAhri(lcu: false));
 
         Assert.Empty(executor.Calls);
         Assert.Empty(api.Calls);
         Assert.Empty(sink.Statuses);
+        var line = Assert.Single(sink.Logs);
+        Assert.Contains("League client not connected", line, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The counter measures CONSECUTIVE misses, not misses ever: a client that
+    /// drops mid-session gets the same settle, and a connected tick in between
+    /// re-arms it. Without the reset, one connected tick early on would license
+    /// the note for the rest of the session.
+    /// </summary>
+    [Fact]
+    public async Task A_connected_tick_re_arms_the_disconnected_settle()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor { Worker = (_, _) => AhriUggJson };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink);
+
+        for (var tick = 0; tick < SiteAutoImportService.DisconnectedNoteAfterEvaluations - 1; tick++)
+            await service.OnSnapshotAsync(LockedAhri(lcu: false));
+        Assert.Empty(sink.Logs);
+
+        // One CONNECTED tick with no champion: fetches nothing, but re-arms.
+        await service.OnSnapshotAsync(new AutoImportInput(
+            null, null, null, null, false, CompanionTab.Companion, null, LcuConnected: true));
+        Assert.Empty(sink.Logs);
+
+        for (var tick = 0; tick < SiteAutoImportService.DisconnectedNoteAfterEvaluations - 1; tick++)
+            await service.OnSnapshotAsync(LockedAhri(lcu: false));
+        Assert.Empty(sink.Logs);
+
+        await service.OnSnapshotAsync(LockedAhri(lcu: false));
         Assert.Single(sink.Logs);
+        Assert.Empty(executor.Calls);
     }
 
     [Fact]

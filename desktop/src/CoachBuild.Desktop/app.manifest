@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="CoachBuild.Desktop" />
+
+  <!--
+    WHY THIS FILE EXISTS (2.1.0 round 2).
+
+    At 192 DPI (3072x1920) the whole WPF-drawn surface of the research window
+    painted BLANK WHITE while the WebView2 child window inside it painted
+    perfectly: the tab strip, the status bar, the logo, all gone, with the
+    buttons still present and clickable through UIA. Screenshots
+    _evidence/live-2.1.0/01-04. Two facts pin the shape of it: the white bands
+    land EXACTLY on the 56px chrome row and the 35px status row (so WPF's
+    layout arithmetic is right), and the WebView2's own HWND lands exactly on
+    the content row (so the child's placement is right too). What fails is the
+    composition of the WPF visual layer itself, and only at high DPI.
+
+    The cause is that the process was asking for per-monitor-v2 awareness the
+    unsupported way. Program.EnablePerMonitorDpiAwareness called
+    SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2) at runtime, from Main.
+    WPF reads the process awareness while standing up its render target and
+    does not expect it to have been changed underneath it; the supported way to
+    ask for per-monitor-v2 in a WPF app is to DECLARE it here, in the
+    application manifest, so the awareness is fixed before any managed code
+    runs. At 96 DPI the scale factor is 1 and the mismatch costs nothing, which
+    is exactly why the user's earlier standard-DPI screenshots painted fine.
+
+    The runtime call is kept as a fallback for a host that loses this manifest
+    (see Program.cs) -- with the manifest present it simply no-ops, because the
+    awareness is already set by then.
+
+    dpiAware/PM stays alongside dpiAwareness for pre-1607 Windows, which does
+    not read the newer element; both must agree.
+  -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10/11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+      <!-- Windows 8.1 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}" />
+      <!-- Windows 8 -->
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}" />
+      <!-- Windows 7 -->
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}" />
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">permonitorv2,permonitor</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>

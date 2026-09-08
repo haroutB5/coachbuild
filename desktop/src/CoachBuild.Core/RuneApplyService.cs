@@ -23,6 +23,32 @@ public sealed class RuneApplyService
 
     public RuneOwnershipLedger Ledger => _ledger;
 
+    /// <summary>
+    /// The title prefix that marks a rune page as ours. The one place it is
+    /// spelled — the same literal <see cref="ItemSetMergeService"/> uses to
+    /// decide which item sets are ours, so the two halves of an import can
+    /// never disagree about what "a CoachBuild page" is.
+    /// </summary>
+    public const string OwnedPagePrefix = "CoachBuild";
+
+    /// <summary>
+    /// How many <see cref="OwnedPagePrefix"/> rune pages may survive a write,
+    /// counting the one just written. The one place this number lives.
+    ///
+    /// <para>WHY IT EXISTS. Field evidence 2026-09-08: the item-set write
+    /// prunes — <see cref="ItemSetMergeService.Merge"/> drops every existing
+    /// <c>CoachBuild</c>-titled set and re-adds only the current ones — but the
+    /// rune write had no bound at all, because
+    /// <c>SiteImportValidator.BuildRuneRequest</c> deliberately passes a null
+    /// <c>replacePrefix</c> and that is the only thing that ever deleted a
+    /// stale page. So the client kept a page per champion+role+source forever:
+    /// <c>CoachBuild Mordekaiser Top</c> was still sitting there after its item
+    /// set had been pruned. Two, not one: the page just written plus the
+    /// previous champion's, so re-picking the last champion is still instant
+    /// and a dodge does not cost the page you came from.</para>
+    /// </summary>
+    public const int MaxOwnedPages = 2;
+
     public async Task<ApplyRunesResult> ApplyAsync(
         ApplyRunesRequest? request,
         CancellationToken cancellationToken = default)
@@ -166,6 +192,42 @@ public sealed class RuneApplyService
             "all rune pages are yours -- click Apply runes to replace the current one");
     }
 
+    /// <summary>
+    /// Which of the client's rune pages a write should delete, so that at most
+    /// <see cref="MaxOwnedPages"/> CoachBuild pages survive.
+    ///
+    /// <para>Pure, so the rule is testable without a client. The rules, each of
+    /// which is a refusal:</para>
+    /// <list type="bullet">
+    ///   <item>A page whose title does not start with
+    ///   <see cref="OwnedPagePrefix"/> is the USER'S and is never returned,
+    ///   whatever the cap says. Title-less pages are the user's too.</item>
+    ///   <item>An undeletable page is never returned (the client owns those).</item>
+    ///   <item><paramref name="keepId"/> — the page just written — is never
+    ///   returned, even if it is somehow not the newest.</item>
+    ///   <item>Of the rest, the newest <see cref="MaxOwnedPages"/>-1 survive.
+    ///   "Newest" is page id: the LCU issues them ascending and there is no
+    ///   timestamp on the resource, so the id IS the age order.</item>
+    /// </list>
+    /// </summary>
+    public static IReadOnlyList<int> PagesToPrune(IEnumerable<LcuPage>? pages, int keepId)
+    {
+        if (pages is null) return [];
+        var ours = pages
+            .Where(page =>
+                page is not null &&
+                page.Id != keepId &&
+                page.IsDeletable &&
+                page.Name is not null &&
+                page.Name.StartsWith(OwnedPagePrefix, StringComparison.Ordinal))
+            .OrderByDescending(page => page.Id)
+            .ToArray();
+        // The written page occupies one slot of the cap, so the survivors
+        // among the others are one fewer.
+        var survivors = Math.Max(0, MaxOwnedPages - 1);
+        return ours.Skip(survivors).Select(page => page.Id).ToArray();
+    }
+
     public void ClearForChampSelect() => _ledger.Clear();
 
     public static string Fingerprint(int primaryStyleId, int subStyleId, IEnumerable<int> selectedPerkIds) =>
@@ -181,6 +243,9 @@ public sealed class RuneApplyService
             "/lol-perks/v1/currentpage",
             pageId,
             cancellationToken).ConfigureAwait(false);
+        // AFTER the selection, deliberately: the page we just wrote is now the
+        // current one, so every page this prunes is deselected and deletable.
+        await PruneOwnedPagesAsync(pageId, cancellationToken).ConfigureAwait(false);
         var currentResponse = await _lcu.SendAsync(
             HttpMethod.Get,
             "/lol-perks/v1/currentpage",
@@ -196,6 +261,50 @@ public sealed class RuneApplyService
             verified = mismatch.Count == 0;
         }
         return new ApplyRunesSuccess(selectedResponse.Ok, verified, mismatch);
+    }
+
+    /// <summary>
+    /// Deletes CoachBuild rune pages beyond <see cref="MaxOwnedPages"/>, newest
+    /// first kept. Best effort by construction: this runs after a page has
+    /// already been written and selected, so a failed cleanup must never turn a
+    /// successful import into a failure — every hop swallows, and the next
+    /// write re-attempts whatever survived.
+    /// </summary>
+    private async Task PruneOwnedPagesAsync(int keepId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var pagesResponse = await _lcu.SendAsync(
+                HttpMethod.Get,
+                "/lol-perks/v1/pages",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (!pagesResponse.Ok) return;
+            var doomed = PagesToPrune(ReadPages(pagesResponse.Content), keepId);
+            if (doomed.Count == 0) return;
+            var removed = 0;
+            foreach (var id in doomed)
+            {
+                try
+                {
+                    var response = await _lcu.SendAsync(
+                        HttpMethod.Delete,
+                        $"/lol-perks/v1/pages/{id}",
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                    if (response.Ok) removed++;
+                }
+                catch
+                {
+                    // A page the client refuses to delete stays; the next
+                    // write tries again once selection has moved off it.
+                }
+            }
+            if (removed > 0)
+                _log?.Info($"apply-runes: pruned {removed} older CoachBuild rune page(s), keeping {MaxOwnedPages}");
+        }
+        catch
+        {
+            // The write already succeeded. Cleanup is not allowed to undo that.
+        }
     }
 
     private static object CreatePageBody(int? id, ApplyRunesRequest request)

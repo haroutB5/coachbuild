@@ -4,7 +4,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Deterministic>true</Deterministic>
-    <Version>1.0.1</Version>
+    <!-- Version comes from ..\Directory.Build.props. CompanionWire.Version
+         reads it back off this assembly, so it must not be restated here. -->
     <AssemblyName>CoachBuild.Core</AssemblyName>
     <RootNamespace>CoachBuild.Core</RootNamespace>
   </PropertyGroup>

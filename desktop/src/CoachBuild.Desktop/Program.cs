@@ -31,6 +31,22 @@ public static class Program
         return app.Run();
     }
 
+    /// <summary>
+    /// The FALLBACK path to per-monitor-v2 awareness. The real declaration
+    /// lives in <c>app.manifest</c>, and that is load-bearing rather than
+    /// tidier: WPF fixes its render target against the process awareness while
+    /// it starts up, so setting the awareness from managed code — as this alone
+    /// used to do — leaves the composition and the window disagreeing about the
+    /// scale factor. At 192 DPI that showed up as a research window whose WPF
+    /// chrome painted blank white around a WebView2 that painted fine
+    /// (_evidence/live-2.1.0/01-04, 2026-09-08); at 96 DPI the scale is 1 and
+    /// nothing looked wrong, which is why it shipped.
+    ///
+    /// <para>With the manifest present this call finds the awareness already
+    /// set and returns false, which is the intended outcome and not an error.
+    /// It stays for the case where a host strips or replaces the manifest:
+    /// per-monitor-v2 set late still beats system-aware entirely.</para>
+    /// </summary>
     private static void EnablePerMonitorDpiAwareness()
     {
         if (!OperatingSystem.IsWindows()) return;

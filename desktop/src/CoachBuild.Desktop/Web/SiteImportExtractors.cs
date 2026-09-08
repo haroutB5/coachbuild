@@ -89,6 +89,35 @@ public static class SiteImportExtractors
     /// it saw, on success as well as failure, so the next empty yield arrives
     /// with its own diagnosis instead of needing another live pass.</para>
     ///
+    /// <para>A ROLELESS URL IS A REAL CASE, NOT A DEAD END (2.1.0 round 2).
+    /// Field log 2026-09-08: <c>u.gg items: the URL carried no role, so no
+    /// build key could be formed</c> / <c>stage url-recognized (rank
+    /// "emerald_plus", role "none", embedded ranks [], 0 blocks)</c>. Champ
+    /// select does not always report a role — practice tool, blind pick,
+    /// customs — so <see cref="SiteDeepLink.Build"/> builds
+    /// <c>/lol/champions/{slug}/build</c> with no role segment, and u.gg then
+    /// AUTO-SELECTS the champion's main role and serves that build. The page
+    /// therefore knows the role even when the URL does not, and the script now
+    /// asks it, in this order:</para>
+    /// <list type="number">
+    ///   <item>The page's own RENDERED active role tab —
+    ///   <c>a.role-filter.active</c>, whose <c>href</c> is
+    ///   <c>/lol/champions/{slug}/build/{role}</c> (verified in
+    ///   <c>ugg-nasus-top.html</c>, which renders five
+    ///   <c>a.role-filter</c> and marks exactly one <c>active</c>).</item>
+    ///   <item>Failing that, the roles the page EMBEDS
+    ///   (<c>"world_{rank}_{role}"</c>): exactly ONE is the page's only build
+    ///   and is not a guess. Several with no rendered tab IS a guess, and is
+    ///   refused — the Nasus fixture embeds all five roles, so this is not a
+    ///   hypothetical.</item>
+    /// </list>
+    /// <para>The discovered role is reported in <c>meta.notes</c> WITH the
+    /// source that produced it, and is what the payload carries: a Top build
+    /// labelled Top is honest, and labelling it roleless would be the lie. The
+    /// RUNES half needs no role at all — it reads the rendered panel — which is
+    /// why runes came back fine on the very run where items came back empty.
+    /// </para>
+    ///
     /// <para>PARTIAL RESULTS ARE HONEST: the script returns whatever half it
     /// found (runes-only or items-only); only when NEITHER half is present
     /// does it return <c>{ error }</c>. C#'s pre-write validation then
@@ -140,7 +169,8 @@ public static class SiteImportExtractors
           var page = href.match(/u\.gg\/lol\/champions\/([a-z0-9]+)\/build(?:\/([a-z]+))?/i);
           if (!page) return fail('not a champion build page');
           var slug = page[1].toLowerCase();
-          var role = (page[2] || '').toLowerCase();
+          var urlRole = (page[2] || '').toLowerCase();
+          var role = urlRole;
           function isShown(el) {
             if (!el) return false;
             if (typeof el.offsetParent === 'undefined') return true;
@@ -244,15 +274,55 @@ public static class SiteImportExtractors
           // proves the instrument is alive on the runs that succeed.
           var itemStage = 'url-recognized';
           var notes = [];
+          // The embedded blobs, read BEFORE the role is settled: they are also
+          // one of the two places a missing role can be discovered from.
           var texts = [];
-          if (role) {
-            var scripts = document.getElementsByTagName('script');
-            for (var q = 0; q < scripts.length; q++) {
-              var body = scripts[q].textContent || '';
-              if (body.indexOf('"world_') >= 0) texts.push(body);
+          var scripts = document.getElementsByTagName('script');
+          for (var q = 0; q < scripts.length; q++) {
+            var body = scripts[q].textContent || '';
+            if (body.indexOf('"world_') >= 0) texts.push(body);
+          }
+          // ROLE DISCOVERY. A roleless URL is what champ select produces for
+          // practice tool / blind / customs, and u.gg answers it by
+          // auto-selecting the champion's main role -- so the PAGE knows the
+          // role the URL omitted. Ask it, never guess it.
+          var roleSource = urlRole ? 'url' : '';
+          if (!role) {
+            var roleTabs = document.querySelectorAll('a.role-filter.active');
+            for (var rt = 0; rt < roleTabs.length && !role; rt++) {
+              var rm = String(roleTabs[rt].getAttribute('href') || '')
+                .match(/\/build\/([a-z]+)/i);
+              if (rm) { role = rm[1].toLowerCase(); roleSource = 'active-role-tab'; }
             }
-          } else {
-            notes.push('u.gg items: the URL carried no role, so no build key could be formed');
+          }
+          var embeddedRoles = [];
+          if (!role) {
+            // Ranks carry underscores (emerald_plus), roles never do, so the
+            // final segment before the closing quote is the role.
+            var roleRe = /"world_[a-z0-9_]*?_([a-z]+)"/gi;
+            for (var y = 0; y < texts.length; y++) {
+              roleRe.lastIndex = 0;
+              var rhit;
+              while ((rhit = roleRe.exec(texts[y]))) {
+                var rtok = rhit[1].toLowerCase();
+                if (embeddedRoles.indexOf(rtok) < 0) embeddedRoles.push(rtok);
+              }
+            }
+            if (embeddedRoles.length === 1) {
+              // The page's ONLY build for this champion is not a guess.
+              role = embeddedRoles[0];
+              roleSource = 'only-embedded-role';
+            } else if (embeddedRoles.length > 1) {
+              notes.push('u.gg items: the URL carried no role, the page rendered no active role tab, and it embeds ' +
+                embeddedRoles.length + ' roles (' + embeddedRoles.join(', ') +
+                ') -- refused rather than guessed');
+            } else {
+              notes.push('u.gg items: the URL carried no role and the page embeds no role keys to discover one from');
+            }
+          }
+          if (!urlRole && role) {
+            notes.push('u.gg items: the URL carried no role; used the page\'s own "' +
+              role + '" (' + roleSource + ')');
           }
           // The rank tokens the page ACTUALLY embeds for this role. The
           // rendered rank filter is a hint, not the key: the page embeds one
@@ -337,8 +407,8 @@ public static class SiteImportExtractors
             }
           }
           notes.push('u.gg items: stage ' + itemStage + ' (rank "' + (rank || 'none') +
-            '", role "' + (role || 'none') + '", embedded ranks [' + tokens.join(', ') +
-            '], ' + blocks.length + ' blocks)');
+            '", role "' + (role || 'none') + '" via ' + (roleSource || 'nothing') +
+            ', embedded ranks [' + tokens.join(', ') + '], ' + blocks.length + ' blocks)');
           if (!runes && !blocks.length) return fail('no build on page');
           return JSON.stringify({
             source: 'u.gg', championSlug: slug, role: role, runes: runes, itemBlocks: blocks,
@@ -668,10 +738,32 @@ public static class SiteImportExtractors
     /// returns <c>{ error }</c> naming that part, and C# reports it and
     /// writes nothing. <c>itemBlocks</c> is always empty here: this page has
     /// no items, and the walk owns those.</para>
+    ///
+    /// <para>BUT AN ABSENT NUMBER IS NOT YET AN ANSWER (2.1.0 round 2). Field
+    /// log 2026-09-08: <c>no keystone on the runes page carried a WPA
+    /// reading</c> live, while <c>coachless-nasus-runes.html</c> — a capture of
+    /// that same page — yields the full page. The difference is time: the
+    /// Angular view paints its rune cards before the WPA deltas arrive, so a
+    /// read at first paint sees cards with no readings. Every WPA-absent and
+    /// row-count failure therefore carries <c>retryable: true</c>, and
+    /// <see cref="RunesSettleProbe"/> tells C# to poll the page again rather
+    /// than report the first paint as the verdict. The message that survives a
+    /// timed-out settle carries the row's CENSUS — how many cards rendered, how
+    /// many had a readable id, how many had a reading — so "the page has
+    /// nothing here" is distinguishable from "the numbers never arrived"
+    /// without another live pass.</para>
     /// </summary>
     public const string CoachlessRunesTemplate = """
         (function () {
           function fail(message) { return JSON.stringify({ error: message }); }
+          // A failure the page may still grow out of: the Angular view renders
+          // its cards before the WPA numbers arrive, so "no reading yet" and
+          // "no reading, ever" are the same DOM one paint apart. Marked so C#
+          // (FetchCoachlessRunesOnUiAsync) settle-polls instead of reporting a
+          // first-paint read as the answer -- field log 2026-09-08, "no
+          // keystone on the runes page carried a WPA reading" live while the
+          // captured fixture of the SAME page yields a full page.
+          function failWait(message) { return JSON.stringify({ error: message, retryable: true }); }
           function norm(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
           function stemOf(src) {
             var s = String(src || '');
@@ -759,6 +851,17 @@ public static class SiteImportExtractors
             }
             return best;
           }
+          // What a row DID carry, so a timed-out settle names how many cards
+          // rendered against how many carried a reading -- the same
+          // degrade-with-a-census shape the item slots use.
+          function census(cards, iconTag, resolveId) {
+            var total = cards ? cards.length : 0, ids = 0, wpa = 0;
+            for (var i = 0; i < total; i++) {
+              if (resolveId(iconSrc(cards[i], iconTag))) ids++;
+              if (deltaOf(cards[i]) !== null) wpa++;
+            }
+            return total + ' cards rendered, ' + ids + ' with a readable id, ' + wpa + ' with a WPA reading';
+          }
           function treeOf(cards) {
             for (var i = 0; i < cards.length; i++) {
               var m = iconSrc(cards[i], 'clr-rune-icon')
@@ -771,30 +874,37 @@ public static class SiteImportExtractors
             return 0;
           }
 
+          // Every absence below is retryable: on a page still hydrating, the
+          // rows appear before the numbers do, so a first-paint read must
+          // settle-poll rather than report.
           var keystoneRows = rowsUnder('.primary-runes', 'keystone-selector');
-          if (!keystoneRows.length) return fail('the runes page showed no keystone row');
+          if (!keystoneRows.length) return failWait('the runes page showed no keystone row');
           var primaryRows = rowsUnder('.primary-runes', 'secondary-selector');
           if (primaryRows.length !== 3)
-            return fail('the runes page showed ' + primaryRows.length + ' primary rune rows, not 3');
+            return failWait('the runes page showed ' + primaryRows.length + ' primary rune rows, not 3');
           var secondaryRows = rowsUnder('.secondary-runes', 'secondary-selector');
           if (secondaryRows.length !== 3)
-            return fail('the runes page showed ' + secondaryRows.length + ' secondary rune rows, not 3');
+            return failWait('the runes page showed ' + secondaryRows.length + ' secondary rune rows, not 3');
           var shardRows = rowsUnder('.modifier-shards', 'shard-selector');
           if (shardRows.length !== 3)
-            return fail('the runes page showed ' + shardRows.length + ' shard rows, not 3');
+            return failWait('the runes page showed ' + shardRows.length + ' shard rows, not 3');
 
           var primaryStyleId = treeOf(keystoneRows[0]);
-          if (!primaryStyleId) return fail('the runes page did not name its primary tree');
+          if (!primaryStyleId) return failWait('the runes page did not name its primary tree');
           var subStyleId = treeOf(secondaryRows[0]);
-          if (!subStyleId) return fail('the runes page did not name its secondary tree');
+          if (!subStyleId) return failWait('the runes page did not name its secondary tree');
 
           var keystone = bestOf(keystoneRows[0], 'clr-rune-icon', perkId);
-          if (!keystone) return fail('no keystone on the runes page carried a WPA reading');
+          if (!keystone)
+            return failWait('no keystone on the runes page carried a WPA reading (' +
+              census(keystoneRows[0], 'clr-rune-icon', perkId) + ')');
 
           var perkIds = [keystone.id];
           for (var r = 0; r < 3; r++) {
             var pick = bestOf(primaryRows[r], 'clr-rune-icon', perkId);
-            if (!pick) return fail('primary rune row ' + (r + 1) + ' carried no WPA reading');
+            if (!pick)
+              return failWait('primary rune row ' + (r + 1) + ' carried no WPA reading (' +
+                census(primaryRows[r], 'clr-rune-icon', perkId) + ')');
             perkIds.push(pick.id);
           }
 
@@ -807,7 +917,8 @@ public static class SiteImportExtractors
             if (top) ranked.push({ row: s, id: top.id, delta: top.delta });
           }
           if (ranked.length < 2)
-            return fail('only ' + ranked.length + ' secondary rune rows carried a WPA reading, need 2');
+            return failWait('only ' + ranked.length + ' secondary rune rows carried a WPA reading, need 2 (' +
+              census(secondaryRows[0], 'clr-rune-icon', perkId) + ' in row 1)');
           ranked.sort(function (a, b) { return b.delta - a.delta || a.row - b.row; });
           var chosen = [ranked[0], ranked[1]];
           chosen.sort(function (a, b) { return a.row - b.row; });
@@ -816,7 +927,9 @@ public static class SiteImportExtractors
           var shardIds = [];
           for (var d = 0; d < 3; d++) {
             var shard = bestOf(shardRows[d], 'cl-rune-shard-icon', shardId);
-            if (!shard) return fail('shard row ' + (d + 1) + ' carried no WPA reading');
+            if (!shard)
+              return failWait('shard row ' + (d + 1) + ' carried no WPA reading (' +
+                census(shardRows[d], 'cl-rune-shard-icon', shardId) + ')');
             shardIds.push(shard.id);
           }
 
@@ -849,15 +962,25 @@ public static class SiteImportExtractors
     /// rule moves.</para>
     ///
     /// <para>ANCHORS, off the same 2026-09-08 fixtures the extractors use, so
-    /// this recognizes exactly two dialogs and nothing else:</para>
+    /// this recognizes exactly two CONSENT FRAMEWORKS and nothing else. They
+    /// are keyed by framework rather than by site deliberately: a site's choice
+    /// of CMP is not the app's to know, and calling a wall by the site it was
+    /// first captured on is how a log line ends up claiming "coachless" while
+    /// standing on op.gg.</para>
     /// <list type="bullet">
-    ///   <item>Coachless runs Quantcast Choice —
-    ///   <c>#qc-cmp2-container</c> holding <c>button#accept-btn</c> (its label
-    ///   is "AGREE"), see <c>coachless-jhin-adc.html</c>.</item>
-    ///   <item>u.gg runs Google Funding Choices —
-    ///   <c>.fc-consent-root</c> holding
-    ///   <c>button.fc-cta-consent</c> (aria-label "Consent"), see
-    ///   <c>ugg-jhin-adc.html</c>.</item>
+    ///   <item><b>Quantcast Choice</b> — <c>#qc-cmp2-container</c> holding
+    ///   <c>button#accept-btn</c> (label "AGREE", beside MORE OPTIONS and
+    ///   DISAGREE), see <c>coachless-jhin-adc.html</c>. op.gg runs this SAME
+    ///   wall: the modal in <c>_evidence/live-2.1.0/02-mystats-tab.png</c> is
+    ///   the Coachless fixture's dialog word for word — "We value your
+    ///   privacy", the IABGPP_HDR_GppString sentence, and the same three
+    ///   buttons — which is why MyStats needed no new selector, only a call
+    ///   site.</item>
+    ///   <item><b>Google Funding Choices</b> — <c>.fc-consent-root</c> holding
+    ///   <c>button.fc-cta-consent</c> (aria-label "Consent", beside "Do not
+    ///   consent" and "Manage options"), see <c>ugg-jhin-adc.html</c>. A
+    ///   DIFFERENT wall with different wording, which is the control that keeps
+    ///   the two entries from collapsing into one guess.</item>
     /// </list>
     ///
     /// <para>It clicks the ACCEPT control specifically, never a
@@ -882,9 +1005,12 @@ public static class SiteImportExtractors
             }
             return true;
           }
+          // Keyed by FRAMEWORK, not by site: op.gg and Coachless both run
+          // Quantcast Choice, so a reason naming a site would be wrong on one
+          // of them. The site is named separately by the caller's log line.
           var WALLS = [
-            { site: 'coachless', root: '#qc-cmp2-container', accept: '#accept-btn' },
-            { site: 'u.gg', root: '.fc-consent-root', accept: 'button.fc-cta-consent' }
+            { framework: 'quantcast-choice', root: '#qc-cmp2-container', accept: '#accept-btn' },
+            { framework: 'google-funding-choices', root: '.fc-consent-root', accept: 'button.fc-cta-consent' }
           ];
           // An already-accepted profile often keeps the consent SHELL in the
           // DOM with its buttons torn out. That is not a wall, so it must not
@@ -902,7 +1028,7 @@ public static class SiteImportExtractors
             } else if (accept.click) {
               accept.click();
             }
-            return done(true, WALLS[i].site);
+            return done(true, WALLS[i].framework);
           }
           return done(false, seen);
         })();

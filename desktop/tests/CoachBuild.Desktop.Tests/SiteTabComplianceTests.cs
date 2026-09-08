@@ -56,7 +56,7 @@ public sealed class SiteTabComplianceTests
     }
 
     /// <summary>
-    /// The window runs a script in exactly FIVE call sites: the hosted page's
+    /// The window runs a script in exactly SEVEN call sites: the hosted page's
     /// own version meta read, the user-initiated runes import, the Coachless
     /// walk both auto paths share, and the u.gg single-shot in each of the
     /// two auto fetch paths (visible extract, worker fetch). The Coachless
@@ -85,10 +85,15 @@ public sealed class SiteTabComplianceTests
         // consent-wall dismissal every import path runs first.
         Assert.Contains("FetchCoachlessRunesOnUiAsync", source, StringComparison.Ordinal);
         Assert.Contains("DismissConsentAsync", source, StringComparison.Ordinal);
+        // 2.1.0 round 2 adds ONE more, and only one: the MyStats tab's consent
+        // dismissal. MyStats is still never scraped and never read -- the only
+        // script it may run is the recognized-accept-control click, which is
+        // pinned by name here and by shape in the consent test below.
+        Assert.Contains("DismissMyStatsConsentAsync", source, StringComparison.Ordinal);
         // Invocations only. The names also appear in prose; counting comments
         // would make this assertion fail for a documentation edit.
         var invocations = Regex.Matches(source, @"\.\s*ExecuteScriptAsync\s*\(");
-        Assert.True(invocations.Count >= 6, "control: all six script families must exist");
+        Assert.True(invocations.Count >= 7, "control: all seven script families must exist");
         var allowedSites = new HashSet<string>(
             [
                 "RunRunesImportAsync",
@@ -97,6 +102,7 @@ public sealed class SiteTabComplianceTests
                 "FetchViaWorkerOnUiAsync",
                 "FetchCoachlessRunesOnUiAsync",
                 "DismissConsentAsync",
+                "DismissMyStatsConsentAsync",
             ],
             StringComparer.Ordinal);
         foreach (Match invocation in invocations)
@@ -156,6 +162,50 @@ public sealed class SiteTabComplianceTests
         // stays up and the import fails honestly.
         Assert.DoesNotContain("textContent", script, StringComparison.Ordinal);
         Assert.DoesNotContain("innerText", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// MyStats gains a script call site in 2.1.0 round 2 and must gain
+    /// NOTHING else. The op.gg consent modal covered the whole tab on first
+    /// visit with no way past it (_evidence/live-2.1.0/02-mystats-tab.png), so
+    /// this tab now runs the same recognized-accept-control click the import
+    /// paths run. It still never extracts, never navigates, never reads the
+    /// page: the handler's whole body is the consent script, and the attempt
+    /// is armed once per navigation rather than once per completion event
+    /// (op.gg is a SPA and fires several).
+    /// </summary>
+    [Fact]
+    public void The_mystats_tab_runs_the_consent_step_and_nothing_else()
+    {
+        var source = ReadSource(WindowSource);
+        var start = source.IndexOf(
+            "private async Task DismissMyStatsConsentAsync",
+            StringComparison.Ordinal);
+        Assert.True(start > 0, "control: the MyStats consent handler must exist");
+        var end = source.IndexOf(
+            "/// The executor's Coachless RUNES fetch", start, StringComparison.Ordinal);
+        Assert.True(end > start, "control: the member after it must exist");
+
+        var body = source[start..end];
+        // Control: it must actually run the consent step.
+        Assert.Contains("ConsentDismissScript", body, StringComparison.Ordinal);
+        // ...and nothing that would turn a dismissal into a scrape or a move.
+        Assert.DoesNotContain("UGgScript", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("CoachlessRunesScript", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("CoachlessStepScript", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("CoachlessInspectScript", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Navigate(", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Reload(", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("ImportRunesAsync", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("ImportBuildAsync", body, StringComparison.Ordinal);
+
+        // One attempt per NAVIGATION: the flag is set before the call and
+        // re-armed on NavigationStarting, never in the completed handler.
+        Assert.Contains("ConsentAttempted = true", source, StringComparison.Ordinal);
+        Assert.Contains(
+            "else if (state.Tab == CompanionTab.OpGg) state.ConsentAttempted = false;",
+            source,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

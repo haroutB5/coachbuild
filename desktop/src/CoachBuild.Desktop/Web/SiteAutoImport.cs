@@ -110,12 +110,21 @@ public static class AutoImportCoordinator
 {
     private static readonly CompanionTab[] BothSites = [CompanionTab.UGg, CompanionTab.Coachless];
 
+    /// <summary>
+    /// The skip reason for "no League client". Named rather than inlined
+    /// because the service treats it differently from every other reason: at
+    /// startup it is not yet a fact, it is a race (see
+    /// <see cref="SiteAutoImportService.DisconnectedNoteAfterEvaluations"/>).
+    /// </summary>
+    public const string DisconnectedSkipReason =
+        "League client not connected -- auto-import standing by";
+
     public static AutoImportFetch Evaluate(AutoImportState state, AutoImportInput input)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(input);
         if (!input.LcuConnected)
-            return new AutoImportFetch([], "League client not connected -- auto-import standing by");
+            return new AutoImportFetch([], DisconnectedSkipReason);
         if (input.ChampionId is not > 0 || string.IsNullOrWhiteSpace(input.ChampionKey))
             return new AutoImportFetch([], null);
 
@@ -437,6 +446,32 @@ public sealed class SiteAutoImportService
     /// </summary>
     private bool _fetchedThisRun;
 
+    /// <summary>
+    /// How many consecutive disconnected evaluations must pass before the
+    /// "League client not connected" line is worth writing.
+    ///
+    /// <para>WHY THE DELAY. Field log 2026-09-08, first seconds after launch:
+    /// <c>auto-import: League client not connected</c>, immediately followed by
+    /// a successful poll. Nothing was wrong — LCU credential discovery had
+    /// simply not finished its first cycle when the first 750 ms snapshot
+    /// arrived, and reporting a race as a state is how a log teaches its reader
+    /// to ignore it. Eight evaluations is ~6s of the existing tick: long past
+    /// discovery on a client that is running, and still prompt on one that is
+    /// not. Counted in TICKS, not seconds, so the rule stays testable with
+    /// scripted inputs and no clock.</para>
+    /// </summary>
+    public const int DisconnectedNoteAfterEvaluations = 8;
+
+    /// <summary>
+    /// Consecutive evaluations that saw no client. Reset by any connected
+    /// evaluation, so a genuine mid-session disconnect is reported after the
+    /// same settle rather than being silenced by an earlier connection.
+    /// </summary>
+    private int _disconnectedEvaluations;
+
+    /// <summary>The disconnected-tick count, for tests.</summary>
+    internal int DisconnectedEvaluations => _disconnectedEvaluations;
+
     /// <param name="runes">
     /// The rune write service, for the Coachless runes page (2.1.0). Null
     /// keeps the pre-2.1.0 items-only behaviour: the runes leg is skipped
@@ -495,6 +530,8 @@ public sealed class SiteAutoImportService
 
     private async Task RunAsync(AutoImportInput input, CancellationToken cancellationToken)
     {
+        if (input.LcuConnected) _disconnectedEvaluations = 0;
+        else if (_disconnectedEvaluations < int.MaxValue) _disconnectedEvaluations++;
         var evaluation = AutoImportCoordinator.Evaluate(_state, input);
         var fetch = evaluation.Fetch.ToList();
         if (fetch.Count == 0)
@@ -752,6 +789,13 @@ public sealed class SiteAutoImportService
             _lastSkipNote = null;
             return;
         }
+        // The startup race, not a state: say nothing until LCU discovery has
+        // had a full cycle to fail. Deliberately returns WITHOUT recording the
+        // note, so the line still arrives exactly once if the client really is
+        // absent.
+        if (string.Equals(reason, AutoImportCoordinator.DisconnectedSkipReason, StringComparison.Ordinal)
+            && _disconnectedEvaluations < DisconnectedNoteAfterEvaluations)
+            return;
         if (string.Equals(_lastSkipNote, reason, StringComparison.Ordinal)) return;
         _lastSkipNote = reason;
         _sink.LogInfo($"auto-import: {reason}");

@@ -10,8 +10,10 @@
     <StartupObject>CoachBuild.Desktop.Program</StartupObject>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Deterministic>true</Deterministic>
-    <Version>2.1.0</Version>
+    <!-- Version comes from ..\Directory.Build.props: one number for the app. -->
     <ApplicationIcon>Assets\tray-icon.ico</ApplicationIcon>
+    <!-- PER-MONITOR-V2 DPI, DECLARED (2.1.0 round 2). See app.manifest. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>CoachBuild.Desktop</AssemblyName>
     <RootNamespace>CoachBuild.Desktop</RootNamespace>
   </PropertyGroup>

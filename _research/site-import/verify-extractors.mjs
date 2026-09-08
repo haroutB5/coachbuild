@@ -409,6 +409,77 @@ check('two embedded ranks and no rendered match refuses rather than guessing',
   (uggAmbiguous.itemBlocks || []).length === 0 &&
   ambNotes.some((n) => n.includes('refused rather than guessed')), JSON.stringify(ambNotes));
 
+// ---- 2.1.0 round 2, ITEM 1: a ROLELESS u.gg url -----------------------------
+// Champ select does not always report a role (practice tool, blind, customs),
+// so SiteDeepLink.Build emits /lol/champions/{slug}/build with no role segment
+// and u.gg auto-selects the champion's main role. The extractor reads the URL
+// off the page, so "roleless" is simulated the way production produces it: the
+// SAME fixture, read under the roleless URL.
+const uggNasusRolelessUrl = 'https://u.gg/lol/champions/nasus/build';
+// Controls: the fixture really is the shape these checks need -- exactly one
+// rendered active role tab, and FIVE embedded roles, so the
+// single-embedded-role fallback cannot be what rescues the first case.
+check('control: the fixture renders exactly one active role tab',
+  (uggNasusHtml.match(/class="role-filter active"/g) || []).length === 1,
+  (uggNasusHtml.match(/class="role-filter active"/g) || []).length);
+const embeddedRoleTokens = [...new Set(
+  [...uggNasusHtml.matchAll(/"world_[a-z0-9_]*?_([a-z]+)"/g)].map((m) => m[1]))];
+check('control: the fixture embeds five roles, so one-embedded-role cannot apply',
+  embeddedRoleTokens.length === 5, JSON.stringify(embeddedRoleTokens));
+
+const uggRoleless = runExtractor(uggJs, uggNasusHtml, uggNasusRolelessUrl);
+const rolelessNotes = (uggRoleless.meta && uggRoleless.meta.notes) || [];
+console.log('ugg roleless notes: ' + JSON.stringify(rolelessNotes));
+check('a roleless u.gg url still yields the item build',
+  (uggRoleless.itemBlocks || []).length > 0 &&
+  JSON.stringify(uggRoleless.itemBlocks) === JSON.stringify(uggNasus.itemBlocks),
+  JSON.stringify((uggRoleless.itemBlocks || []).length));
+check('and the payload carries the DISCOVERED role, not an empty one',
+  uggRoleless.role === 'top', uggRoleless.role);
+check('and it says the role came from the rendered active tab',
+  rolelessNotes.some((n) => n.includes('the URL carried no role') && n.includes('active-role-tab')),
+  JSON.stringify(rolelessNotes));
+check('and the runes half is unaffected by the missing role',
+  JSON.stringify(uggRoleless.runes) === JSON.stringify(uggNasus.runes),
+  JSON.stringify(uggRoleless.runes));
+// The pre-fix line named a dead end; there is no longer a dead end to name.
+check('the pre-fix "no build key could be formed" line is gone',
+  !rolelessNotes.some((n) => n.includes('no build key could be formed')),
+  JSON.stringify(rolelessNotes));
+
+// Fallback 2: no rendered role tab, exactly ONE embedded role -> use it.
+const uggNoTabOneRole = uggNasusHtml
+  .replace(/class="role-filter active"/g, 'class="role-filter"')
+  .replace(/"world_emerald_plus_(jungle|mid|adc|support)"/g, '"worldgone_emerald_plus_$1"');
+check('the mutant really did remove the active tab and four of the five roles',
+  !uggNoTabOneRole.includes('role-filter active') &&
+  [...new Set([...uggNoTabOneRole.matchAll(/"world_[a-z0-9_]*?_([a-z]+)"/g)].map((m) => m[1]))].length === 1);
+const uggOneRole = runExtractor(uggJs, uggNoTabOneRole, uggNasusRolelessUrl);
+const oneRoleNotes = (uggOneRole.meta && uggOneRole.meta.notes) || [];
+check('no active tab but exactly one embedded role uses that role',
+  uggOneRole.role === 'top' && (uggOneRole.itemBlocks || []).length > 0 &&
+  oneRoleNotes.some((n) => n.includes('only-embedded-role')),
+  JSON.stringify(oneRoleNotes));
+
+// The refusal: no rendered tab and SEVERAL embedded roles is a guess.
+const uggNoTab = uggNasusHtml.replace(/class="role-filter active"/g, 'class="role-filter"');
+const uggAmbiguousRole = runExtractor(uggJs, uggNoTab, uggNasusRolelessUrl);
+const ambRoleNotes = (uggAmbiguousRole.meta && uggAmbiguousRole.meta.notes) || [];
+check('no active tab and several embedded roles refuses rather than guessing',
+  (uggAmbiguousRole.itemBlocks || []).length === 0 &&
+  ambRoleNotes.some((n) => n.includes('embeds 5 roles') && n.includes('refused rather than guessed')),
+  JSON.stringify(ambRoleNotes));
+// ...and the refusal is still per-half: the runes survive it.
+check('and the roleless refusal still returns the runes half',
+  uggAmbiguousRole.runes && uggAmbiguousRole.runes.perkIds.length === 6,
+  JSON.stringify(uggAmbiguousRole.runes));
+
+// A role-BEARING url must be untouched by all of this: the URL still wins.
+check('a role-bearing url still reports its role as coming from the url',
+  nasusNotes.some((n) => n.includes('via url')), JSON.stringify(nasusNotes));
+check('and a role-bearing url adds no discovery note',
+  !nasusNotes.some((n) => n.includes('the URL carried no role')), JSON.stringify(nasusNotes));
+
 // Coachless Nasus top: reads clean statically, including Starter.
 const clNasusHtml = readFileSync(join(dir, 'coachless-nasus-top.html'), 'utf8');
 const clNasusUrl = 'https://coachless.gg/builds/nasus?role=top';
@@ -527,16 +598,77 @@ check('runes page with no shard rows writes nothing and says which part',
   typeof runesNoShards.error === 'string' && runesNoShards.error.includes('shard rows'),
   JSON.stringify(runesNoShards));
 
+// ---- 2.1.0 round 2, ITEM 2: the runes page's FIRST PAINT --------------------
+// Live 2026-09-08: "no keystone on the runes page carried a WPA reading" while
+// this very fixture yields a full page. The page is Angular and paints its
+// cards before the deltas land, so a first-paint read is not a verdict. Those
+// absences now carry retryable:true (C#'s RunesSettleProbe polls on it) and a
+// per-row census, so a settle that really does time out says what it saw.
+//
+// Control first: the good read must NOT be marked retryable, or the marker
+// would mean nothing.
+check('control: a successful runes read carries no retry marker',
+  runes.retryable === undefined && runes.error === undefined, JSON.stringify(runes).slice(0, 120));
+
+// The mutant: strip the deltas from the keystone row only. Every card still
+// renders and every icon still resolves -- exactly the live shape.
+function stripKeystoneDeltas(html) {
+  // lastIndexOf, not indexOf: the class name also appears in the page's own
+  // embedded stylesheet, hundreds of KB before the rendered row.
+  const at = html.lastIndexOf('keystone-selector');
+  if (at < 0) throw new Error('fixture has no keystone-selector');
+  const end = html.indexOf('secondary-selector', at);
+  if (end < 0) throw new Error('could not bound the keystone row');
+  return html.slice(0, at) +
+    html.slice(at, end).replace(/rune-delta/g, 'rune-delta-pending') +
+    html.slice(end);
+}
+const runesNoDeltas = stripKeystoneDeltas(runesHtml);
+check('the mutant really did strip the keystone row deltas',
+  runesNoDeltas !== runesHtml && runesNoDeltas.includes('rune-delta-pending'));
+const runesEarly = runExtractor(runesJs, runesNoDeltas, runesUrl);
+console.log('runes first-paint: ' + JSON.stringify(runesEarly));
+check('a keystone row with no readings is a RETRYABLE failure, not a verdict',
+  typeof runesEarly.error === 'string' && runesEarly.retryable === true,
+  JSON.stringify(runesEarly));
+check('and it names the census: cards rendered vs cards with a reading',
+  typeof runesEarly.error === 'string' &&
+  runesEarly.error.includes('cards rendered') &&
+  runesEarly.error.includes('with a readable id') &&
+  runesEarly.error.includes('0 with a WPA reading'),
+  runesEarly.error);
+// The structural absences are retryable too -- a half-mounted view is the
+// same "not yet" as a half-numbered one.
+check('a runes page with no keystone row is retryable',
+  runesEmpty.retryable === true, JSON.stringify(runesEmpty));
+check('a runes page with no shard rows is retryable', runesNoShards.retryable === true,
+  JSON.stringify(runesNoShards));
+// But a URL that is not a runes page can never become one by waiting.
+check('a non-runes url is NOT retryable', runesWrongUrl.retryable === undefined,
+  JSON.stringify(runesWrongUrl));
+
 // ---- 2.1.0: the consent wall -----------------------------------------------
 // Both fixtures were captured with their real consent dialogs in the DOM, so
 // the dismissal can be exercised against the markup it will actually meet.
 const consentJs = rawBlock('ConsentDismissTemplate');
+// The reason names the FRAMEWORK, not the site: op.gg runs the same Quantcast
+// wall Coachless does (_evidence/live-2.1.0/02-mystats-tab.png is this very
+// dialog), so a reason saying "coachless" would be wrong on the MyStats tab.
 const clConsent = runExtractor(consentJs, clHtml, clUrl);
 check('coachless consent wall is recognized and accepted',
-  clConsent.dismissed === true && clConsent.reason === 'coachless', JSON.stringify(clConsent));
+  clConsent.dismissed === true && clConsent.reason === 'quantcast-choice', JSON.stringify(clConsent));
 const uggConsent = runExtractor(consentJs, uggHtml, 'https://u.gg/lol/champions/jhin/build/adc');
 check('u.gg consent wall is recognized and accepted',
-  uggConsent.dismissed === true && uggConsent.reason === 'u.gg', JSON.stringify(uggConsent));
+  uggConsent.dismissed === true && uggConsent.reason === 'google-funding-choices', JSON.stringify(uggConsent));
+// Evidence, not assumption, that the two entries are two DIFFERENT walls: the
+// Quantcast fixture carries the exact strings the op.gg screenshot shows, and
+// the Funding Choices one does not.
+check('the coachless/op.gg wall is Quantcast, by its own strings',
+  clHtml.includes('id="accept-btn"') && clHtml.includes('MORE OPTIONS') &&
+  clHtml.includes('IABGPP_HDR_GppString'), 'coachless fixture');
+check('and the u.gg wall is a different framework with different wording',
+  uggHtml.includes('fc-cta-consent') && !uggHtml.includes('MORE OPTIONS') &&
+  !uggHtml.includes('IABGPP_HDR_GppString'), 'ugg fixture');
 // The runes fixture was captured AFTER consent was accepted: the Quantcast
 // SHELL is still in the DOM but its buttons are gone. Nothing is clicked, and
 // nothing is logged -- which is the point.
@@ -549,7 +681,8 @@ const shellPlusWall = runExtractor(consentJs,
   '<div class="fc-consent-root"><button class="fc-button fc-cta-consent">Consent</button></div>' +
   '</body></html>', 'https://u.gg/');
 check('a leftover shell does not mask a live wall on the other site',
-  shellPlusWall.dismissed === true && shellPlusWall.reason === 'u.gg', JSON.stringify(shellPlusWall));
+  shellPlusWall.dismissed === true && shellPlusWall.reason === 'google-funding-choices',
+  JSON.stringify(shellPlusWall));
 // The plain no-wall case.
 const noConsent = runExtractor(consentJs,
   '<html><body><p>nothing to accept</p></body></html>', runesUrl);

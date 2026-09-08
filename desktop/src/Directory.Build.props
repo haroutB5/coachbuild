@@ -1,0 +1,18 @@
+<Project>
+  <!--
+    THE APP VERSION, ONE PLACE.
+
+    Until 2.1.0 round 2 there were three: CoachBuild.Desktop.csproj said 2.1.0,
+    CoachBuild.Core.csproj said 1.0.1, and CompanionWire.Version — the number
+    the bridge publishes on /status and the Draft page prints as
+    "Companion {version}" — was a hardcoded "2.0.0" string. So a 2.1.0 build
+    told the user it was 2.0.0 (screenshots _evidence/live-2.1.0/01, 03, 04).
+
+    Both projects now inherit this, and CompanionWire.Version READS its own
+    assembly's informational version instead of restating it. A future release
+    therefore cannot drift: there is no second place left to forget.
+  -->
+  <PropertyGroup>
+    <Version>2.1.0</Version>
+  </PropertyGroup>
+</Project>

@@ -53,6 +53,65 @@ public sealed record ConsentDismissal(bool Dismissed, string Reason)
     }
 }
 
+/// <summary>
+/// Whether a Coachless RUNES read is a verdict or just an early paint.
+///
+/// <para>WHY THIS EXISTS. Field log 2026-09-08: <c>Coachless yielded no rune
+/// build (no keystone on the runes page carried a WPA reading)</c>, while the
+/// captured fixture of the same page yields a complete rune page. The page is
+/// Angular and renders its rune cards before the WPA deltas land, so the very
+/// first read after NavigationCompleted legitimately sees cards with no
+/// numbers. The extractor marks exactly those absences <c>retryable</c>
+/// (<see cref="SiteImportExtractors.CoachlessRunesTemplate"/>); this is the
+/// C# half that recognizes the mark, so the window settle-polls instead of
+/// reporting a first-paint read as the answer.</para>
+///
+/// <para>Fails CLOSED: anything unparseable, or any failure without the mark,
+/// is NOT retryable — an honest typed failure must still reach the log on its
+/// first occurrence rather than being swallowed by an eight-second wait.</para>
+/// </summary>
+public static class RunesSettleProbe
+{
+    /// <summary>How long a runes read may keep settling before its last failure stands.</summary>
+    public const int SettleTimeoutMs = 8000;
+
+    /// <summary>The gap between settle attempts. 8000/400 = 20 reads at most.</summary>
+    public const int SettleDelayMs = 400;
+
+    /// <summary>True when this raw extractor result is a failure worth re-reading.</summary>
+    public static bool IsRetryable(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.String)
+            {
+                // ExecuteScriptAsync JSON-encodes the returned JS string, so
+                // the outer value wraps the object -- same envelope as every
+                // other step result.
+                var inner = root.GetString();
+                if (string.IsNullOrWhiteSpace(inner)) return false;
+                using var innerDocument = JsonDocument.Parse(inner);
+                return HasMark(innerDocument.RootElement);
+            }
+            return HasMark(root);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasMark(JsonElement root) =>
+        root.ValueKind == JsonValueKind.Object
+        && root.TryGetProperty("error", out var error)
+        && error.ValueKind == JsonValueKind.String
+        && root.TryGetProperty("retryable", out var flag)
+        && flag.ValueKind == JsonValueKind.True;
+}
+
 /// <summary>What the idle sweep decided for one tab.</summary>
 public enum TabIdleDecision
 {
