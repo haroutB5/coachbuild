@@ -17,11 +17,14 @@ namespace CoachBuild.Desktop.Web;
 /// session token and the only surface whose document is inspected
 /// unprompted: the version meta tag is read solely to support the existing
 /// web-freshness check. Site tabs are rendering-only with EXACTLY ONE
-/// user-initiated exception: the import button runs a single read-only
-/// extractor script against the active site tab, once per click, and only
-/// while a champion build page is showing and the League client is
-/// connected (<see cref="SiteImportExtractors"/> for the scripts,
-/// <c>RunSiteImportAsync</c> below for the single call site).
+/// user-initiated exception: the import button walks the active site tab,
+/// once per click, and only while a champion build page is showing and the
+/// League client is connected (<see cref="SiteImportExtractors"/> for the
+/// scripts, <c>RunSiteImportAsync</c> below for the single call site). u.gg
+/// is one read-only script; Coachless is a stepped select-and-recompute
+/// walk (inspect, click each slot's top row in DOM order awaiting settle,
+/// final read of the selected rows) because its tables recompute
+/// conditioned on the picks so far.
 /// <c>SiteTabComplianceTests</c> pins that scope: site-tab script execution
 /// is reachable only from the import click handler (plus this file's
 /// Companion version read), the champ-select offer path cannot navigate,
@@ -912,14 +915,17 @@ public partial class WebView2Window : Window
         await RunSiteImportAsync().ConfigureAwait(true);
 
     /// <summary>
-    /// The user-initiated build import: ONE <c>ExecuteScriptAsync</c> against
-    /// the ACTIVE SITE tab, then parse/validate/apply with no further page
-    /// contact. Reachable only from <see cref="ImportBuildButton"/>, which is
-    /// enabled only on a build-page URL while the client is connected — and
-    /// re-checked here, because the client may have closed between the last
-    /// snapshot tick and the click. Never navigates, never reloads; every
-    /// outcome (including an unexpected exception) lands on the status line
-    /// and writes nothing partial.
+    /// The user-initiated build import, reachable only from
+    /// <see cref="ImportBuildButton"/>, which is enabled only on a
+    /// build-page URL while the client is connected — and re-checked here,
+    /// because the client may have closed between the last snapshot tick
+    /// and the click. u.gg runs ONE read-only script, then
+    /// parse/validate/apply with no further page contact; Coachless runs
+    /// the stepped select-and-recompute walk in the helper below (small
+    /// per-step scripts from this same call site — the import click
+    /// handler — awaiting page settle between clicks). Never navigates,
+    /// never reloads; every outcome (including an unexpected exception)
+    /// lands on the status line and writes nothing partial.
     /// </summary>
     private async Task RunSiteImportAsync()
     {
@@ -930,6 +936,12 @@ public partial class WebView2Window : Window
         // Belt and braces behind the disabled button: without a host, a
         // script, or a live site browser there is nothing to read.
         if (script is null || state?.Core is null || _siteImport is null) return;
+
+        if (tab == CompanionTab.Coachless)
+        {
+            await RunCoachlessSelectAndRecomputeImportAsync(state).ConfigureAwait(true);
+            return;
+        }
 
         _importRunning = true;
         UpdateOfferBar();
@@ -958,6 +970,112 @@ public partial class WebView2Window : Window
     private void OnZoomOutClick(object sender, RoutedEventArgs e) => ZoomOut();
 
     private void OnZoomInClick(object sender, RoutedEventArgs e) => ZoomIn();
+
+    /// <summary>
+    /// The Coachless half of the import click: the page's slot tables
+    /// recompute conditioned on the picks so far, so the import reproduces
+    /// what a user gets by clicking the top-WPA row of each slot section in
+    /// on-page order — Keystone, Starter, 1st Item, 2nd Item, Spell, Boots,
+    /// 3rd Item, 4th+ Item — then reading each item slot. The order AND the
+    /// clickable set come from the page (the opening inspect step), never
+    /// from a hardcoded list: only slots whose top row carries the site's
+    /// <c>selectable</c> class are clicked (the site grants selections to a
+    /// capped depth; read-only slots are skipped outright, never clicked,
+    /// never waited on). Keystone/Spell are clicked for conditioning but
+    /// not imported.
+    ///
+    /// <para>Called from exactly one place (the import click handler above),
+    /// awaited inside that one click: no timers, no background trigger —
+    /// the compliance tests pin the single caller. Each loop turn runs one
+    /// small step script; after a click the driver polls until the tables
+    /// settle AND the clicked slot shows a selection (~250ms apart, ~5s
+    /// wait per slot). A clicked slot that never selects does NOT fail the
+    /// import — the walk notes it into the payload meta and moves on, and
+    /// the final read takes the SELECTED row where one exists, else the TOP
+    /// row of the by-now conditioned table. The final read's payload flows
+    /// into the same host every import uses, so validation and the
+    /// no-partial-write contract are unchanged (a runes-null payload now
+    /// applies the item set on its own).</para>
+    /// </summary>
+    private async Task RunCoachlessSelectAndRecomputeImportAsync(BrowserTabState state)
+    {
+        if (_disposed || _importRunning) return;
+        if (state.Core is null || _siteImport is null) return;
+
+        _importRunning = true;
+        UpdateOfferBar();
+        SetStatus($"Importing build from {CompanionTabs.LabelFor(CompanionTab.Coachless)}…");
+        try
+        {
+            var sequence = SiteImportSequencer.Initial();
+            while (true)
+            {
+                if (_disposed) return;
+                switch (SiteImportSequencer.CommandFor(sequence))
+                {
+                    case FailCommand fail:
+                        SetStatus($"{fail.Reason} -- nothing was imported");
+                        return;
+                    case SucceedCommand done:
+                    {
+                        var result = await _siteImport
+                            .ImportBuildAsync(done.PayloadJson, _shutdownToken)
+                            .ConfigureAwait(true);
+                        if (!_disposed) SetStatus(result.Message);
+                        return;
+                    }
+                    case ClickSlotCommand click:
+                    {
+                        var raw = await state.Core.ExecuteScriptAsync(
+                            SiteImportExtractors.CoachlessStepScript(
+                                SiteImportSteps.Click(click.Title))).ConfigureAwait(true);
+                        if (_disposed) return;
+                        sequence = SiteImportSequencer.Transition(
+                            sequence, CoachlessStepResponse.Parse(raw));
+                        break;
+                    }
+                    case ReadFinalCommand:
+                    {
+                        var raw = await state.Core.ExecuteScriptAsync(
+                            SiteImportExtractors.CoachlessStepScript(
+                                SiteImportSteps.Read())).ConfigureAwait(true);
+                        if (_disposed) return;
+                        sequence = SiteImportSequencer.Transition(
+                            sequence, CoachlessStepResponse.Parse(raw));
+                        break;
+                    }
+                    default:
+                    {
+                        // InspectCommand: discovery, or one settle poll. The
+                        // pause lives only here, before settle polls — a
+                        // plain await inside the click handler, not a timer.
+                        if (sequence.Phase == SequencerPhase.Settle)
+                            await Task.Delay(
+                                SiteImportSequencer.SettlePollDelayMs,
+                                _shutdownToken).ConfigureAwait(true);
+                        if (_disposed) return;
+                        var raw = await state.Core.ExecuteScriptAsync(
+                            SiteImportExtractors.CoachlessInspectScript).ConfigureAwait(true);
+                        if (_disposed) return;
+                        sequence = SiteImportSequencer.Transition(
+                            sequence, CoachlessStepResponse.Parse(raw));
+                        break;
+                    }
+                }
+            }
+        }
+        catch (Exception error)
+        {
+            // The script surface carries no secrets (no token, no
+            // credentials), so naming the failure is safe and debuggable.
+            if (!_disposed) SetStatus($"Import failed ({error.Message}) -- nothing was imported");
+        }
+        finally
+        {
+            _importRunning = false;
+            if (!_disposed) UpdateOfferBar();
+        }
+    }
 
     private async Task OpenSiteOfferAsync(CompanionTab tab)
     {

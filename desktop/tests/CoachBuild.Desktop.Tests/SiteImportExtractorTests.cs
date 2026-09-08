@@ -12,20 +12,39 @@ namespace CoachBuild.Desktop.Tests;
 public sealed class SiteImportExtractorTests
 {
     [Fact]
-    public void Both_templates_ship_with_the_icon_tables_injected()
+    public void The_ugg_template_ships_with_the_icon_tables_injected()
     {
-        // Controls: the templates and the tables they are injected from.
+        // Controls: the template and the tables it is injected from.
         Assert.Contains("__PERK_MAP_JSON__", SiteImportExtractors.UGgTemplate, StringComparison.Ordinal);
         Assert.DoesNotContain("__PERK_MAP_JSON__", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
         Assert.DoesNotContain("__SHARD_MAP_JSON__", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
-        Assert.DoesNotContain("__PERK_MAP_JSON__", SiteImportExtractors.CoachlessScript, StringComparison.Ordinal);
-        Assert.DoesNotContain("__SHARD_MAP_JSON__", SiteImportExtractors.CoachlessScript, StringComparison.Ordinal);
 
         // Spot entries, including the treacherous shard alias: the
         // SCALING-named icon is the flat-health shard (fixture-proved).
         Assert.Contains("\"electrocute\":8112", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
         Assert.Contains("\"adaptiveforce\":5008", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
         Assert.Contains("\"healthscaling\":5011", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_coachless_step_template_needs_no_icon_tables()
+    {
+        // The walk reads item ids numerically off /img/item/{id} and never
+        // resolves the clicked keystone to an id, so there is nothing to
+        // inject: the template carries the step token and every built step
+        // must carry no leftover token.
+        Assert.Contains(
+            "__COACHLESS_STEP_JSON__", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
+        foreach (var step in new[]
+            {
+                SiteImportSteps.Inspect(),
+                SiteImportSteps.Click("1st Item"),
+                SiteImportSteps.Read(),
+            })
+            Assert.DoesNotContain(
+                "__COACHLESS_STEP_JSON__",
+                SiteImportExtractors.CoachlessStepScript(step),
+                StringComparison.Ordinal);
     }
 
     [Fact]
@@ -39,10 +58,27 @@ public sealed class SiteImportExtractorTests
         // Escaped in the JS regex literal (\/runes\/(\d+)\.png): the style-id anchor.
         Assert.Contains("\\/runes\\/", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
 
-        Assert.Contains("data-row", SiteImportExtractors.CoachlessScript, StringComparison.Ordinal);
-        Assert.Contains("entry-name", SiteImportExtractors.CoachlessScript, StringComparison.Ordinal);
+        Assert.Contains("data-row", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
+        Assert.Contains("entry-name", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
         // Escaped in the JS regex literal (\/img\/item\/(\d+)\.): the item-id anchor.
-        Assert.Contains("\\/img\\/item\\/", SiteImportExtractors.CoachlessScript, StringComparison.Ordinal);
+        Assert.Contains("\\/img\\/item\\/", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
+        // The walk's two new anchors: the site's own selection marker and
+        // the top-row click that drives the conditioned recompute.
+        Assert.Contains("'active'", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
+        Assert.Contains("dispatchEvent", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
+        Assert.Contains("already-selected", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Only_the_coachless_walk_clicks_the_page()
+    {
+        // Control: both scripts under test are non-empty real scripts.
+        Assert.Contains("JSON.stringify", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
+        Assert.Contains("JSON.stringify", SiteImportExtractors.CoachlessInspectScript, StringComparison.Ordinal);
+        // The u.gg import is a read; the click is the Coachless import's
+        // approved scope and must never leak into the static extractor.
+        Assert.DoesNotContain("dispatchEvent", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
+        Assert.DoesNotContain(".click(", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -60,16 +96,28 @@ public sealed class SiteImportExtractorTests
     {
         // Control: the scripts under test are non-empty real scripts.
         Assert.Contains("JSON.stringify", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
-        Assert.Contains("JSON.stringify", SiteImportExtractors.CoachlessScript, StringComparison.Ordinal);
+        Assert.Contains("JSON.stringify", SiteImportExtractors.CoachlessInspectScript, StringComparison.Ordinal);
         Assert.DoesNotContain(forbidden, SiteImportExtractors.UGgScript, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(forbidden, SiteImportExtractors.CoachlessScript, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(forbidden, SiteImportExtractors.CoachlessInspectScript, StringComparison.OrdinalIgnoreCase);
+        // Every Coachless step — inspect, click, and final read alike —
+        // runs against the third-party page, so the ban covers all three.
+        // (The click step's dispatchEvent is the approved scope, not a
+        // navigation primitive, and is pinned by its own test above.)
+        Assert.DoesNotContain(
+            forbidden,
+            SiteImportExtractors.CoachlessStepScript(SiteImportSteps.Click("1st Item")),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            forbidden,
+            SiteImportExtractors.CoachlessStepScript(SiteImportSteps.Read()),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public void Scripts_resolve_per_site_tab_and_never_for_the_hosted_one()
     {
         Assert.Same(SiteImportExtractors.UGgScript, SiteImportExtractors.ScriptFor(CompanionTab.UGg));
-        Assert.Same(SiteImportExtractors.CoachlessScript, SiteImportExtractors.ScriptFor(CompanionTab.Coachless));
+        Assert.Same(SiteImportExtractors.CoachlessInspectScript, SiteImportExtractors.ScriptFor(CompanionTab.Coachless));
         Assert.Null(SiteImportExtractors.ScriptFor(CompanionTab.Companion));
     }
 

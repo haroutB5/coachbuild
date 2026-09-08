@@ -6,8 +6,12 @@ namespace CoachBuild.Desktop.Web;
 /// The per-site extractor scripts for the user-initiated build import.
 ///
 /// <para>Each script is a self-contained IIFE: no external requests, no
-/// navigation, read-only DOM access, one JSON string out. The shape it
-/// returns is exactly what <see cref="SiteImportPayload"/> parses —
+/// navigation, one JSON string out. The u.gg script is a read-only DOM read;
+/// the Coachless walk additionally dispatches a click per slot section —
+/// that click IS the import (it reproduces exactly what a user clicking the
+/// page's own top-WPA row does, driving the site's own conditioned
+/// recompute), it runs only inside the import click handler, and the shape
+/// each step returns is exactly what <see cref="SiteImportPayload"/> parses —
 /// <c>{ source, championSlug, role, runes, itemBlocks }</c> or
 /// <c>{ error }</c>. A failed read is a TYPED failure, never a silent empty
 /// payload: the extractor reports what it could not find and C# turns that
@@ -15,15 +19,18 @@ namespace CoachBuild.Desktop.Web;
 ///
 /// <para>Id resolution is data-driven, not hardcoded: the C# side injects the
 /// ddragon-derived <see cref="PerkIconMap"/> and <see cref="ShardIconMap"/>
-/// tables as JSON (<see cref="UGgScript"/>, <see cref="CoachlessScript"/>),
-/// and the scripts fold icon filenames the same way the maps do. The one
+/// tables as JSON (<see cref="UGgScript"/>); the u.gg script folds icon
+/// filenames the same way the maps do. The one
 /// exception is u.gg's rune-TREE ids, which the page renders numerically
-/// already (<c>/runes/8000.png</c>), so there is no name to map.</para>
+/// already (<c>/runes/8000.png</c>), so there is no name to map. The
+/// Coachless step script needs no icon tables: item ids read numerically
+/// off <c>/img/item/{id}.</c>, and the keystone it clicks for conditioning
+/// is never resolved to an id.</para>
 ///
 /// <para>DOM ANCHORS, derived from the real rendered fixtures captured
 /// 2026-09-08 (<c>_research/site-import/ugg-jhin-adc.html</c>,
 /// <c>coachless-jhin-adc.html</c> — read the per-site remarks on
-/// <see cref="UGgTemplate"/> and <see cref="CoachlessTemplate"/>). The full
+/// <see cref="UGgTemplate"/> and <see cref="CoachlessStepTemplate"/>). The full
 /// anchor-by-anchor account, with fragility notes, lives in the phase report;
 /// the short version: numeric ids out of CDN image URLs first
 /// (<c>perk-images/</c>, <c>/runes/{id}.png</c>, <c>/img/item/{id}.</c>),
@@ -254,81 +261,204 @@ public static class SiteImportExtractors
         """;
 
     /// <summary>
-    /// Coachless extractor, for the champion builds overview
+    /// Coachless step script, for the champion builds overview
     /// (<c>coachless.gg/builds/{slug}?role={role}</c>).
     ///
-    /// <para>That page is per-SLOT stat tables, not one recommended build:
-    /// <c>th.entry-name.title</c> headers (<c>Starter</c>, <c>1st Item</c>,
-    /// <c>2nd Item</c>, <c>3rd Item</c>, <c>4th+ Item</c>, <c>Boots</c> —
-    /// plus <c>Keystone</c> and <c>Spell</c>, which the import does not
-    /// cover) each head a table whose rows are options sorted by WPA
-    /// descending. The import takes the FIRST data row of each item-slot
-    /// table — the page's own top pick — reading the item id numerically off
-    /// the row's <c>clr-item-icon img</c> (<c>/img/item/{id}.webp</c>) and
-    /// skipping icons the page hid itself
-    /// (<c>onerror="this.style.display='none'"</c>). One single-item block
-    /// per slot, titled with the page's own header text: faithful, no
-    /// invention, no cross-slot Frankenstein beyond what the page ranks.</para>
+    /// <para>That page is per-SLOT stat tables, and the tables are
+    /// INTERACTIVE: selecting a row (the site marks it <c>active</c> on the
+    /// <c>tr.data-row</c> — see the embedded stylesheet rule
+    /// <c>.data-row.active</c> in the <c>coachless-jhin-adc.html</c> fixture)
+    /// recomputes every downstream slot's WPA conditioned on the picks so
+    /// far. Reading the unconditioned first rows (what the 1.2.0 extractor
+    /// did) yields a build no user ever sees — e.g. Phantom Dancer top in
+    /// 2nd, 3rd AND 4th+ at once. So this script never produces a build on
+    /// its own: it performs ONE step of the user-initiated selection walk,
+    /// driven by C# (<see cref="SiteImportSequencer"/>), which invokes it
+    /// repeatedly from the single import click handler.</para>
     ///
-    /// <para>RUNES ARE NOT ON THIS PAGE. The overview renders four keystone
-    /// options and zero minor runes or shards, so no complete rune page can
-    /// be read here. The script returns the items with <c>runes: null</c>
-    /// and C# reports precisely that ("the page yielded no rune build to
-    /// import") while writing nothing — a typed failure, not a guess. If
-    /// Coachless ever renders a full rune panel on a builds page, this is
-    /// the script to extend, with a fixture to prove it.</para>
+    /// <para>The step to perform arrives via the
+    /// <c>__COACHLESS_STEP_JSON__</c> token, replaced by C# with
+    /// <c>{"action":"inspect"}</c>, <c>{"action":"click","slot":title}</c>
+    /// or <c>{"action":"read"}</c> (see <c>SiteImportSteps</c>):</para>
+    ///
+    /// <para><c>inspect</c> lists the slot sections in DOM order (each
+    /// <c>table</c> headed by a <c>th.entry-name.title</c>) with whether its
+    /// top-WPA row (first <c>tr.data-row</c> — the site sorts by WPA) is
+    /// already <c>active</c>, whether that top row is <c>selectable</c> (a
+    /// slot whose top row lacks the class is READ-ONLY: the site grants
+    /// selections only to a capped depth and C# never clicks such a slot),
+    /// whether ANY row of the table is <c>active</c> (the settle wait
+    /// watches this for the clicked slot), plus a fingerprint hash of the
+    /// slot tables' contents that C# polls until stable. <c>click</c>
+    /// dispatches a bubbling click on the named slot's top row unless it is
+    /// already <c>active</c> (idempotent re-click guard, reported as
+    /// <c>already-selected</c>) or no longer <c>selectable</c> (reported as
+    /// <c>read-only</c>, no click dispatched). <c>read</c> returns the final
+    /// payload — the SELECTED (<c>tr.data-row.active</c>) row of each item
+    /// slot (Starter, 1st, 2nd, 3rd, 4th+, Boots) where one exists, else the
+    /// TOP row of the by-now conditioned table (read-only slots collapse to
+    /// conditioned recommendations that are never granted <c>selectable</c>,
+    /// and the top row IS the recommendation) — one single-item block per
+    /// slot titled with the page's own header text, each carrying
+    /// <c>selected</c> provenance — or a typed error naming the slot with
+    /// no rows at all.</para>
+    ///
+    /// <para>RUNES ARE NOT ON THIS PAGE. Keystone and Spell slots are
+    /// clicked for conditioning but never imported: the overview renders
+    /// keystone options and zero minor runes or shards, so no complete rune
+    /// page can be read here. The final payload carries <c>runes: null</c>
+    /// and C# applies the item set on its own, reporting the missing half
+    /// in the status line ("no rune page on this site") — an honest
+    /// items-only import, not a guess.</para>
+    ///
+    /// <para>Item ids read numerically off the row's <c>clr-item-icon
+    /// img</c> (<c>/img/item/{id}.webp</c>), skipping icons the page hid
+    /// itself (<c>onerror="this.style.display='none'"</c>).</para>
     /// </summary>
-    public const string CoachlessTemplate = """
+    public const string CoachlessStepTemplate = """
         (function () {
           function fail(message) { return JSON.stringify({ error: message }); }
-          var href = String((typeof location !== 'undefined' && location.href) || '');
-          var page = href.match(/coachless\.gg\/builds\/([a-z0-9]+)/i);
-          if (!page) return fail('not a champion builds page');
-          var slug = page[1].toLowerCase();
-          var role = '';
-          var qm = href.match(/[?&]role=([a-z]+)/i);
-          if (qm) role = qm[1].toLowerCase();
-          var SLOT_ORDER = ['Starter', '1st Item', '2nd Item', '3rd Item', '4th+ Item', 'Boots'];
-          function isSlotTitle(title) {
-            for (var i = 0; i < SLOT_ORDER.length; i++) {
-              if (SLOT_ORDER[i] === title) return true;
+          var STEP = __COACHLESS_STEP_JSON__;
+          var action = STEP && STEP.action;
+          function slotTables() {
+            var out = [];
+            var tables = document.getElementsByTagName('table');
+            for (var t = 0; t < tables.length; t++) {
+              var title = '';
+              var ths = tables[t].getElementsByTagName('th');
+              for (var h = 0; h < ths.length; h++) {
+                var hc = String(ths[h].className || '');
+                if (hc.indexOf('entry-name') >= 0 && hc.indexOf('title') >= 0) {
+                  title = (ths[h].textContent || '').trim();
+                  break;
+                }
+              }
+              if (title) out.push({ title: title, table: tables[t] });
+            }
+            return out;
+          }
+          function dataRows(table) {
+            var rows = [];
+            var all = table.getElementsByTagName('tr');
+            for (var i = 0; i < all.length; i++) {
+              if (String(all[i].className || '').indexOf('data-row') >= 0) rows.push(all[i]);
+            }
+            return rows;
+          }
+          function isActive(row) {
+            return hasClass(row, 'active');
+          }
+          function isSelectable(row) {
+            return hasClass(row, 'selectable');
+          }
+          function hasClass(row, name) {
+            var cls = row.classList;
+            if (cls && cls.contains && cls.contains(name)) return true;
+            return (' ' + String(row.className || '') + ' ').indexOf(' ' + name + ' ') >= 0;
+          }
+          function hasActiveRow(rows) {
+            for (var a = 0; a < rows.length; a++) {
+              if (isActive(rows[a])) return true;
             }
             return false;
           }
-          var bySlot = {};
-          var tables = document.getElementsByTagName('table');
-          for (var t = 0; t < tables.length; t++) {
-            var title = '';
-            var ths = tables[t].getElementsByTagName('th');
-            for (var h = 0; h < ths.length; h++) {
-              var hc = String(ths[h].className || '');
-              if (hc.indexOf('entry-name') >= 0 && hc.indexOf('title') >= 0) {
-                title = (ths[h].textContent || '').trim();
-                break;
+          function itemIds(row) {
+            var picked = [];
+            var imgs = row.getElementsByTagName('img');
+            for (var m = 0; m < imgs.length; m++) {
+              if (imgs[m].style && imgs[m].style.display === 'none') continue;
+              var im = String(imgs[m].getAttribute('src') || '').match(/\/img\/item\/(\d+)\./i);
+              if (im) picked.push(parseInt(im[1], 10));
+            }
+            return picked;
+          }
+          function fingerprint(slots) {
+            var parts = [];
+            for (var s = 0; s < slots.length; s++) {
+              parts.push(slots[s].title);
+              var rows = dataRows(slots[s].table);
+              parts.push(String(rows.length));
+              for (var r = 0; r < rows.length; r++) {
+                parts.push(String(rows[r].className || ''));
+                parts.push((rows[r].textContent || '').replace(/\s+/g, ' ').trim());
+                parts.push(itemIds(rows[r]).join(','));
               }
             }
-            if (!title || !isSlotTitle(title) || bySlot[title]) continue;
-            var rows = tables[t].getElementsByTagName('tr');
-            for (var r = 0; r < rows.length; r++) {
-              var rc = String(rows[r].className || '');
-              if (rc.indexOf('data-row') < 0) continue;
-              var picked = [];
-              var imgs = rows[r].getElementsByTagName('img');
-              for (var m = 0; m < imgs.length; m++) {
-                if (imgs[m].style && imgs[m].style.display === 'none') continue;
-                var im = String(imgs[m].getAttribute('src') || '').match(/\/img\/item\/(\d+)\./i);
-                if (im) picked.push(parseInt(im[1], 10));
-              }
-              if (picked.length) bySlot[title] = picked;
-              break;
+            var text = parts.join('|');
+            var hash = 5381;
+            for (var i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
+            return ('0000000' + hash.toString(16)).slice(-8);
+          }
+          if (action === 'inspect') {
+            var found = slotTables();
+            var states = [];
+            for (var s = 0; s < found.length; s++) {
+              var listed = dataRows(found[s].table);
+              states.push({
+                title: found[s].title,
+                topSelected: listed.length > 0 && isActive(listed[0]),
+                topSelectable: listed.length > 0 && isSelectable(listed[0]),
+                hasActive: hasActiveRow(listed),
+                rows: listed.length
+              });
             }
+            return JSON.stringify({ stage: 'state', settled: true, hash: fingerprint(found), slots: states });
           }
-          var blocks = [];
-          for (var s = 0; s < SLOT_ORDER.length; s++) {
-            if (bySlot[SLOT_ORDER[s]]) blocks.push({ title: SLOT_ORDER[s], itemIds: bySlot[SLOT_ORDER[s]] });
+          if (action === 'click') {
+            var want = STEP && STEP.slot;
+            var tables = slotTables();
+            var target = null;
+            for (var k = 0; k < tables.length; k++) {
+              if (tables[k].title === want) { target = tables[k]; break; }
+            }
+            if (!target) return fail('slot "' + String(want) + '" not found');
+            var rows = dataRows(target.table);
+            if (!rows.length) return fail('slot "' + String(want) + '" has no rows');
+            if (isActive(rows[0]))
+              return JSON.stringify({ stage: 'already-selected', clickedSlot: want, settled: true });
+            if (!isSelectable(rows[0]))
+              return JSON.stringify({ stage: 'read-only', clickedSlot: want, settled: true });
+            if (typeof MouseEvent === 'function') {
+              rows[0].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            } else if (rows[0].click) {
+              rows[0].click();
+            }
+            return JSON.stringify({ stage: 'clicked', clickedSlot: want, settled: false });
           }
-          if (!blocks.length) return fail('no build on page');
-          return JSON.stringify({ source: 'coachless', championSlug: slug, role: role, runes: null, itemBlocks: blocks });
+          if (action === 'read') {
+            var href = String((typeof location !== 'undefined' && location.href) || '');
+            var page = href.match(/coachless\.gg\/builds\/([a-z0-9]+)/i);
+            if (!page) return fail('not a champion builds page');
+            var slug = page[1].toLowerCase();
+            var role = '';
+            var qm = href.match(/[?&]role=([a-z]+)/i);
+            if (qm) role = qm[1].toLowerCase();
+            var SLOT_ORDER = ['Starter', '1st Item', '2nd Item', '3rd Item', '4th+ Item', 'Boots'];
+            var looked = slotTables();
+            var blocks = [];
+            for (var b = 0; b < SLOT_ORDER.length; b++) {
+              var entry = null;
+              for (var e = 0; e < looked.length; e++) {
+                if (looked[e].title === SLOT_ORDER[b]) { entry = looked[e]; break; }
+              }
+              if (!entry) return fail('slot "' + SLOT_ORDER[b] + '" not found');
+              var sel = null;
+              var cand = dataRows(entry.table);
+              if (!cand.length) return fail('slot "' + SLOT_ORDER[b] + '" has no rows');
+              for (var q = 0; q < cand.length; q++) {
+                if (isActive(cand[q])) { sel = cand[q]; break; }
+              }
+              var row = sel || cand[0];
+              var ids = itemIds(row);
+              if (!ids.length) return fail('slot "' + SLOT_ORDER[b] + '" yielded no items');
+              blocks.push({ title: SLOT_ORDER[b], itemIds: ids, selected: !!sel });
+            }
+            return JSON.stringify({
+              stage: 'done', settled: true,
+              payload: { source: 'coachless', championSlug: slug, role: role, runes: null, itemBlocks: blocks }
+            });
+          }
+          return fail('unknown import step');
         })();
         """;
 
@@ -336,21 +466,40 @@ public static class SiteImportExtractors
         .Replace("__PERK_MAP_JSON__", PerkIconMap.ToJson(), StringComparison.Ordinal)
         .Replace("__SHARD_MAP_JSON__", ShardIconMap.ToJson(), StringComparison.Ordinal);
 
-    private static readonly string BuiltCoachlessScript = CoachlessTemplate
-        .Replace("__PERK_MAP_JSON__", PerkIconMap.ToJson(), StringComparison.Ordinal)
-        .Replace("__SHARD_MAP_JSON__", ShardIconMap.ToJson(), StringComparison.Ordinal);
+    private static readonly string BuiltCoachlessInspectScript =
+        CoachlessStepTemplate.Replace(
+            "__COACHLESS_STEP_JSON__",
+            """{"action":"inspect"}""",
+            StringComparison.Ordinal);
 
     /// <summary>The runnable u.gg extractor: template with both icon tables injected.</summary>
     public static string UGgScript => BuiltUGgScript;
 
-    /// <summary>The runnable Coachless extractor: template with both icon tables injected.</summary>
-    public static string CoachlessScript => BuiltCoachlessScript;
+    /// <summary>
+    /// A runnable Coachless step script for one sequencer step: the
+    /// <paramref name="stepJson"/> is the <c>__COACHLESS_STEP_JSON__</c>
+    /// action object (see <c>SiteImportSteps</c>), embedded verbatim.
+    /// </summary>
+    public static string CoachlessStepScript(string stepJson)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stepJson);
+        return CoachlessStepTemplate.Replace(
+            "__COACHLESS_STEP_JSON__", stepJson, StringComparison.Ordinal);
+    }
 
-    /// <summary>The extractor for a site tab, or null for the hosted tab (which is never scraped).</summary>
+    /// <summary>The Coachless walk's first step: list the slot sections in DOM order.</summary>
+    public static string CoachlessInspectScript => BuiltCoachlessInspectScript;
+
+    /// <summary>
+    /// The extractor for a site tab, or null for the hosted tab (which is
+    /// never scraped). For Coachless this is the walk's opening inspect
+    /// step; the sequencer drives the clicks and the final read from the
+    /// same import click handler.
+    /// </summary>
     public static string? ScriptFor(CompanionTab tab) => tab switch
     {
         CompanionTab.UGg => UGgScript,
-        CompanionTab.Coachless => CoachlessScript,
+        CompanionTab.Coachless => CoachlessInspectScript,
         _ => null,
     };
 

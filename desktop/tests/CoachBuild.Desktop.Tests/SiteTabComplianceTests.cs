@@ -30,33 +30,44 @@ public sealed class SiteTabComplianceTests
     }
 
     /// <summary>
-    /// The window runs a script in exactly TWO places: the hosted page's own
-    /// version meta read, and the user-initiated site import. A third
-    /// <c>ExecuteScriptAsync</c> is how a background scrape of a third-party
-    /// site would arrive, so the COUNT is pinned rather than the wording —
-    /// and each call site is pinned to its enclosing method below, so a move
-    /// out of the click handler fails loudly instead of drifting.
+    /// The window runs a script in exactly TWO call sites: the hosted page's
+    /// own version meta read, and the user-initiated site import. The import
+    /// site may LOOP — Coachless select-and-recompute re-invokes small
+    /// per-step scripts (inspect, click-next-slot, final read) until the
+    /// walk converges — so what is pinned is the SITES, not the invocation
+    /// count: every <c>ExecuteScriptAsync</c> in the file must sit inside
+    /// the version reader, the import click handler, or the import
+    /// handler's own single-caller Coachless helper (pinned to that one
+    /// caller by the test below). A script call anywhere else — a
+    /// navigation hook, a poll tick, a new helper nobody owns — is how a
+    /// background scrape of a third-party site would arrive.
     /// </summary>
     [Fact]
-    public void The_window_scripts_exactly_two_places_version_read_and_import_click()
+    public void The_window_scripts_only_version_read_and_import_click_sites()
     {
         var source = ReadSource(WindowSource);
 
         // Controls: both calls this app is allowed to make must be present,
-        // or the "exactly two" assertion below is measuring nothing.
+        // or the site assertions below are measuring nothing.
         Assert.Contains("coachbuild-version", source, StringComparison.Ordinal);
         Assert.Contains("RunSiteImportAsync", source, StringComparison.Ordinal);
         // Invocations only. The name also appears in prose that explains why
-        // there are exactly two of them, and counting comments would make
+        // there are exactly two call sites, and counting comments would make
         // this assertion fail for a documentation edit.
         var invocations = Regex.Matches(source, @"\.\s*ExecuteScriptAsync\s*\(");
-        Assert.Equal(2, invocations.Count);
-        Assert.Equal(
-            "QueryLoadedWebVersionAsync",
-            EnclosingMethod(source, invocations[0].Index));
-        Assert.Equal(
-            "RunSiteImportAsync",
-            EnclosingMethod(source, invocations[1].Index));
+        Assert.True(invocations.Count >= 2, "control: the version read and the import must exist");
+        var allowedSites = new HashSet<string>(
+            ["QueryLoadedWebVersionAsync", "RunSiteImportAsync", "RunCoachlessSelectAndRecomputeImportAsync"],
+            StringComparer.Ordinal);
+        foreach (Match invocation in invocations)
+            Assert.Contains(EnclosingMethod(source, invocation.Index), allowedSites);
+        // Control the other way: each site must still hold at least one
+        // call, so a deleted import does not pass as "no third call".
+        var sites = invocations
+            .Select(invocation => EnclosingMethod(source, invocation.Index))
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("QueryLoadedWebVersionAsync", sites);
+        Assert.Contains("RunSiteImportAsync", sites);
     }
 
     /// <summary>
@@ -114,11 +125,55 @@ public sealed class SiteTabComplianceTests
     }
 
     /// <summary>
+    /// The Coachless step loop lives inside the import handler only: the
+    /// helper that re-invokes the per-step scripts has exactly one caller
+    /// (the click handler) plus its own definition — a second caller, a
+    /// timer tick, or a navigation hook reaching it fails the count — and
+    /// that single call sits inside the click handler's body, not merely
+    /// somewhere in a 1,000-line file. This is the control group for the
+    /// loop the sites test above permits: the import may re-invoke, but
+    /// only from the click.
+    /// </summary>
+    [Fact]
+    public void The_coachless_step_loop_is_reachable_only_from_the_click_handler()
+    {
+        var source = ReadSource(WindowSource);
+
+        // Controls: the helper and its single caller must exist, or the
+        // count below is measuring nothing.
+        Assert.Contains(
+            "private async Task RunCoachlessSelectAndRecomputeImportAsync",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "private async Task RunSiteImportAsync",
+            source,
+            StringComparison.Ordinal);
+        // Definition + exactly one call. The name appears nowhere else in
+        // the window — not in prose, not in a second call site — so any new
+        // reachability fails this count.
+        var uses = Regex.Matches(source, @"RunCoachlessSelectAndRecomputeImportAsync");
+        Assert.Equal(2, uses.Count);
+
+        var start = source.IndexOf(
+            "private async Task RunSiteImportAsync",
+            StringComparison.Ordinal);
+        var end = source.IndexOf("private void OnZoomOutClick", start, StringComparison.Ordinal);
+        Assert.True(end > start, "control: the member after the handler must exist");
+        Assert.Contains(
+            "RunCoachlessSelectAndRecomputeImportAsync(state)",
+            source[start..end],
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// No timer, no looper, no render hook in the window may trigger a
     /// scrape: the import runs once per user click or not at all. The window
     /// currently owns no timer of any kind, so the absence is pinned
-    /// outright; the sibling count test is what ties "no trigger" to "no
-    /// third script call".
+    /// outright; the sibling sites test is what ties "no trigger" to "no
+    /// third-party script call". (The Coachless settle pause is a plain
+    /// awaited delay inside the click handler, not a timer — no looper may
+    /// REACH the import, but the import itself may await the page.)
     /// </summary>
     [Fact]
     public void No_timer_or_background_trigger_exists_for_a_scrape()

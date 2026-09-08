@@ -111,6 +111,7 @@ public sealed class SiteImportTests
     [InlineData("{\"error\":\"not a build page\"}", "site page not recognized")]
     [InlineData("{\"error\":\"no build on this page\"}", "no build on page")]
     [InlineData("{\"source\":\"u.gg\",\"championSlug\":\"ahri\",\"itemBlocks\":[]}", "no build on page")]
+    [InlineData("{\"source\":\"coachless\",\"championSlug\":\"jhin\",\"runes\":null,\"itemBlocks\":[]}", "no build on page")]
     public void Typed_failures_never_parse_silently(string? raw, string expected)
     {
         Assert.False(SiteImportPayload.TryParse(raw, out var payload, out var failure));
@@ -387,6 +388,91 @@ public sealed class SiteImportTests
         var failure = Assert.IsType<SiteImportFailure>(result);
         Assert.Contains("runes applied", failure.Message, StringComparison.Ordinal);
         Assert.Contains(title, failure.Message, StringComparison.Ordinal);
+    }
+
+    // ── Items-only imports (runes: null, the Coachless overview shape) ───────
+
+    private const string JhinCoachlessItemsOnlyJson = """
+        {"source":"coachless","championSlug":"jhin","role":"adc","runes":null,
+         "itemBlocks":[
+          {"title":"Starter","itemIds":[1120],"selected":true},
+          {"title":"1st Item","itemIds":[6697],"selected":true},
+          {"title":"2nd Item","itemIds":[3046],"selected":true},
+          {"title":"3rd Item","itemIds":[3031],"selected":false},
+          {"title":"4th+ Item","itemIds":[3033],"selected":false},
+          {"title":"Boots","itemIds":[3006],"selected":false}]}
+        """;
+
+    [Fact]
+    public async Task Runes_null_with_items_writes_only_the_item_set()
+    {
+        // End to end through the fake LCU services: the extractor's own
+        // selected/top-row provenance flags ride along untouched, the rune
+        // service is NEVER called, and the item set write happens.
+        Assert.True(
+            SiteImportPayload.TryParse(JhinCoachlessItemsOnlyJson, out var payload, out var failure),
+            failure);
+        Assert.NotNull(payload);
+        Assert.Null(payload.Runes);
+        Assert.Equal(6, payload.ItemBlocks.Count);
+
+        var api = new MockLcuApi();
+        EnqueueItemWrite(api);
+        var result = await SiteImportApplier.ApplyAsync(
+            payload, "Jhin", 202, new RuneApplyService(api), new ItemSetApplyService(api));
+
+        var success = Assert.IsType<SiteImportSuccess>(result);
+        Assert.Equal("Imported 6-item set (no rune page on this site) from Coachless", success.Message);
+        Assert.DoesNotContain(api.Calls,
+            call => call.Path.StartsWith("/lol-perks/", StringComparison.Ordinal));
+        var itemPut = api.Calls.Single(call =>
+            call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal));
+        var sets = itemPut.Body!.Value.GetProperty("itemSets");
+        Assert.Equal(1, sets.GetArrayLength());
+        var set = sets[0];
+        Assert.Equal("CoachBuild import: Jhin ADC (Coachless)", set.GetProperty("title").GetString());
+        Assert.Equal(202, set.GetProperty("associatedChampions")[0].GetInt32());
+        Assert.Equal(6, set.GetProperty("blocks").GetArrayLength());
+        Assert.Equal("1120", set.GetProperty("blocks")[0].GetProperty("items")[0].GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task An_item_write_refusal_on_the_items_only_path_imports_nothing()
+    {
+        // Unlike the both-halves path there is no landed half to report:
+        // the runes were never touched, so the failure says nothing was
+        // imported.
+        Assert.True(
+            SiteImportPayload.TryParse(JhinCoachlessItemsOnlyJson, out var payload, out _));
+        var api = new MockLcuApi();
+        api.Enqueue(HttpMethod.Get, "/lol-summoner/v1/current-summoner", Ok("{\"summonerId\":77}"));
+        api.Enqueue(HttpMethod.Get, "/lol-item-sets/v1/item-sets/77/sets", Ok("{\"accountId\":77,\"itemSets\":[]}"));
+        api.Enqueue(HttpMethod.Put, "/lol-item-sets/v1/item-sets/77/sets", new LcuResponse(false, 413));
+
+        var result = await SiteImportApplier.ApplyAsync(
+            payload!, "Jhin", 202, new RuneApplyService(api), new ItemSetApplyService(api));
+
+        var failure = Assert.IsType<SiteImportFailure>(result);
+        Assert.Contains("nothing was imported", failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(api.Calls,
+            call => call.Path.StartsWith("/lol-perks/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Items_only_with_no_blocks_stays_a_typed_no_build_failure()
+    {
+        Assert.True(
+            SiteImportPayload.TryParse(JhinCoachlessItemsOnlyJson, out var payload, out _));
+        var empty = payload! with { ItemBlocks = Array.Empty<SiteImportItemBlock>() };
+
+        var api = new MockLcuApi();
+        var result = await SiteImportApplier.ApplyAsync(
+            empty, "Jhin", 202, new RuneApplyService(api), new ItemSetApplyService(api));
+
+        var failure = Assert.IsType<SiteImportFailure>(result);
+        Assert.Equal("bad-items", failure.Reason);
+        Assert.Contains("nothing was imported", failure.Message, StringComparison.Ordinal);
+        Assert.Empty(api.Calls);
     }
 
     // ── ShardIconMap (fixture-verified u.gg StatMods names) ──────────────────

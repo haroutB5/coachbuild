@@ -1,5 +1,43 @@
 # Changelog
 
+## Desktop 1.2.2 — Coachless import walks the page's own selections (2026-09-08)
+
+Importing from Coachless read the unconditioned default tables, so every item
+slot reported the page's opening top pick (Phantom Dancer top in 2nd, 3rd AND
+4th+ at once for Jhin ADC) — a build no user ever sees. The site's slot
+tables are interactive: selecting a row recomputes every downstream slot
+conditioned on the picks so far. The import now reproduces what a user gets
+by clicking the top-WPA row of each slot section in on-page order:
+
+- **Select-and-recompute, gated on `selectable`.** One click walks the slot
+  sections in DOM order (order taken from the page, never hardcoded),
+  clicking each slot's top row and waiting for its selection before the
+  next — then reads each item slot into the item-block payload.
+  Keystone/Spell are clicked for conditioning only and never imported.
+  Live-verified against the real site: selection depth is CAPPED (for Jhin
+  ADC only Keystone, Starter, 1st and 2nd Items grant selections; downstream
+  tables collapse to conditioned recommendations that are never selectable).
+  A slot whose top row lacks the `selectable` class is read-only — never
+  clicked, never waited on, skipped outright — and row references are never
+  cached across steps (every step re-queries; the tables re-render on each
+  selection).
+- **Degrade, don't fail.** A clicked slot that never shows its selection
+  within the ~5s settle wait is noted into the payload's `meta.notes` and
+  the walk moves on; the final read takes the SELECTED row where one exists,
+  else the TOP row of the conditioned table (Jhin ADC: Starter/1st/2nd
+  selected, Boots/3rd/4th+ top conditioned rows — distinct, never one pick
+  three times). The total step cap stays as the backstop.
+- **Items-only apply for runes-null payloads.** The overview renders no rune
+  page, so its payload carries `runes: null` — that now writes the ITEM SET
+  alone, skips the rune service entirely, and succeeds with
+  `Imported N-item set (no rune page on this site) from Coachless`. An empty
+  item build stays a typed no-build failure. u.gg (both halves written)
+  unchanged.
+- **Scope is structural, not promised.** The per-step scripts run only from
+  the import click handler — `SiteTabComplianceTests` pins the call SITES
+  (the loop lives in the handler's own single-caller helper) rather than
+  the invocation count; no timer or event may scrape.
+
 ## Desktop 1.2.1 — update checks at idle moments + a staged-update hint (2026-09-08)
 
 The updater still checks every 2 hours, but no longer waits for the tick when

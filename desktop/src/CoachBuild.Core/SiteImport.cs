@@ -578,6 +578,12 @@ public sealed record SiteImportFailure(string Reason, string Message) : SiteImpo
 /// behind a VALIDATION failure (validation runs fully before the first LCU
 /// call — a test pins zero LCU calls on bad data). An LCU write that fails
 /// after validation reports exactly which half landed.
+///
+/// <para>A payload with <c>runes: null</c> but a non-empty item build (the
+/// Coachless overview shape — that page renders no rune page at all) writes
+/// the ITEM SET ONLY, skips the rune service entirely, and succeeds with an
+/// "(no rune page on this site)" status. An empty item build stays a typed
+/// no-build failure: items-only never invents a build.</para>
 /// </summary>
 public static class SiteImportApplier
 {
@@ -597,12 +603,16 @@ public static class SiteImportApplier
                 "unknown-champion",
                 $"could not match \"{payload.ChampionSlug}\" to a champion -- nothing was imported");
 
+        var title = SiteImportValidator.PageTitle(championName, payload.Role, payload.Source);
+        if (payload.Runes is null)
+            return await ApplyItemsOnlyAsync(
+                payload, championId, title, items, cancellationToken).ConfigureAwait(false);
+
         if (SiteImportValidator.ValidateRunes(payload.Runes) is { } runeError)
             return new SiteImportFailure("bad-runes", $"{runeError} -- nothing was imported");
         if (SiteImportValidator.ValidateItems(payload.ItemBlocks) is { } itemError)
             return new SiteImportFailure("bad-items", $"{itemError} -- nothing was imported");
 
-        var title = SiteImportValidator.PageTitle(championName, payload.Role, payload.Source);
         var runeRequest = SiteImportValidator.BuildRuneRequest(title, payload.Runes);
         if (!ApplyPayloadValidation.TryValidateRunes(runeRequest, out var runeGate))
             return new SiteImportFailure(runeGate.Reason, $"{runeGate.Hint} -- nothing was imported");
@@ -627,5 +637,37 @@ public static class SiteImportApplier
         var roleLabel = SiteImportValidator.RoleLabel(payload.Role);
         return new SiteImportSuccess(
             $"Imported runes + {totalItems}-item set for {championName} ({roleLabel}) from {SiteImportValidator.Label(payload.Source)}");
+    }
+
+    /// <summary>
+    /// The runes-null path: validate and write the item set alone. The rune
+    /// service is never touched (a test pins zero rune calls), so a page
+    /// with no rune build cannot disturb the user's pages. An item write
+    /// that fails here imported NOTHING (unlike the both-halves path, where
+    /// the runes half may already have landed) and says exactly so.
+    /// </summary>
+    private static async Task<SiteImportResult> ApplyItemsOnlyAsync(
+        SiteImportPayload payload,
+        int championId,
+        string title,
+        ItemSetApplyService items,
+        CancellationToken cancellationToken)
+    {
+        if (SiteImportValidator.ValidateItems(payload.ItemBlocks) is { } itemError)
+            return new SiteImportFailure("bad-items", $"{itemError} -- nothing was imported");
+        var itemRequest = SiteImportValidator.BuildItemSetRequest(
+            championId, title, payload.ChampionSlug, payload.Role, payload.ItemBlocks);
+        if (!ApplyPayloadValidation.TryValidateItemSets(itemRequest, out var itemGate))
+            return new SiteImportFailure(itemGate.Reason, $"{itemGate.Hint} -- nothing was imported");
+
+        var itemResult = await items.ApplyAsync(itemRequest, cancellationToken).ConfigureAwait(false);
+        if (itemResult is ApplyItemSetsFailure itemFailure)
+            return new SiteImportFailure(
+                itemFailure.Reason,
+                $"item set rejected ({itemFailure.Hint ?? itemFailure.Reason}) -- nothing was imported");
+
+        var totalItems = payload.ItemBlocks.Sum(block => block.ItemIds.Count);
+        return new SiteImportSuccess(
+            $"Imported {totalItems}-item set (no rune page on this site) from {SiteImportValidator.Label(payload.Source)}");
     }
 }

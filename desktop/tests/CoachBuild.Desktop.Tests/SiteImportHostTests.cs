@@ -144,20 +144,24 @@ public sealed class SiteImportHostTests
     }
 
     [Fact]
-    public async Task Items_without_runes_report_the_missing_half_and_write_nothing()
+    public async Task Items_without_runes_write_the_item_set_only()
     {
         // The Coachless overview shape: a real item build, no rune page.
+        // Items-only is a success now: the item set is written, the rune
+        // service is never touched, and the status names the missing half.
         const string itemsOnly = """
             {"source":"coachless","championSlug":"jhin","role":"adc","runes":null,
              "itemBlocks":[{"title":"Starter","itemIds":[1120]}]}
             """;
         var api = new StubLcuApi();
+        EnqueueItemWrite(api);
         var result = await ConnectedHost(api).ImportBuildAsync(itemsOnly);
 
-        var failure = Assert.IsType<SiteImportFailure>(result);
-        Assert.Contains("no rune build", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("nothing was imported", failure.Message, StringComparison.Ordinal);
-        Assert.Empty(api.Calls);
+        var success = Assert.IsType<SiteImportSuccess>(result);
+        Assert.Equal("Imported 1-item set (no rune page on this site) from Coachless", success.Message);
+        Assert.Contains(api.Calls, call => call.Path.Contains("item-sets", StringComparison.Ordinal));
+        Assert.DoesNotContain(api.Calls,
+            call => call.Path.StartsWith("/lol-perks/", StringComparison.Ordinal));
     }
 
     private static LcuResponse Ok(string raw)
