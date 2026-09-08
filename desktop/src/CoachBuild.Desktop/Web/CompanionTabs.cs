@@ -124,40 +124,83 @@ public static class CompanionTabs
 public static class OpGgProfileLink
 {
     /// <summary>
+    /// Riot platform id to op.gg route token. ONE table, so
+    /// <see cref="RegionForPlatform"/> and <see cref="KnownRegions"/> can never
+    /// disagree: the allowlist the region-locale path validates against is
+    /// literally this table's value column, not a second hand-written copy of
+    /// it that would rot the first time a platform is added.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> RegionsByPlatform =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["BR1"] = "br",
+            ["EUN1"] = "eune",
+            ["EUW1"] = "euw",
+            ["JP1"] = "jp",
+            ["KR"] = "kr",
+            ["LA1"] = "lan",
+            ["LA2"] = "las",
+            ["ME1"] = "me",
+            ["NA1"] = "na",
+            ["OC1"] = "oce",
+            ["PBE1"] = "pbe",
+            ["PH2"] = "ph",
+            ["RU"] = "ru",
+            ["SG2"] = "sg",
+            ["TH2"] = "th",
+            ["TR1"] = "tr",
+            ["TW2"] = "tw",
+            ["VN2"] = "vn",
+        };
+
+    /// <summary>
     /// Maps Riot's platform id to op.gg's route token. Unknown platforms are
     /// refused rather than guessed, because a valid Riot ID can exist on more
     /// than one platform and the wrong route silently opens the wrong player.
     /// </summary>
-    public static string? RegionForPlatform(string? platformId) =>
-        platformId?.Trim().ToUpperInvariant() switch
-        {
-            "BR1" => "br",
-            "EUN1" => "eune",
-            "EUW1" => "euw",
-            "JP1" => "jp",
-            "KR" => "kr",
-            "LA1" => "lan",
-            "LA2" => "las",
-            "ME1" => "me",
-            "NA1" => "na",
-            "OC1" => "oce",
-            "PBE1" => "pbe",
-            "PH2" => "ph",
-            "RU" => "ru",
-            "SG2" => "sg",
-            "TH2" => "th",
-            "TR1" => "tr",
-            "TW2" => "tw",
-            "VN2" => "vn",
-            _ => null,
-        };
+    public static string? RegionForPlatform(string? platformId)
+    {
+        var key = platformId?.Trim();
+        return string.IsNullOrEmpty(key) ? null
+            : RegionsByPlatform.TryGetValue(key, out var region) ? region
+            : null;
+    }
 
-    public static Uri? Build(string? gameName, string? tagLine, string? platformId)
+    /// <summary>Every op.gg route token this app will ever navigate to.</summary>
+    public static IReadOnlyCollection<string> KnownRegions { get; } =
+        RegionsByPlatform.Values.Distinct(StringComparer.Ordinal).ToArray();
+
+    /// <summary>
+    /// Validates the client's own <c>webRegion</c> against the SAME token set
+    /// the platform-id map produces.
+    ///
+    /// <para>The Riot client publishes this on <c>/riotclient/region-locale</c>
+    /// as <c>{"region":"EUW","webRegion":"euw",…}</c>, and <c>webRegion</c> IS
+    /// op.gg's route token — no mapping needed. It is still validated rather
+    /// than pasted into a URL: an unrecognized token would build a route to a
+    /// page that either 404s or, worse, resolves to a different player, and the
+    /// resolver's whole contract is that no result beats a wrong one.</para>
+    /// </summary>
+    public static string? RegionForWebRegion(string? webRegion)
+    {
+        var token = webRegion?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(token)) return null;
+        foreach (var known in KnownRegions)
+        {
+            if (string.Equals(known, token, StringComparison.Ordinal)) return known;
+        }
+        return null;
+    }
+
+    public static Uri? Build(string? gameName, string? tagLine, string? platformId) =>
+        BuildForRegion(gameName, tagLine, RegionForPlatform(platformId));
+
+    /// <summary>Builds the profile URL from an ALREADY-VALIDATED route token.</summary>
+    public static Uri? BuildForRegion(string? gameName, string? tagLine, string? region)
     {
         var name = gameName?.Trim();
         var tag = tagLine?.Trim();
-        var region = RegionForPlatform(platformId);
-        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(tag) || region is null)
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(tag) || string.IsNullOrEmpty(region))
             return null;
 
         return new Uri(
@@ -182,6 +225,28 @@ public static class OpGgProfileLink
         return null;
     }
 
+    /// <summary>
+    /// Reads <c>webRegion</c> off <c>/riotclient/region-locale</c>'s body
+    /// (<c>{"locale":"en_GB","region":"EUW","webLanguage":"en","webRegion":"euw"}</c>,
+    /// captured from client 26.17 on 2026-09-08).
+    ///
+    /// <para>Only <c>webRegion</c> is read. The sibling <c>region</c> field
+    /// carries "EUW" — a THIRD spelling that is neither the platform id
+    /// ("EUW1") nor always the route token, so folding it in would be a guess
+    /// dressed as a fallback.</para>
+    /// </summary>
+    internal static string? ReadWebRegion(System.Text.Json.JsonElement value)
+    {
+        if (value.ValueKind == System.Text.Json.JsonValueKind.String)
+            return NonBlank(value.GetString());
+        if (value.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return null;
+        if (value.TryGetProperty("webRegion", out var web)
+            && web.ValueKind == System.Text.Json.JsonValueKind.String)
+            return NonBlank(web.GetString());
+        return null;
+    }
+
     private static string? NonBlank(string? value)
     {
         var trimmed = value?.Trim();
@@ -196,6 +261,25 @@ public static class OpGgProfileLink
 public sealed class OpGgProfileResolver
 {
     internal const string CurrentSummonerPath = "/lol-summoner/v1/current-summoner";
+
+    /// <summary>
+    /// The PRIMARY region source since 2.1.0. Live on client 26.17
+    /// (2026-09-08) it answers
+    /// <c>{"locale":"en_GB","region":"EUW","webLanguage":"en","webRegion":"euw"}</c>,
+    /// and <c>webRegion</c> is op.gg's route token verbatim.
+    /// </summary>
+    internal const string RegionLocalePath = "/riotclient/region-locale";
+
+    /// <summary>
+    /// The pre-2.1.0 region source, kept as a SECONDARY fallback.
+    ///
+    /// <para>It returned 404 RPC_ERROR on client 26.17 — the failure behind the
+    /// field log line "opgg: identity unavailable (client returned no riot id
+    /// or platform) -- opening home" — so it can no longer be the only source.
+    /// It is not deleted, because on the clients where it does answer it is the
+    /// more precise one (a platform id, not a web token), and a second working
+    /// path costs one request that is only made when the first one fails.</para>
+    /// </summary>
     internal const string PlatformIdPath = "/lol-platform-config/v1/namespaces/LoginDataPacket/platformId";
 
     private readonly ILcuApi _lcu;
@@ -218,6 +302,25 @@ public sealed class OpGgProfileResolver
         if (identity is null)
             return null;
 
+        var region = await ResolveRegionAsync(cancellationToken).ConfigureAwait(false);
+        return OpGgProfileLink.BuildForRegion(identity.GameName, identity.TagLine, region);
+    }
+
+    /// <summary>
+    /// The route token, from region-locale first and the platform-id namespace
+    /// second. Null when NEITHER answers with a token this app recognizes —
+    /// which still opens op.gg home rather than a guessed player.
+    /// </summary>
+    private async Task<string?> ResolveRegionAsync(CancellationToken cancellationToken)
+    {
+        var locale = await _lcu.SendAsync(
+            HttpMethod.Get,
+            RegionLocalePath,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (locale.Ok && locale.Content is { } localeJson &&
+            OpGgProfileLink.RegionForWebRegion(OpGgProfileLink.ReadWebRegion(localeJson)) is { } fromLocale)
+            return fromLocale;
+
         var platform = await _lcu.SendAsync(
             HttpMethod.Get,
             PlatformIdPath,
@@ -225,10 +328,7 @@ public sealed class OpGgProfileResolver
         if (!platform.Ok || platform.Content is not { } platformJson)
             return null;
 
-        return OpGgProfileLink.Build(
-            identity.GameName,
-            identity.TagLine,
-            OpGgProfileLink.ReadPlatformId(platformJson));
+        return OpGgProfileLink.RegionForPlatform(OpGgProfileLink.ReadPlatformId(platformJson));
     }
 }
 

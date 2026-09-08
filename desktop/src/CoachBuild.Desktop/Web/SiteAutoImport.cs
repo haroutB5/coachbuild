@@ -535,6 +535,10 @@ public sealed class SiteAutoImportService
                 outcomes.Add(new AutoImportOutcome(target.Site, target.Url.ToString(), null));
                 continue;
             }
+            // The extractor's own stage/slot notes, BEFORE the verdict line, so
+            // "yielded no item build" is never again a bare absence with no
+            // account of where the read stopped (field log 2026-09-08).
+            LogPayloadNotes(target.Site, payload);
             if (payload.ItemBlocks.Count == 0)
             {
                 _sink.LogInfo(
@@ -640,6 +644,7 @@ public sealed class SiteAutoImportService
                 "not the selected champion -- ignored");
             return;
         }
+        LogPayloadNotes(CompanionTab.Coachless, payload);
 
         try
         {
@@ -652,6 +657,22 @@ public sealed class SiteAutoImportService
         catch (Exception error)
         {
             _sink.LogInfo($"auto-import: Coachless rune write failed ({error.Message})");
+        }
+    }
+
+    /// <summary>
+    /// Logs the payload's own <c>meta.notes</c>, one line each, tagged with the
+    /// site. Log only — never the status line: these are diagnostics for the
+    /// next field pass, and a slot the page could not fill is not something to
+    /// interrupt the user about.
+    /// </summary>
+    private void LogPayloadNotes(CompanionTab site, SiteImportPayload payload)
+    {
+        if (payload.Notes.Count == 0) return;
+        var label = CompanionTabs.LabelFor(site);
+        foreach (var note in payload.Notes)
+        {
+            _sink.LogInfo($"auto-import: {label} {note}");
         }
     }
 

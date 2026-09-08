@@ -71,8 +71,23 @@ public static class SiteImportExtractors
     /// rendered rank filter's <c>.rank-img</c>
     /// (<c>ranks/…/mini/{rank}.svg</c>) and the role from the URL. The blob
     /// was triple-matched to the displayed build in the fixture (section
-    /// winrate/matches, rune set, shard set), but if the key is absent the
-    /// extractor yields items-absent rather than guessing another rank.</para>
+    /// winrate/matches, rune set, shard set).</para>
+    ///
+    /// <para>THE RENDERED RANK IS A HINT, NOT THE KEY (2.1.0). Field log
+    /// 2026-09-08, Nasus top, twice on a warmed profile: "u.gg yielded no item
+    /// build -- ignored", while the runes half read fine — so the page WAS
+    /// hydrated and only the items stage came back empty. The rank filter can
+    /// read a rank the embedded blob does not carry, and the pre-2.1.0 script
+    /// required an exact <c>world_{rendered rank}_{role}</c> hit and otherwise
+    /// skipped the whole stage in silence. It now DISCOVERS which rank tokens
+    /// the page actually embeds for this role, tries the rendered one first,
+    /// and falls back to an embedded one only when there is exactly ONE —
+    /// which is the page's only build for that role, not a guess. Several
+    /// embedded ranks with none of them the rendered one still refuses. Either
+    /// way the payload carries <c>meta.notes</c> naming the stage it reached
+    /// (url-recognized / json-found / keys-found / blocks-built) and the tokens
+    /// it saw, on success as well as failure, so the next empty yield arrives
+    /// with its own diagnosis instead of needing another live pass.</para>
     ///
     /// <para>PARTIAL RESULTS ARE HONEST: the script returns whatever half it
     /// found (runes-only or items-only); only when NEITHER half is present
@@ -223,12 +238,55 @@ public static class SiteImportExtractors
               if (gm) rank = gm[1].toLowerCase();
             }
           }
-          if (rank && role) {
-            var want = '"world_' + rank + '_' + role + '"';
+          // STAGE, so an empty yield names where it stopped instead of being
+          // an unexplained absence: url-recognized -> json-found -> keys-found
+          // -> blocks-built. Reported in meta.notes, always, so the line also
+          // proves the instrument is alive on the runs that succeed.
+          var itemStage = 'url-recognized';
+          var notes = [];
+          var texts = [];
+          if (role) {
             var scripts = document.getElementsByTagName('script');
-            var build = null;
-            for (var q = 0; q < scripts.length && !build; q++) {
-              var text = scripts[q].textContent || '';
+            for (var q = 0; q < scripts.length; q++) {
+              var body = scripts[q].textContent || '';
+              if (body.indexOf('"world_') >= 0) texts.push(body);
+            }
+          } else {
+            notes.push('u.gg items: the URL carried no role, so no build key could be formed');
+          }
+          // The rank tokens the page ACTUALLY embeds for this role. The
+          // rendered rank filter is a hint, not the key: the page embeds one
+          // build per role and the filter can read a rank the embedded blob
+          // does not carry (a profile whose stored filter differs from the
+          // server-rendered default), which is what silently produced an
+          // items-absent payload before 2.1.0.
+          var tokens = [];
+          if (role) {
+            var keyRe = new RegExp('"world_([a-z0-9_]+?)_' + role + '"', 'gi');
+            for (var x = 0; x < texts.length; x++) {
+              keyRe.lastIndex = 0;
+              var hit;
+              while ((hit = keyRe.exec(texts[x]))) {
+                var tok = hit[1].toLowerCase();
+                if (tokens.indexOf(tok) < 0) tokens.push(tok);
+              }
+            }
+          }
+          if (texts.length) itemStage = 'json-found';
+          var order = [];
+          if (rank && role) order.push(rank);
+          if (role && tokens.length === 1 && tokens[0] !== rank) {
+            // Exactly one embedded rank for this role is not a guess: it is
+            // the only build the page has. More than one and none of them the
+            // rendered rank IS a guess, so that case refuses below.
+            order.push(tokens[0]);
+          }
+          var build = null;
+          var usedKey = '';
+          for (var o = 0; o < order.length && !build; o++) {
+            var want = '"world_' + order[o] + '_' + role + '"';
+            for (var w = 0; w < texts.length && !build; w++) {
+              var text = texts[w];
               var at = text.indexOf(want);
               while (at >= 0 && !build) {
                 var brace = text.indexOf('{', at + want.length);
@@ -242,21 +300,50 @@ public static class SiteImportExtractors
                 at = brace >= 0 ? text.indexOf(want, brace + 1) : -1;
               }
             }
-            if (build) {
-              if (build.rec_starting_items && build.rec_starting_items.ids)
-                pushBlock('Starting Items', build.rec_starting_items.ids);
-              if (build.rec_core_items && build.rec_core_items.ids)
-                pushBlock('Core Items', build.rec_core_items.ids);
-              pushOptions('Fourth Item', build.item_options_1);
-              pushOptions('Fifth Item', build.item_options_2);
-              pushOptions('Sixth Item', build.item_options_3);
-              pushOptions('Seventh Item', build.item_options_4);
-              pushOptions('Boots', build.t3_boots_options);
-              pushOptions('Consumables', build.consumable_options);
+            if (build) usedKey = order[o];
+          }
+          if (build) {
+            itemStage = 'keys-found';
+            if (build.rec_starting_items && build.rec_starting_items.ids)
+              pushBlock('Starting Items', build.rec_starting_items.ids);
+            if (build.rec_core_items && build.rec_core_items.ids)
+              pushBlock('Core Items', build.rec_core_items.ids);
+            pushOptions('Fourth Item', build.item_options_1);
+            pushOptions('Fifth Item', build.item_options_2);
+            pushOptions('Sixth Item', build.item_options_3);
+            pushOptions('Seventh Item', build.item_options_4);
+            pushOptions('Boots', build.t3_boots_options);
+            pushOptions('Consumables', build.consumable_options);
+            if (blocks.length) itemStage = 'blocks-built';
+            else notes.push('u.gg items: the embedded build "world_' + usedKey + '_' + role + '" carried no item ids');
+            if (usedKey !== rank) {
+              notes.push('u.gg items: the rendered rank filter read "' + (rank || 'nothing') +
+                '"; used the page\'s only embedded rank "' + usedKey + '"');
+            }
+          } else if (role) {
+            if (!texts.length) {
+              notes.push('u.gg items: no script on the page embeds a build blob');
+            } else if (!tokens.length) {
+              notes.push('u.gg items: the page embeds no "world_{rank}_' + role + '" key at all');
+            } else if (!rank) {
+              notes.push('u.gg items: no rank filter rendered and the page embeds ' + tokens.length +
+                ' ranks for ' + role + ' (' + tokens.join(', ') + ') -- refused rather than guessed');
+            } else if (tokens.indexOf(rank) < 0) {
+              notes.push('u.gg items: the rendered rank "' + rank + '" has no embedded build and the page embeds ' +
+                tokens.length + ' ranks for ' + role + ' (' + tokens.join(', ') + ') -- refused rather than guessed');
+            } else {
+              notes.push('u.gg items: "world_' + rank + '_' + role +
+                '" is present but no occurrence parsed to a build object');
             }
           }
+          notes.push('u.gg items: stage ' + itemStage + ' (rank "' + (rank || 'none') +
+            '", role "' + (role || 'none') + '", embedded ranks [' + tokens.join(', ') +
+            '], ' + blocks.length + ' blocks)');
           if (!runes && !blocks.length) return fail('no build on page');
-          return JSON.stringify({ source: 'u.gg', championSlug: slug, role: role, runes: runes, itemBlocks: blocks });
+          return JSON.stringify({
+            source: 'u.gg', championSlug: slug, role: role, runes: runes, itemBlocks: blocks,
+            meta: { stage: itemStage, notes: notes }
+          });
         })();
         """;
 
@@ -301,8 +388,19 @@ public static class SiteImportExtractors
     /// conditioned recommendations that are never granted <c>selectable</c>,
     /// and the top row IS the recommendation) — one single-item block per
     /// slot titled with the page's own header text, each carrying
-    /// <c>selected</c> provenance — or a typed error naming the slot with
-    /// no rows at all.</para>
+    /// <c>selected</c> provenance.</para>
+    ///
+    /// <para>AN EMPTY SLOT DEGRADES, IT DOES NOT ABORT (2.1.0). Field log
+    /// 2026-09-08, Nasus top, on a run where the consent wall HAD been
+    /// dismissed successfully: <c>Coachless extraction failed (slot "Starter"
+    /// yielded no items)</c>. Five other slots had read fine and all five were
+    /// discarded, because any per-slot absence — missing section, no rows, no
+    /// readable item icon — returned <c>{ error }</c> for the whole page. Each
+    /// of those three now records a <c>meta.notes</c> line (the icon case also
+    /// reports the row's img/item-icon/hidden counts, which is what tells "the
+    /// page has nothing here" apart from "the page hid its own icons") and
+    /// OMITS that block. Only a page where no slot at all yields items is
+    /// still a typed failure, and that one names every slot it tried.</para>
     ///
     /// <para>RUNES ARE NOT ON THIS PAGE. The walk clicks item slots only,
     /// starting at 1st Item (Keystone, Starter and Spell are never clicked),
@@ -438,26 +536,65 @@ public static class SiteImportExtractors
             var SLOT_ORDER = ['Starter', '1st Item', '2nd Item', '3rd Item', '4th+ Item', 'Boots'];
             var looked = slotTables();
             var blocks = [];
+            var notes = [];
             for (var b = 0; b < SLOT_ORDER.length; b++) {
               var entry = null;
               for (var e = 0; e < looked.length; e++) {
                 if (looked[e].title === SLOT_ORDER[b]) { entry = looked[e]; break; }
               }
-              if (!entry) return fail('slot "' + SLOT_ORDER[b] + '" not found');
+              // ONE EMPTY SLOT IS NOT A FAILED IMPORT (2.1.0). Field log
+              // 2026-09-08, Nasus top, AFTER the consent wall was dismissed
+              // successfully: 'Coachless extraction failed (slot "Starter"
+              // yielded no items)'. Five other slots had read fine and every
+              // one of them was thrown away, because a per-slot absence
+              // aborted the whole read. A slot the page cannot fill is now a
+              // meta note and an omitted block; only a page that fills NO
+              // slot at all is still a typed failure.
+              if (!entry) {
+                notes.push('coachless: slot "' + SLOT_ORDER[b] + '" is not on the page -- omitted');
+                continue;
+              }
               var sel = null;
               var cand = dataRows(entry.table);
-              if (!cand.length) return fail('slot "' + SLOT_ORDER[b] + '" has no rows');
+              if (!cand.length) {
+                notes.push('coachless: slot "' + SLOT_ORDER[b] + '" has no rows -- omitted');
+                continue;
+              }
               for (var q = 0; q < cand.length; q++) {
                 if (isActive(cand[q])) { sel = cand[q]; break; }
               }
               var row = sel || cand[0];
               var ids = itemIds(row);
-              if (!ids.length) return fail('slot "' + SLOT_ORDER[b] + '" yielded no items');
+              if (!ids.length) {
+                // Name what the row DID carry, so the next live pass does not
+                // need another capture to tell "no icon at all" apart from
+                // "icons the page hid itself" (its own onerror handler).
+                var all = row.getElementsByTagName('img');
+                var hidden = 0;
+                var itemish = 0;
+                for (var v = 0; v < all.length; v++) {
+                  if (all[v].style && all[v].style.display === 'none') hidden++;
+                  if (String(all[v].getAttribute('src') || '').indexOf('/img/item/') >= 0) itemish++;
+                }
+                notes.push('coachless: slot "' + SLOT_ORDER[b] + '" yielded no items -- omitted (' +
+                  cand.length + ' rows, ' + (sel ? 'selected' : 'top') + ' row has ' + all.length +
+                  ' img, ' + itemish + ' item-icon, ' + hidden + ' hidden)');
+                continue;
+              }
               blocks.push({ title: SLOT_ORDER[b], itemIds: ids, selected: !!sel });
             }
+            // Deliberately NOT the words "no build": that phrase is the one
+            // SiteImportSequencer.MapStepError collapses to the generic
+            // no-build reason, and the whole value of this branch is the
+            // per-slot detail it carries into the log.
+            if (!blocks.length)
+              return fail('every item slot on the page was empty -- ' + notes.join('; ').slice(0, 240));
             return JSON.stringify({
               stage: 'done', settled: true,
-              payload: { source: 'coachless', championSlug: slug, role: role, runes: null, itemBlocks: blocks }
+              payload: {
+                source: 'coachless', championSlug: slug, role: role, runes: null,
+                itemBlocks: blocks, meta: { notes: notes }
+              }
             });
           }
           return fail('unknown import step');

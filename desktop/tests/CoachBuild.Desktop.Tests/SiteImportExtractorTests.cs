@@ -69,6 +69,45 @@ public sealed class SiteImportExtractorTests
         Assert.Contains("already-selected", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 2.1.0 field fix. The rendered rank badge is a HINT: the script must
+    /// discover the rank tokens the page embeds for the role, and must refuse
+    /// rather than pick when the rendered one is absent and several exist.
+    /// The BEHAVIOUR is proved against the real 2026-09-08 Nasus-top capture
+    /// by <c>_research/site-import/verify-extractors.mjs</c>, which runs this
+    /// exact const string; this pins that the shipped string is the one that
+    /// oracle exercised.
+    /// </summary>
+    [Fact]
+    public void The_ugg_script_discovers_embedded_rank_keys_instead_of_trusting_the_badge()
+    {
+        var script = SiteImportExtractors.UGgScript;
+        Assert.Contains("\"world_([a-z0-9_]+?)_", script, StringComparison.Ordinal);
+        Assert.Contains("refused rather than guessed", script, StringComparison.Ordinal);
+        foreach (var stage in new[] { "url-recognized", "json-found", "keys-found", "blocks-built" })
+            Assert.Contains(stage, script, StringComparison.Ordinal);
+        // The notes have to travel on the payload, or the stage is a comment.
+        Assert.Contains("meta: { stage: itemStage, notes: notes }", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 2.1.0 field fix. A per-slot absence omits the block and notes it; only
+    /// a page where NO slot yields items is still a typed failure, and that
+    /// reason must avoid the words "no build" or
+    /// <see cref="SiteImportSequencer"/>'s error mapping collapses the
+    /// per-slot detail it exists to carry.
+    /// </summary>
+    [Fact]
+    public void The_coachless_read_degrades_on_an_empty_slot_instead_of_aborting()
+    {
+        var read = SiteImportExtractors.CoachlessStepScript(SiteImportSteps.Read());
+        Assert.Contains("-- omitted", read, StringComparison.Ordinal);
+        Assert.Contains("every item slot on the page was empty", read, StringComparison.Ordinal);
+        Assert.Contains("meta: { notes: notes }", read, StringComparison.Ordinal);
+        // The pre-2.1.0 per-slot aborts are gone.
+        Assert.DoesNotContain("return fail('slot \"' + SLOT_ORDER[b]", read, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Only_the_coachless_walk_clicks_the_page()
     {

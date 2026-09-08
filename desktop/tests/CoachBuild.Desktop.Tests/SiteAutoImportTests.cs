@@ -483,6 +483,54 @@ public sealed class SiteAutoImportTests
         Assert.Equal(lcu, api.Calls.Count);
     }
 
+    /// <summary>
+    /// 2.1.0: the extractor's own <c>meta.notes</c> reach the log, and reach it
+    /// BEFORE the verdict line.
+    ///
+    /// <para>The field log 2026-09-08 read "u.gg yielded no item build --
+    /// ignored" and that was the entire record: nothing said which stage the
+    /// read stopped at, so diagnosing it needed a second live pass with a
+    /// hand-captured fixture. A payload that yields nothing must now arrive
+    /// with its own account.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_empty_item_yield_logs_the_extractors_stage_notes_before_the_verdict()
+    {
+        const string uggEmptyWithNotes = """
+            {"source":"u.gg","championSlug":"ahri","role":"mid",
+             "runes":{"primaryStyleId":8200,"subStyleId":8100,
+                      "perkIds":[8214,8226,8210,8237,8135,8106],"shardIds":[5008,5008,5001]},
+             "itemBlocks":[],
+             "meta":{"stage":"json-found","notes":[
+               "u.gg items: the rendered rank \"platinum_plus\" has no embedded build",
+               "u.gg items: stage json-found (rank \"platinum_plus\", role \"mid\", 0 blocks)"]}}
+            """;
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? uggEmptyWithNotes : AhriCoachlessJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        var verdict = sink.Logs.FindIndex(
+            line => line.Contains("yielded no item build", StringComparison.Ordinal));
+        var stage = sink.Logs.FindIndex(
+            line => line.Contains("stage json-found", StringComparison.Ordinal));
+        var refusal = sink.Logs.FindIndex(
+            line => line.Contains("platinum_plus\" has no embedded build", StringComparison.Ordinal));
+        Assert.True(verdict >= 0, string.Join(" | ", sink.Logs));
+        Assert.True(refusal >= 0, string.Join(" | ", sink.Logs));
+        Assert.True(stage >= 0, string.Join(" | ", sink.Logs));
+        Assert.True(refusal < verdict && stage < verdict, string.Join(" | ", sink.Logs));
+        // Log only: a slot the page could not fill is not worth interrupting
+        // the user, and the Coachless half still wrote.
+        Assert.DoesNotContain(sink.Statuses, status => status.Contains("stage", StringComparison.Ordinal));
+        Assert.Contains(sink.Statuses, status => status.Contains("Auto-imported", StringComparison.Ordinal));
+    }
+
     // -- Service: the Coachless runes leg (2.1.0) -------------------------------
 
     [Fact]

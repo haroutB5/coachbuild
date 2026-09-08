@@ -164,8 +164,36 @@ public sealed class CompanionTabsIntegrationTests
         Assert.Null(OpGgProfileLink.Build("", "swift", "EUW1"));
     }
 
+    /// <summary>
+    /// Client 26.17 (live 2026-09-08) answers this and 404s the platform-id
+    /// namespace, which is the whole reason MyStats logged "identity
+    /// unavailable (client returned no riot id or platform) -- opening home"
+    /// with a perfectly good Riot ID in hand. The body is the real one.
+    /// </summary>
     [Fact]
-    public async Task Opgg_resolver_reads_current_summoner_then_platform_id()
+    public async Task Opgg_resolver_reads_the_region_locale_web_region_first()
+    {
+        var lcu = new RecordingLcuApi(new Dictionary<string, LcuResponse>
+        {
+            [OpGgProfileResolver.CurrentSummonerPath] = Ok("""
+                { "gameName": "Chimilann", "tagLine": "EUW", "puuid": "local-id" }
+                """),
+            [OpGgProfileResolver.RegionLocalePath] = Ok("""
+                { "locale": "en_GB", "region": "EUW", "webLanguage": "en", "webRegion": "euw" }
+                """),
+        });
+
+        var profile = await new OpGgProfileResolver(lcu).ResolveAsync();
+
+        Assert.Equal("https://op.gg/summoners/euw/Chimilann-EUW", profile?.AbsoluteUri);
+        // The platform-id namespace is not even asked for when this answers.
+        Assert.Equal(
+            [OpGgProfileResolver.CurrentSummonerPath, OpGgProfileResolver.RegionLocalePath],
+            lcu.Paths);
+    }
+
+    [Fact]
+    public async Task Opgg_resolver_falls_back_to_the_platform_id_namespace()
     {
         var lcu = new RecordingLcuApi(new Dictionary<string, LcuResponse>
         {
@@ -179,8 +207,62 @@ public sealed class CompanionTabsIntegrationTests
 
         Assert.Equal("https://op.gg/summoners/euw/K1ayer%20Name-swift", profile?.AbsoluteUri);
         Assert.Equal(
-            [OpGgProfileResolver.CurrentSummonerPath, OpGgProfileResolver.PlatformIdPath],
+            [
+                OpGgProfileResolver.CurrentSummonerPath,
+                OpGgProfileResolver.RegionLocalePath,
+                OpGgProfileResolver.PlatformIdPath,
+            ],
             lcu.Paths);
+    }
+
+    /// <summary>
+    /// A token outside the map is refused, not pasted into a route: op.gg would
+    /// either 404 or resolve a DIFFERENT player, and "opened the wrong player"
+    /// is worse than "opened home".
+    /// </summary>
+    [Fact]
+    public async Task Opgg_resolver_refuses_an_unknown_web_region_and_still_tries_the_platform_id()
+    {
+        var lcu = new RecordingLcuApi(new Dictionary<string, LcuResponse>
+        {
+            [OpGgProfileResolver.CurrentSummonerPath] = Ok("""
+                { "gameName": "K1ayer", "tagLine": "swift", "puuid": "local-id" }
+                """),
+            [OpGgProfileResolver.RegionLocalePath] = Ok("""
+                { "locale": "xx_XX", "region": "MARS", "webRegion": "mars" }
+                """),
+        });
+
+        var profile = await new OpGgProfileResolver(lcu).ResolveAsync();
+
+        Assert.Null(profile);
+        Assert.Equal(
+            [
+                OpGgProfileResolver.CurrentSummonerPath,
+                OpGgProfileResolver.RegionLocalePath,
+                OpGgProfileResolver.PlatformIdPath,
+            ],
+            lcu.Paths);
+    }
+
+    /// <summary>
+    /// The allowlist is the platform map's own value column, so a platform
+    /// added to one is never missing from the other.
+    /// </summary>
+    [Fact]
+    public void Opgg_web_region_allowlist_is_the_platform_maps_own_tokens()
+    {
+        Assert.NotEmpty(OpGgProfileLink.KnownRegions);
+        foreach (var token in OpGgProfileLink.KnownRegions)
+        {
+            Assert.Equal(token, OpGgProfileLink.RegionForWebRegion(token));
+            Assert.Equal(token, OpGgProfileLink.RegionForWebRegion(" " + token.ToUpperInvariant() + " "));
+        }
+        Assert.Contains("euw", OpGgProfileLink.KnownRegions);
+        Assert.Null(OpGgProfileLink.RegionForWebRegion("mars"));
+        Assert.Null(OpGgProfileLink.RegionForWebRegion("euw1"));
+        Assert.Null(OpGgProfileLink.RegionForWebRegion(""));
+        Assert.Null(OpGgProfileLink.RegionForWebRegion(null));
     }
 
     [Fact]

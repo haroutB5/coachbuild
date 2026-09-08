@@ -354,6 +354,112 @@ const clEmpty = runOnDocument(clInspectJs, makeDocument('<html><body><table></ta
 check('coachless recognized page without slots reports empty',
   clEmpty.stage === 'state' && clEmpty.slots.length === 0, JSON.stringify(clEmpty));
 
+// ---- 2.1.0 field fixes: the Nasus TOP pages --------------------------------
+// Captured live 2026-09-08 from the two pages that produced the field failures
+// "u.gg yielded no item build -- ignored" and 'Coachless extraction failed
+// (slot "Starter" yielded no items)'. Both pages read FINE statically, which is
+// itself the finding: neither failure is a page-shape defect, so the fixes are
+// (a) stop requiring the rendered rank to be the embedded key and (b) stop
+// letting one empty slot discard five good ones -- plus the per-stage notes
+// that will name the cause on the next live pass instead of needing another.
+const uggNasusHtml = readFileSync(join(dir, 'ugg-nasus-top.html'), 'utf8');
+const uggNasusUrl = 'https://u.gg/lol/champions/nasus/build/top';
+const uggNasus = runExtractor(uggJs, uggNasusHtml, uggNasusUrl);
+console.log('ugg nasus blocks: ' + (uggNasus.itemBlocks || []).map((b) => b.title + '=' + b.itemIds.join(',')).join(' | '));
+check('ugg nasus slug/role', uggNasus.championSlug === 'nasus' && uggNasus.role === 'top',
+  uggNasus.championSlug + '/' + uggNasus.role);
+check('ugg nasus yields an item build', (uggNasus.itemBlocks || []).length > 0,
+  JSON.stringify(uggNasus).slice(0, 200));
+const nasusTitles = (uggNasus.itemBlocks || []).map((b) => b.title + '=' + b.itemIds.join(',')).join(' | ');
+check('ugg nasus starting', nasusTitles.includes('Starting Items=1054,2003'), nasusTitles);
+check('ugg nasus core', nasusTitles.includes('Core Items=3158,3078,3110'), nasusTitles);
+// The stage note must be present on SUCCESS too -- a diagnostic that only
+// appears when things break is a diagnostic nobody has ever seen work.
+const nasusNotes = (uggNasus.meta && uggNasus.meta.notes) || [];
+console.log('ugg nasus notes: ' + JSON.stringify(nasusNotes));
+check('ugg carries a stage note on success',
+  uggNasus.meta && uggNasus.meta.stage === 'blocks-built' &&
+  nasusNotes.some((n) => n.includes('stage blocks-built') && n.includes('emerald_plus')),
+  JSON.stringify(uggNasus.meta));
+
+// THE ACTUAL FIX. Rewrite the rendered rank badge to a rank the page does NOT
+// embed -- the shape a warmed profile with a different stored filter produces.
+// Before the fix this yielded ZERO item blocks in silence; now the single
+// embedded rank for the role is used, and the note says so.
+const uggWrongRank = uggNasusHtml.replace(/\/mini\/emerald_plus\.svg/g, '/mini/platinum_plus.svg');
+check('the mutant really did move the rendered rank',
+  uggWrongRank !== uggNasusHtml && !uggWrongRank.includes('/mini/emerald_plus.svg'));
+const uggFallback = runExtractor(uggJs, uggWrongRank, uggNasusUrl);
+const fbNotes = (uggFallback.meta && uggFallback.meta.notes) || [];
+console.log('ugg wrong-rank notes: ' + JSON.stringify(fbNotes));
+check('a rendered rank the page does not embed still yields the item build',
+  (uggFallback.itemBlocks || []).length === (uggNasus.itemBlocks || []).length &&
+  JSON.stringify(uggFallback.itemBlocks) === JSON.stringify(uggNasus.itemBlocks),
+  JSON.stringify((uggFallback.itemBlocks || []).length));
+check('and it says which rank it fell back to',
+  fbNotes.some((n) => n.includes('platinum_plus') && n.includes('emerald_plus')), JSON.stringify(fbNotes));
+
+// Two embedded ranks and none of them the rendered one is a GUESS, and must be
+// refused -- the fallback is only sound because the page embeds exactly one.
+const uggTwoRanks = uggWrongRank.replace(/"world_emerald_plus_top"/g,
+  '"world_gold_plus_top":{"rec_core_items":{"ids":[1,2,3]}},"world_emerald_plus_top"');
+const uggAmbiguous = runExtractor(uggJs, uggTwoRanks, uggNasusUrl);
+const ambNotes = (uggAmbiguous.meta && uggAmbiguous.meta.notes) || [];
+check('two embedded ranks and no rendered match refuses rather than guessing',
+  (uggAmbiguous.itemBlocks || []).length === 0 &&
+  ambNotes.some((n) => n.includes('refused rather than guessed')), JSON.stringify(ambNotes));
+
+// Coachless Nasus top: reads clean statically, including Starter.
+const clNasusHtml = readFileSync(join(dir, 'coachless-nasus-top.html'), 'utf8');
+const clNasusUrl = 'https://coachless.gg/builds/nasus?role=top';
+const clNasusDoc = makeDocument(clNasusHtml);
+const clNasusRead = runOnDocument(readJs, clNasusDoc, clNasusUrl);
+console.log('coachless nasus: ' + JSON.stringify(clNasusRead.payload).slice(0, 400));
+check('coachless nasus reads every slot including Starter',
+  clNasusRead.stage === 'done' && (clNasusRead.payload.itemBlocks || []).length === 6 &&
+  (clNasusRead.payload.itemBlocks || []).some((b) => b.title === 'Starter' && b.itemIds.length > 0),
+  JSON.stringify(clNasusRead).slice(0, 300));
+
+// THE ACTUAL FIX. Strip the Starter table's item icons -- the live shape that
+// produced 'slot "Starter" yielded no items'. Before the fix this discarded ALL
+// SIX slots; now Starter is omitted with a note and the other five still write.
+function stripStarterIcons(html) {
+  const at = html.indexOf('Starter');
+  if (at < 0) throw new Error('fixture has no Starter section');
+  const start = html.lastIndexOf('<table', at);
+  const end = html.indexOf('</table>', at);
+  if (start < 0 || end < 0) throw new Error('could not bound the Starter table');
+  const before = html.slice(0, start);
+  const table = html.slice(start, end).replace(/\/img\/item\//g, '/img/gone/');
+  return before + table + html.slice(end);
+}
+const clNoStarter = stripStarterIcons(clNasusHtml);
+check('the mutant really did strip Starter item icons',
+  (clNoStarter.match(/\/img\/gone\//g) || []).length > 0);
+const clDegraded = runOnDocument(readJs, makeDocument(clNoStarter), clNasusUrl);
+const degradedTitles = ((clDegraded.payload || {}).itemBlocks || []).map((b) => b.title);
+const degradedNotes = (((clDegraded.payload || {}).meta || {}).notes) || [];
+console.log('coachless degraded: ' + JSON.stringify(degradedTitles) + ' notes ' + JSON.stringify(degradedNotes));
+check('an empty Starter omits its block instead of failing the import',
+  clDegraded.stage === 'done' && degradedTitles.length === 5 && !degradedTitles.includes('Starter'),
+  JSON.stringify(clDegraded).slice(0, 300));
+check('and the other five slots still carry their items',
+  ((clDegraded.payload || {}).itemBlocks || []).every((b) => b.itemIds.length > 0),
+  JSON.stringify((clDegraded.payload || {}).itemBlocks));
+check('and the omission is named in meta.notes with the row census',
+  degradedNotes.some((n) => n.includes('"Starter"') && n.includes('yielded no items') && n.includes('rows')),
+  JSON.stringify(degradedNotes));
+
+// The floor: a page where NO slot yields items is still a typed failure, and
+// the reason must survive MapStepError (which collapses anything saying "no
+// build" to the generic reason and would throw the per-slot detail away).
+const clAllEmpty = clNasusHtml.replace(/\/img\/item\//g, '/img/gone/');
+const clDead = runOnDocument(readJs, makeDocument(clAllEmpty), clNasusUrl);
+check('a page where no slot yields items is still a typed failure',
+  typeof clDead.error === 'string' && clDead.error.includes('every item slot'), JSON.stringify(clDead).slice(0, 300));
+check('and that reason does not say "no build" (which would collapse the detail)',
+  typeof clDead.error === 'string' && !clDead.error.toLowerCase().includes('no build'), clDead.error);
+
 // ---- 2.1.0: the Coachless RUNES page ---------------------------------------
 // Runs the shipped CoachlessRunesTemplate verbatim against the real rendered
 // runes page captured 2026-09-08 (Nasus top). Unlike the builds overview this

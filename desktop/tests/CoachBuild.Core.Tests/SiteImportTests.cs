@@ -1005,5 +1005,57 @@ public sealed class SiteImportTests
         Assert.Equal(202, element.GetProperty("associatedChampions")[0].GetInt32());
     }
 
+    /// <summary>
+    /// 2.1.0: <c>meta.notes</c> reaches C#.
+    ///
+    /// <para>Before this, the Coachless walk merged its settle notes into the
+    /// payload JSON and this parser dropped them, so a degraded import and a
+    /// clean one produced identical logs. Both extractors now emit per-stage
+    /// and per-slot notes and this is the only channel that delivers them.</para>
+    /// </summary>
+    [Fact]
+    public void Payload_parsing_carries_the_extractor_notes_and_sanitizes_them()
+    {
+        var raw = """
+            {
+              "source": "coachless", "championSlug": "nasus", "role": "top", "runes": null,
+              "itemBlocks": [ { "title": "1st Item", "itemIds": [3065] } ],
+              "meta": { "notes": [
+                "coachless: slot \"Starter\" yielded no\titems -- omitted",
+                "   ",
+                42,
+                "u.gg items: stage blocks-built"
+              ] }
+            }
+            """;
+
+        Assert.True(SiteImportPayload.TryParse(raw, out var payload, out var failure));
+        Assert.Equal(string.Empty, failure);
+        Assert.Equal(
+            [
+                "coachless: slot \"Starter\" yielded no items -- omitted",
+                "u.gg items: stage blocks-built",
+            ],
+            payload!.Notes);
+    }
+
+    [Fact]
+    public void A_payload_without_meta_carries_no_notes()
+    {
+        var raw = """
+            {
+              "source": "u.gg", "championSlug": "jhin", "role": "adc", "runes": null,
+              "itemBlocks": [ { "title": "Core Items", "itemIds": [6697] } ]
+            }
+            """;
+
+        Assert.True(SiteImportPayload.TryParse(raw, out var payload, out _));
+        Assert.Empty(payload!.Notes);
+        // A shared empty default, so two note-less payloads stay equal to each
+        // other: adding diagnostics must not change payload identity.
+        Assert.True(SiteImportPayload.TryParse(raw, out var twin, out _));
+        Assert.Same(payload.Notes, twin!.Notes);
+    }
+
     private static LcuResponse Ok(string raw) => new(true, 200, MockLcuApi.Json(raw), raw);
 }

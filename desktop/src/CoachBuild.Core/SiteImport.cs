@@ -35,6 +35,23 @@ public sealed record SiteImportPayload(
     SiteImportRunes Runes,
     IReadOnlyList<SiteImportItemBlock> ItemBlocks)
 {
+    /// <summary>The shared empty default, so two note-less payloads stay equal.</summary>
+    private static readonly IReadOnlyList<string> NoNotes = Array.Empty<string>();
+
+    /// <summary>
+    /// The extractor's own diagnostic lines (<c>meta.notes</c>), carried
+    /// through so they reach the log.
+    ///
+    /// <para>Deliberately NOT positional: it is diagnostics, not identity, and
+    /// every existing construction site keeps its arity. Until 2.1.0 these
+    /// were parsed nowhere — the Coachless walk merged its settle notes into
+    /// the payload JSON and this parser dropped them on the floor, so a
+    /// degraded import looked identical to a clean one in the log. Both
+    /// extractors now emit stage/slot notes and this is the channel that
+    /// delivers them.</para>
+    /// </summary>
+    public IReadOnlyList<string> Notes { get; init; } = NoNotes;
+
     /// <summary>
     /// Parses the extractor's JSON. The raw value is what
     /// <c>ExecuteScriptAsync</c> resolves to: our extractors
@@ -115,7 +132,10 @@ public sealed record SiteImportPayload(
                 return false;
             }
 
-            payload = new SiteImportPayload(source, slug, role, runes!, blocks);
+            payload = new SiteImportPayload(source, slug, role, runes!, blocks)
+            {
+                Notes = ReadNotes(root),
+            };
             failure = string.Empty;
             return true;
         }
@@ -175,6 +195,39 @@ public sealed record SiteImportPayload(
 
     /// <summary>Cap on a passed-through extractor reason, so a status line stays a line.</summary>
     private const int MaxExtractorErrorLength = 160;
+
+    /// <summary>Cap on how many notes one payload may carry into the log.</summary>
+    private const int MaxNotes = 16;
+
+    /// <summary>
+    /// Reads <c>meta.notes</c>. Sanitized exactly like an extractor error and
+    /// for the same reason: these strings are authored by our own scripts but
+    /// interpolate page-derived text (slot titles, rank tokens) and they end
+    /// up in a log file.
+    /// </summary>
+    private static IReadOnlyList<string> ReadNotes(JsonElement root)
+    {
+        if (!root.TryGetProperty("meta", out var meta) || meta.ValueKind != JsonValueKind.Object)
+            return NoNotes;
+        if (!meta.TryGetProperty("notes", out var notes) || notes.ValueKind != JsonValueKind.Array)
+            return NoNotes;
+        var cleaned = new List<string>();
+        foreach (var note in notes.EnumerateArray())
+        {
+            if (cleaned.Count >= MaxNotes) break;
+            if (note.ValueKind != JsonValueKind.String) continue;
+            var text = note.GetString();
+            if (string.IsNullOrWhiteSpace(text)) continue;
+            var flat = new string(text.Select(c => char.IsControl(c) ? ' ' : c).ToArray());
+            flat = string.Join(' ', flat.Split(
+                ' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            if (flat.Length == 0) continue;
+            cleaned.Add(flat.Length <= MaxExtractorErrorLength
+                ? flat
+                : flat[..MaxExtractorErrorLength].TrimEnd() + "…");
+        }
+        return cleaned.Count == 0 ? NoNotes : cleaned;
+    }
 
     private static bool TryReadSource(string? value, out SiteImportSource source)
     {
