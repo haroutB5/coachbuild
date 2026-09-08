@@ -67,6 +67,13 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         public Task<bool>? Initialization { get; set; }
 
         /// <summary>
+        /// True when the idle sweep disposed this tab's WebView2. The state
+        /// row survives (the tab button stays), so this is what tells the
+        /// lazy path it is RE-creating rather than creating.
+        /// </summary>
+        public bool Released { get; set; }
+
+        /// <summary>
         /// The shared environment this tab was created from. The auto-import
         /// hidden workers reuse a site tab's environment so they share its
         /// profile (cookies, Cloudflare clearance) instead of minting a
@@ -96,6 +103,13 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     /// until attached; the runes button works without it.
     /// </summary>
     private SiteAutoImportService? _autoImport;
+    /// <summary>
+    /// The tray log sink, kept so the window's own browser-lifecycle lines
+    /// (consent dismissal, idle teardown) reach the same companion.log the
+    /// auto-import writes to. Null until <see cref="AttachAutoImport"/>.
+    /// </summary>
+    private Action<string>? _autoImportLog;
+    private readonly Dictionary<CompanionTab, DateTimeOffset> _lastVisible = new();
     /// <summary>Hidden worker webviews for the auto-import, one per site at most. Never shown, never selected.</summary>
     private readonly Dictionary<CompanionTab, BrowserTabState> _workers = new();
     private string? _activeUpdateHint;
@@ -297,8 +311,9 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
 
     /// <summary>
     /// Receives the LCU connection projection on the existing snapshot tick.
-    /// Like the champ-select context above this only redraws chrome — the
-    /// import button's enabled state — and never touches a page.
+    /// Redraws chrome (the import button's enabled state), and — on the
+    /// RISING edge of the connection — gives the MyStats tab the one retry it
+    /// was missing (see <see cref="RetryOpGgProfileAsync"/>).
     /// </summary>
     public void UpdateSiteImportAvailability(bool lcuConnected)
     {
@@ -311,8 +326,99 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             return;
         }
 
+        var connected = lcuConnected && !_lcuConnected;
         _lcuConnected = lcuConnected;
         UpdateOfferBar();
+        if (connected) _ = RetryOpGgProfileAsync(_shutdownToken);
+    }
+
+    /// <summary>
+    /// Re-resolves the user's op.gg profile once the League client connects,
+    /// and navigates the MyStats tab there IF it is still sitting on op.gg
+    /// home.
+    ///
+    /// <para>THE BUG THIS FIXES. The 2026-09-08 field log contains ZERO
+    /// <c>opgg:</c> lines across the whole session: the tab silently opened
+    /// op.gg home and stayed there. Two causes, both real, both fixed here.
+    /// (1) TIMING — <see cref="NavigateSiteHome"/> resolves the profile
+    /// exactly once, on the tab's first navigation. Open MyStats before the
+    /// client is up (the log shows ~60s of "League client not connected" at
+    /// launch) and the resolve fails, home loads, and nothing ever tries
+    /// again; this method is that retry. (2) SILENCE — the resolver's catch
+    /// swallowed every failure, so a user seeing op.gg home had no way to
+    /// learn why. Both paths now log one line either way.</para>
+    ///
+    /// <para>It refuses to move a page the user navigated themselves: only a
+    /// tab still on op.gg's own home is redirected, so someone reading
+    /// another player's profile when the client connects keeps their page.
+    /// </para>
+    /// </summary>
+    private async Task RetryOpGgProfileAsync(CancellationToken cancellationToken)
+    {
+        if (_disposed || _opGgProfileResolver is null) return;
+        var state = GetState(CompanionTab.OpGg);
+        // Nothing to correct until the tab exists and has actually loaded.
+        if (state?.Core is null || !state.HasNavigated) return;
+        if (!IsOpGgHome(state.Core.Source)) return;
+
+        var profile = await ResolveOpGgProfileAsync(cancellationToken).ConfigureAwait(true);
+        if (_disposed || profile is null) return;
+        if (GetState(CompanionTab.OpGg) is not { } current || current.Core is null) return;
+        if (!IsOpGgHome(current.Core.Source)) return;
+        Navigate(current, profile);
+    }
+
+    /// <summary>
+    /// Resolves the op.gg profile and LOGS the outcome either way. The one
+    /// place either branch is written, so the visible-tab path and the
+    /// on-connect retry can never disagree about what happened.
+    /// </summary>
+    private async Task<Uri?> ResolveOpGgProfileAsync(CancellationToken cancellationToken)
+    {
+        if (_opGgProfileResolver is null)
+        {
+            LogLifecycle("opgg: identity unavailable (no resolver attached) -- opening home");
+            return null;
+        }
+        try
+        {
+            var profile = await _opGgProfileResolver(cancellationToken).ConfigureAwait(true);
+            if (profile is null)
+            {
+                LogLifecycle(
+                    "opgg: identity unavailable (client returned no riot id or platform) -- opening home");
+                return null;
+            }
+            // Path only: "/summoners/{region}/{name}-{tag}". The riot id is
+            // the user's own and already goes to op.gg in the URL, but the
+            // log is a file on disk, so it stays to the same shape the tab
+            // will show and carries nothing else.
+            LogLifecycle($"opgg: profile resolved {profile.AbsolutePath.TrimStart('/')}");
+            return profile;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            LogLifecycle($"opgg: identity unavailable ({error.Message}) -- opening home");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// True when the MyStats tab is on op.gg's own landing page rather than a
+    /// profile the user chose. Path-only, so a tracking query cannot make the
+    /// home page look like a destination.
+    /// </summary>
+    internal static bool IsOpGgHome(string? url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+        var host = uri.Host.TrimEnd('.');
+        if (!host.Equals("op.gg", StringComparison.OrdinalIgnoreCase)
+            && !host.Equals("www.op.gg", StringComparison.OrdinalIgnoreCase)) return false;
+        return uri.AbsolutePath.Trim('/').Length == 0;
     }
 
     /// <summary>
@@ -397,6 +503,13 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         cancellationToken.ThrowIfCancellationRequested();
 
         var changed = !_hasActiveTab || _activeTab != tab;
+        // Stamp BOTH: the tab being left starts its idle clock now, and the
+        // tab being entered must not carry a stale stamp from a previous
+        // visit (which would make it eligible for teardown while visible --
+        // the policy refuses that anyway, but the stamp should be honest).
+        var now = DateTimeOffset.UtcNow;
+        if (_hasActiveTab) _lastVisible[_activeTab] = now;
+        _lastVisible[tab] = now;
         _activeTab = tab;
         _hasActiveTab = true;
         HideBrowsersExcept(tab);
@@ -433,6 +546,14 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     {
         var state = GetOrCreateState(tab);
         if (state.Initialized) return state;
+        if (state.Released)
+        {
+            // Symmetric with the idle teardown: the same lazy path rebuilds
+            // it, and the log says so, so a slow first paint after ten idle
+            // minutes reads as a deliberate release rather than a bug.
+            state.Released = false;
+            LogLifecycle(SiteTabIdlePolicy.RecreateLine(tab));
+        }
         if (state.Initialization is not null)
         {
             var alreadyInitializing = await state.Initialization.ConfigureAwait(true);
@@ -753,7 +874,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (_disposed || state.Browser is null) return;
         if (IsActiveTab(state))
         {
-            AddressText.Text = DisplayUrl(state.Core?.Source);
             UpdateChrome();
             UpdateOfferBar();
         }
@@ -790,23 +910,17 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         var site = CompanionTabs.SiteFor(state.Tab);
         if (site is null) return;
         var target = site.Home;
-        if (state.Tab == CompanionTab.OpGg && _opGgProfileResolver is not null)
+        if (state.Tab == CompanionTab.OpGg)
         {
-            try
-            {
-                target = await _opGgProfileResolver(cancellationToken).ConfigureAwait(true)
-                    ?? site.Home;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch
-            {
-                // Profile resolution is an enhancement over a usable site tab.
-                // Any LCU or payload failure deliberately degrades to op.gg home.
-                target = site.Home;
-            }
+            // Profile resolution is an enhancement over a usable site tab: any
+            // LCU or payload failure still degrades to op.gg home. What it no
+            // longer does is degrade SILENTLY -- ResolveOpGgProfileAsync logs
+            // one line either way, and UpdateSiteImportAvailability retries
+            // this on the connection's rising edge, because the whole reason
+            // the field log had no opgg lines is that the tab can be opened
+            // before the client is up.
+            target = await ResolveOpGgProfileAsync(cancellationToken).ConfigureAwait(true)
+                ?? site.Home;
         }
         Navigate(state, target);
     }
@@ -979,9 +1093,46 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         }
     }
 
-    private void OnZoomOutClick(object sender, RoutedEventArgs e) => ZoomOut();
+    /// <summary>
+    /// The zoom keyboard shortcuts. 2.1.0 removed the Zoom -/100%/+ chrome
+    /// cluster to merge the two chrome rows into one; zoom itself had to keep
+    /// working, so the shortcuts are now explicit here rather than implied by
+    /// three buttons.
+    ///
+    /// <para>Ctrl+Plus / Ctrl+Minus / Ctrl+0, including the numpad keys and
+    /// the unshifted <c>=</c> that Ctrl+Plus really is on most layouts. The
+    /// result still persists per site: <c>SetActiveZoom</c> writes through
+    /// <see cref="CompanionTabsPreferences"/> exactly as the buttons did.</para>
+    /// </summary>
+    protected override void OnKeyDown(System.Windows.Input.KeyEventArgs e)
+    {
+        ArgumentNullException.ThrowIfNull(e);
+        base.OnKeyDown(e);
+        if (e.Handled || _disposed) return;
+        if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0)
+            return;
 
-    private void OnZoomInClick(object sender, RoutedEventArgs e) => ZoomIn();
+        switch (e.Key)
+        {
+            case System.Windows.Input.Key.OemPlus:
+            case System.Windows.Input.Key.Add:
+                ZoomIn();
+                e.Handled = true;
+                break;
+            case System.Windows.Input.Key.OemMinus:
+            case System.Windows.Input.Key.Subtract:
+                ZoomOut();
+                e.Handled = true;
+                break;
+            case System.Windows.Input.Key.D0:
+            case System.Windows.Input.Key.NumPad0:
+                ResetZoom();
+                e.Handled = true;
+                break;
+            default:
+                break;
+        }
+    }
 
     /// <summary>
     /// The Coachless select-and-recompute walk as extractor-shaped JSON: the
@@ -1089,14 +1240,29 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     public void AttachAutoImport(
         ItemSetApplyService items,
         IChampionDirectory champions,
-        Action<string> logInfo)
+        Action<string> logInfo,
+        RuneApplyService? runes = null)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(champions);
         ArgumentNullException.ThrowIfNull(logInfo);
         if (_disposed) return;
+        _autoImportLog = logInfo;
         _autoImport = new SiteAutoImportService(
-            this, items, champions, new WindowAutoImportSink(this, logInfo));
+            this, items, champions, new WindowAutoImportSink(this, logInfo), runes);
+    }
+
+    /// <summary>Quiet log hop for the window's own lifecycle lines. Never throws.</summary>
+    private void LogLifecycle(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return;
+        try
+        {
+            _autoImportLog?.Invoke(line);
+        }
+        catch
+        {
+        }
     }
 
     /// <summary>
@@ -1110,8 +1276,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     /// </summary>
     public void NotifySnapshotForAutoImport(ChampSelectContext? context, bool lcuConnected)
     {
-        var auto = _autoImport;
-        if (auto is null || _disposed) return;
+        if (_disposed) return;
         if (!Dispatcher.CheckAccess())
         {
             Dispatcher.BeginInvoke(
@@ -1119,6 +1284,16 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
                 System.Windows.Threading.DispatcherPriority.Background);
             return;
         }
+
+        // The idle sweep rides the tick the window already gets rather than
+        // owning a timer: it is a pure decision plus a dispose, and it must
+        // not run on a thread of its own next to WebView2. Deliberately
+        // BEFORE the auto-import guard -- the memory a stale tab holds is not
+        // conditional on the import being attached.
+        SweepIdleTabs(DateTimeOffset.UtcNow);
+
+        var auto = _autoImport;
+        if (auto is null) return;
 
         var input = AutoImportInput.FromContext(context, ActiveTab, CurrentUrl, lcuConnected);
         // Fire-and-forget by construction (see the service contract).
@@ -1196,9 +1371,113 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (_disposed) return null;
         var core = GetState(site)?.Core;
         if (core is null) return null;
+        await DismissConsentAsync(core, site, cancellationToken).ConfigureAwait(true);
+        if (_disposed) return null;
         if (site == CompanionTab.Coachless)
             return await RunCoachlessWalkAsync(core, cancellationToken).ConfigureAwait(true);
         return await core.ExecuteScriptAsync(SiteImportExtractors.UGgScript).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// How long the import waits after accepting a consent dialog before it
+    /// reads the page. The wall's teardown re-renders the content behind it,
+    /// and reading during that is what produced a no-build.
+    /// </summary>
+    private const int ConsentSettleDelayMs = 600;
+
+    /// <summary>
+    /// Dismisses a recognized TCF consent wall once, at the start of an
+    /// import, and logs the fact.
+    ///
+    /// <para>This is the ONE click the import makes outside the Coachless
+    /// slot walk, and it is inside the same user-sanctioned interaction: the
+    /// user asked for the build, and the wall is what stands between the
+    /// worker and the page they asked about (field log 2026-09-08 17:48:15,
+    /// "Coachless extraction failed (no build on page)"). It clicks only the
+    /// two accept controls named in
+    /// <see cref="SiteImportExtractors.ConsentDismissTemplate"/> and nothing
+    /// else; an unrecognized wall stays up and the import fails honestly.
+    /// Never throws — a failed dismissal just leaves the page as it was.</para>
+    /// </summary>
+    private async Task DismissConsentAsync(
+        CoreWebView2 core,
+        CompanionTab site,
+        CancellationToken cancellationToken)
+    {
+        if (_disposed) return;
+        try
+        {
+            var raw = await core.ExecuteScriptAsync(
+                SiteImportExtractors.ConsentDismissScript).ConfigureAwait(true);
+            if (_disposed) return;
+            var outcome = ConsentDismissal.Parse(raw);
+            if (!outcome.Dismissed) return;
+            LogLifecycle(outcome.LogLine(CompanionTabs.LabelFor(site)) ?? string.Empty);
+            await Task.Delay(ConsentSettleDelayMs, cancellationToken).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // A wall we could not dismiss is the pre-2.1.0 behaviour: the
+            // extraction below reports its own typed failure.
+        }
+    }
+
+    /// <summary>
+    /// The executor's Coachless RUNES fetch: navigate a worker to the
+    /// per-slot WPA runes page and read the full page off it.
+    ///
+    /// <para>Separate from the item walk because it is a separate PAGE. The
+    /// builds overview ranks keystones only, so before 2.1.0 a Coachless
+    /// import was honestly items-only ("no rune page on this site"). Same
+    /// worker rules as every other automated navigation: allowlisted URL,
+    /// hidden core, never the visible tab.</para>
+    /// </summary>
+    public Task<string?> FetchCoachlessRunesAsync(
+        Uri url,
+        string? championKey,
+        int? roleId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.BeginInvoke(new Func<Task>(async () =>
+        {
+            try
+            {
+                completion.TrySetResult(
+                    await FetchCoachlessRunesOnUiAsync(url, championKey, roleId, cancellationToken)
+                        .ConfigureAwait(true));
+            }
+            catch (Exception error)
+            {
+                completion.TrySetException(error);
+            }
+        }));
+        return completion.Task;
+    }
+
+    private async Task<string?> FetchCoachlessRunesOnUiAsync(
+        Uri url,
+        string? championKey,
+        int? roleId,
+        CancellationToken cancellationToken)
+    {
+        if (_disposed) return null;
+        if (!AutoImportCoordinator.IsAllowedRunesTarget(url, championKey, roleId)) return null;
+
+        var core = await GetFetchCoreAsync(CompanionTab.Coachless, cancellationToken).ConfigureAwait(true);
+        if (core is null || _disposed) return null;
+        if (!await NavigateRunesWorkerAndWaitAsync(core, url, championKey, roleId, cancellationToken)
+            .ConfigureAwait(true))
+            return null;
+        if (_disposed) return null;
+        await DismissConsentAsync(core, CompanionTab.Coachless, cancellationToken).ConfigureAwait(true);
+        if (_disposed) return null;
+        return await core.ExecuteScriptAsync(SiteImportExtractors.CoachlessRunesScript).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -1257,6 +1536,8 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             .ConfigureAwait(true))
             return null;
         if (_disposed) return null;
+        await DismissConsentAsync(core, site, cancellationToken).ConfigureAwait(true);
+        if (_disposed) return null;
         if (site == CompanionTab.Coachless)
             return await RunCoachlessWalkAsync(core, cancellationToken).ConfigureAwait(true);
         return await core.ExecuteScriptAsync(SiteImportExtractors.UGgScript).ConfigureAwait(true);
@@ -1306,12 +1587,23 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         var environment = GetState(site)?.Environment;
         if (environment is null)
         {
-            // Last resort only (the visible-tab fallback always has an
-            // environment): an isolated profile rather than no fetch.
+            // The SITE's own profile folder, not a private "auto-" one.
+            //
+            // Until 2.1.0 this fell back to Path.Combine(_userDataFolder,
+            // "auto-" + key), which is a SEPARATE Chromium profile: on a
+            // launch where the user never opened the site tab, the worker got
+            // a profile that had never seen the consent wall, and accepting
+            // consent in the visible tab did nothing for it -- so the wall
+            // came back on every single run. That is the profile divergence
+            // the 1.3.0 brief said must not exist, and it is the standing
+            // half of the 2026-09-08 "no build on page" failure; the consent
+            // click is the other half. Same folder, same cookies, one
+            // acceptance. WebView2 supports several environments over one
+            // user-data folder, so this needs no tab to exist first.
             try
             {
                 environment = await _environmentService.CreateAsync(
-                    Path.Combine(_userDataFolder, "auto-" + CompanionTabs.KeyFor(site)),
+                    CompanionTabs.ProfileFolder(_userDataFolder, site),
                     cancellationToken).ConfigureAwait(true);
             }
             catch
@@ -1379,6 +1671,105 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     }
 
     /// <summary>
+    /// Disposes every hidden import worker (<see cref="ISiteAutoImportExecutor"/>).
+    /// Marshals to the dispatcher: the service calls this from its background
+    /// flight, and a WebView2 must be disposed on the thread that made it.
+    /// </summary>
+    public void ReleaseImportWorkers()
+    {
+        if (_disposed) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(ReleaseImportWorkers));
+            return;
+        }
+        ReleaseImportWorkersOnUi();
+    }
+
+    private void ReleaseImportWorkersOnUi()
+    {
+        if (_disposed || _workers.Count == 0) return;
+        var released = new List<CompanionTab>(_workers.Count);
+        foreach (var (site, worker) in _workers)
+        {
+            if (worker.Browser is not { } browser) continue;
+            AutoImportHost.Children.Remove(browser);
+            try
+            {
+                browser.Dispose();
+            }
+            catch
+            {
+            }
+            worker.Browser = null;
+            worker.Core = null;
+            worker.Initialized = false;
+            worker.HasNavigated = false;
+            worker.IsLoading = false;
+            released.Add(site);
+        }
+        _workers.Clear();
+        foreach (var site in released)
+            LogLifecycle($"tabs: released the {CompanionTabs.LabelFor(site)} import worker after its run");
+    }
+
+    /// <summary>
+    /// The idle sweep: disposes the WebView2 of any site tab the user has not
+    /// looked at for <see cref="SiteTabIdlePolicy.IdleTimeout"/>. The tab
+    /// BUTTON stays; revisiting recreates the browser through the existing
+    /// lazy path, and the profile directory keeps its cookies, consent and
+    /// sign-in, so a recreated tab is not a signed-out one.
+    ///
+    /// <para>The decision is not made here — <see cref="SiteTabIdlePolicy"/>
+    /// owns it and is unit-tested without a browser. This method is only the
+    /// hands.</para>
+    /// </summary>
+    internal void SweepIdleTabs(DateTimeOffset now)
+    {
+        if (_disposed) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(() => SweepIdleTabs(now)));
+            return;
+        }
+
+        var snapshots = new List<TabIdleSnapshot>(_tabs.Count);
+        foreach (var (tab, state) in _tabs)
+        {
+            snapshots.Add(new TabIdleSnapshot(
+                tab,
+                IsVisible: _hasActiveTab && _activeTab == tab,
+                HasBrowser: state.Browser is not null,
+                LastVisible: _lastVisible.TryGetValue(tab, out var seen) ? seen : now));
+        }
+
+        foreach (var tab in SiteTabIdlePolicy.Sweep(snapshots, now))
+        {
+            if (!_tabs.TryGetValue(tab, out var state) || state.Browser is not { } browser) continue;
+            BrowserHost.Children.Remove(browser);
+            try
+            {
+                browser.Dispose();
+            }
+            catch
+            {
+            }
+            // The STATE row survives with Browser/Core null, so the tab button
+            // stays and EnsureTabAsync rebuilds it on the next visit. The
+            // environment is deliberately kept: recreating on the same
+            // environment is what makes the revisit cheap.
+            state.Browser = null;
+            state.Core = null;
+            state.Initialized = false;
+            state.HasNavigated = false;
+            state.IsLoading = false;
+            state.Error = null;
+            state.Released = true;
+            LogLifecycle(SiteTabIdlePolicy.TeardownLine(tab));
+        }
+    }
+
+    /// <summary>
     /// How long a worker fetch waits for its deep link to load before the
     /// run becomes a quiet miss. Background work must not pile up across
     /// snapshot ticks; the service single-flight already bounds overlap.
@@ -1405,6 +1796,44 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         ArgumentNullException.ThrowIfNull(url);
         if (!AutoImportCoordinator.IsAllowedAutoImportTarget(site, url, championKey, roleId))
             return false;
+        return await NavigateAndWaitCoreAsync(core, url, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// The SECOND automated-navigation call site (2.1.0): the Coachless
+    /// per-slot runes page. Its own allowlist
+    /// (<see cref="AutoImportCoordinator.IsAllowedRunesTarget"/>) is the same
+    /// shape as the build-page one — the URL must be EXACTLY what
+    /// <see cref="SiteDeepLink.CoachlessRunesUrl"/> produces for this
+    /// champion+role, so a hand-built or drifted URL is refused before
+    /// anything navigates.
+    /// </summary>
+    private async Task<bool> NavigateRunesWorkerAndWaitAsync(
+        CoreWebView2 core,
+        Uri url,
+        string? championKey,
+        int? roleId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(core);
+        ArgumentNullException.ThrowIfNull(url);
+        if (!AutoImportCoordinator.IsAllowedRunesTarget(url, championKey, roleId))
+            return false;
+        return await NavigateAndWaitCoreAsync(core, url, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Navigate-and-wait, shared by the two allowlisted worker paths above
+    /// and reachable ONLY from them. It deliberately performs no check of its
+    /// own: each caller asserts its own allowlist first, which keeps the two
+    /// policies visible at the two call sites instead of hidden in a shared
+    /// branch.
+    /// </summary>
+    private async Task<bool> NavigateAndWaitCoreAsync(
+        CoreWebView2 core,
+        Uri url,
+        CancellationToken cancellationToken)
+    {
         var loaded = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         void Handler(object? sender, CoreWebView2NavigationCompletedEventArgs args)
         {
@@ -1542,10 +1971,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (hasError && activeState?.Error is { } activeError)
             ErrorText.Text = activeError;
 
-        AddressText.Text = activeState?.Core?.Source is { } source
-            ? DisplayUrl(source)
-            : hasError ? "Unavailable" : "Ready";
-
         var label = CompanionTabs.LabelFor(ActiveTab);
         TabStateText.Text = isLoading
             ? $"{label}  •  loading"
@@ -1558,9 +1983,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         BackButton.IsEnabled = activeState?.Browser?.CanGoBack == true;
         ForwardButton.IsEnabled = activeState?.Browser?.CanGoForward == true;
         RefreshButton.IsEnabled = activeState?.Initialized == true;
-        ZoomOutButton.IsEnabled = activeState?.Initialized == true;
-        ZoomInButton.IsEnabled = activeState?.Initialized == true;
-        ZoomText.Text = $"{(_preferences.ZoomFor(ActiveTab) * 100):0}%";
 
         SetTabVisual(CompanionTabButton, CompanionTab.Companion);
         SetTabVisual(UggTabButton, CompanionTab.UGg);
@@ -1775,13 +2197,8 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
 
     private string IdleStatusText() => $"{CompanionTabs.LabelFor(ActiveTab)} ready";
 
-    private static string DisplayUrl(string? source)
-    {
-        if (string.IsNullOrWhiteSpace(source)) return "Ready";
-        if (!Uri.TryCreate(source, UriKind.Absolute, out var uri)) return source;
-        var path = uri.AbsolutePath.TrimEnd('/');
-        return string.IsNullOrEmpty(path) ? uri.Host : $"{uri.Host}{path}";
-    }
+    // DisplayUrl lived here to format the chrome's URL label. 2.1.0 removed
+    // that label with the second chrome row, and its only caller with it.
 
     private bool IsActiveTab(BrowserTabState state) => _hasActiveTab && _activeTab == state.Tab;
 
@@ -1794,6 +2211,13 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         {
             state = new BrowserTabState(tab);
             _tabs[tab] = state;
+            // Start the idle clock at CREATION, not at first visit. A tab the
+            // auto-import created in the background to fetch through (see
+            // GetFetchCoreAsync) may never be selected at all, and without a
+            // stamp the sweep would default its LastVisible to "now" on every
+            // pass and it would never age out -- the exact leak the idle
+            // teardown exists to close.
+            _lastVisible.TryAdd(tab, DateTimeOffset.UtcNow);
         }
         return state;
     }

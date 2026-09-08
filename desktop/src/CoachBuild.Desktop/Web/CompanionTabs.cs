@@ -367,6 +367,38 @@ public static class SiteDeepLink
         return string.IsNullOrEmpty(slug) ? null : slug;
     }
 
+    /// <summary>
+    /// The tree pair the runes deep link is BUILT with. Coachless's runes URL
+    /// carries a primary/secondary pair in the path
+    /// (<c>/runes/tree/{slug}/{primary}/{secondary}</c>), but the site snaps
+    /// any valid pair to the one it recommends for that champion+role: the
+    /// 2026-09-08 browser capture navigated
+    /// <c>/runes/tree/nasus/precision/domination?role=top</c> and the site
+    /// REDIRECTED to <c>/runes/tree/nasus/precision/resolve?role=top</c>.
+    ///
+    /// <para>So this pair is a probe, never a claim: the extractor reads the
+    /// trees it actually LANDED on out of the rendered perk icons, and never
+    /// out of this constant. Two different trees on purpose — a same-tree pair
+    /// is not a valid rune page.</para>
+    /// </summary>
+    public const string RunesProbePrimary = "precision";
+
+    /// <inheritdoc cref="RunesProbePrimary"/>
+    public const string RunesProbeSecondary = "domination";
+
+    /// <summary>
+    /// The Coachless per-slot WPA runes page for a champion+role, or null when
+    /// the champion cannot be addressed. Coachless only — u.gg's rune panel
+    /// lives on the build page the existing extractor already reads.
+    /// </summary>
+    public static Uri? CoachlessRunesUrl(string? championKey, int? roleId)
+    {
+        if (Slug(championKey) is not { } slug) return null;
+        var role = RoleToken(roleId);
+        var path = $"https://coachless.gg/runes/tree/{slug}/{RunesProbePrimary}/{RunesProbeSecondary}";
+        return new Uri(role is null ? path : $"{path}?role={role}", UriKind.Absolute);
+    }
+
     public static Uri? Build(CompanionTab tab, string? championKey, int? roleId)
     {
         if (Slug(championKey) is not { } slug) return null;

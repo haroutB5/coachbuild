@@ -31,6 +31,10 @@ public sealed class SiteAutoImportTests
             return Task.FromResult(Visible?.Invoke(site));
         }
 
+        public Func<Uri, string?>? Runes { get; set; }
+
+        public int ReleaseCount { get; private set; }
+
         public Task<string?> FetchViaWorkerAsync(
             CompanionTab site, Uri url, string? championKey, int? roleId,
             CancellationToken cancellationToken = default)
@@ -38,6 +42,18 @@ public sealed class SiteAutoImportTests
             Calls.Add($"worker:{site}:{url}");
             return Task.FromResult(Worker?.Invoke(site, url));
         }
+
+        public Task<string?> FetchCoachlessRunesAsync(
+            Uri url, string? championKey, int? roleId,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add($"runes:{url}");
+            return Task.FromResult(Runes?.Invoke(url));
+        }
+
+        // Counted, NOT appended to Calls: Calls is the fetch sequence every
+        // other test asserts exactly, and a teardown is not a fetch.
+        public void ReleaseImportWorkers() => ReleaseCount++;
     }
 
     private sealed class FakeSink : ISiteAutoImportSink
@@ -70,6 +86,16 @@ public sealed class SiteAutoImportTests
                 return Task.FromResult(Ok("{\"accountId\":77,\"timestamp\":1,\"itemSets\":[]}"));
             if (method == HttpMethod.Put && path == "/lol-item-sets/v1/item-sets/77/sets")
                 return Task.FromResult(Ok("{}"));
+            // Rune endpoints, for the 2.1.0 Coachless runes leg. An empty
+            // page list plus room in the inventory is the create path.
+            if (method == HttpMethod.Get && path == "/lol-perks/v1/pages")
+                return Task.FromResult(Ok("[]"));
+            if (method == HttpMethod.Get && path == "/lol-perks/v1/inventory")
+                return Task.FromResult(Ok("{\"ownedPageCount\":5,\"canAddCustomPage\":true}"));
+            if (method == HttpMethod.Post && path == "/lol-perks/v1/pages")
+                return Task.FromResult(Ok("{\"id\":9001,\"isDeletable\":true}"));
+            if (path.StartsWith("/lol-perks/v1/currentpage", StringComparison.Ordinal))
+                return Task.FromResult(Ok("{\"id\":9001}"));
             return Task.FromResult(new LcuResponse(false, 404));
         }
 
@@ -122,11 +148,25 @@ public sealed class SiteAutoImportTests
 
     private static SiteAutoImportService NewService(
         FakeExecutor executor, StubLcu api, FakeSink sink,
-        IChampionDirectory? champions = null) =>
+        IChampionDirectory? champions = null,
+        bool withRunes = false) =>
         new(executor,
             new ItemSetApplyService(api),
             champions ?? new FakeChampionDirectory(),
-            sink);
+            sink,
+            withRunes ? new RuneApplyService(api) : null);
+
+    /// <summary>The Coachless runes page for Ahri mid, as the extractor emits it.</summary>
+    private const string AhriCoachlessRunesJson = """
+        {"source":"coachless","championSlug":"ahri","role":"mid",
+         "runes":{"primaryStyleId":8200,"subStyleId":8000,
+                  "perkIds":[8214,8226,8210,8237,9111,9105],
+                  "shardIds":[5008,5008,5011]},
+         "itemBlocks":[]}
+        """;
+
+    private static readonly Uri AhriCoachlessRunesLink =
+        new("https://coachless.gg/runes/tree/ahri/precision/domination?role=mid");
 
     private static JsonElement PutSets(StubLcu api)
     {
@@ -441,6 +481,182 @@ public sealed class SiteAutoImportTests
         await service.OnSnapshotAsync(LockedAhri());
         Assert.Equal(calls, executor.Calls.Count);
         Assert.Equal(lcu, api.Calls.Count);
+    }
+
+    // -- Service: the Coachless runes leg (2.1.0) -------------------------------
+
+    [Fact]
+    public async Task A_coachless_run_also_imports_the_runes_page()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        // The runes page is fetched at the app's OWN deep link, after both
+        // item fetches, exactly once.
+        Assert.Equal(
+            [$"worker:{CompanionTab.UGg}:{AhriUggDeepLink}",
+             $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}",
+             $"runes:{AhriCoachlessRunesLink}"],
+            executor.Calls);
+        // ...and a rune page was actually written.
+        Assert.Contains(api.Calls, call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages");
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("Imported runes for Ahri (Mid)", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Control for the test above: without a rune service the behaviour is
+    /// exactly what it was before 2.1.0 — items only, no second navigation,
+    /// no rune endpoint touched.
+    /// </summary>
+    [Fact]
+    public async Task Without_a_rune_service_the_runes_leg_never_runs()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var service = NewService(executor, api, new FakeSink());
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.DoesNotContain(executor.Calls, call =>
+            call.StartsWith("runes:", StringComparison.Ordinal));
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Path.Contains("perks", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A u.gg-only trigger must not navigate a Coachless runes page: the leg
+    /// rides a run that already touched Coachless, never one that did not.
+    /// </summary>
+    [Fact]
+    public async Task A_ugg_only_refresh_does_not_fetch_coachless_runes()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Visible = _ => AhriUggJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var service = NewService(executor, api, new FakeSink(), withRunes: true);
+
+        // Visible u.gg build page for the hovered champion: trigger 2 only.
+        await service.OnSnapshotAsync(LockedAhri() with
+        {
+            Locked = false,
+            VisibleTab = CompanionTab.UGg,
+            VisibleUrl = AhriUggDeepLink.ToString(),
+        });
+
+        Assert.Equal([$"visible:{CompanionTab.UGg}"], executor.Calls);
+    }
+
+    /// <summary>
+    /// A runes page that cannot be read completely writes NOTHING and says
+    /// so. The item set, already written, is untouched — the two halves are
+    /// independent on purpose.
+    /// </summary>
+    [Fact]
+    public async Task An_unreadable_runes_page_is_a_typed_note_and_writes_no_perks()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Runes = _ => """{"error":"primary rune row 2 carried no WPA reading"}""",
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Path.Contains("perks", StringComparison.Ordinal));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("no rune build", StringComparison.Ordinal) &&
+            line.Contains("primary rune row 2", StringComparison.Ordinal));
+        // The items still landed.
+        Assert.Equal(2, PutSets(api).GetArrayLength());
+    }
+
+    [Fact]
+    public async Task A_runes_page_for_another_champion_is_ignored()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson.Replace(
+                "\"championSlug\":\"ahri\"", "\"championSlug\":\"nasus\"", StringComparison.Ordinal),
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Path.Contains("perks", StringComparison.Ordinal));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("not the selected champion", StringComparison.Ordinal));
+    }
+
+    // -- Service: worker teardown (2.1.0 memory fix) ----------------------------
+
+    [Fact]
+    public async Task Every_run_that_fetched_releases_its_workers()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+        };
+        var service = NewService(executor, api, new FakeSink());
+
+        await service.OnSnapshotAsync(LockedAhri());
+        Assert.Equal(1, executor.ReleaseCount);
+
+        // The debounced re-tick fetches nothing, so it must not churn a
+        // teardown call per 750ms tick.
+        await service.OnSnapshotAsync(LockedAhri());
+        Assert.Equal(1, executor.ReleaseCount);
+    }
+
+    [Fact]
+    public async Task A_failed_run_still_releases_its_workers()
+    {
+        // The leak that matters is the one on the unhappy path.
+        var api = new StubLcu();
+        var executor = new FakeExecutor { Worker = (_, _) => "not json at all" };
+        var service = NewService(executor, api, new FakeSink());
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.Equal(1, executor.ReleaseCount);
+    }
+
+    [Fact]
+    public async Task A_tick_with_nothing_to_do_releases_nothing()
+    {
+        var executor = new FakeExecutor();
+        var service = NewService(executor, new StubLcu(), new FakeSink());
+
+        // No client: the coordinator stands down before any fetch.
+        await service.OnSnapshotAsync(LockedAhri() with { LcuConnected = false });
+
+        Assert.Empty(executor.Calls);
+        Assert.Equal(0, executor.ReleaseCount);
     }
 
     [Fact]

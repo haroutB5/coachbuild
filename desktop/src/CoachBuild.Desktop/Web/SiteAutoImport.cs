@@ -258,6 +258,21 @@ public static class AutoImportCoordinator
     }
 
     /// <summary>
+    /// The runes-page half of the allowlist (2.1.0). Same rule as
+    /// <see cref="IsAllowedAutoImportTarget"/> and for the same reason: the
+    /// only automated navigation that may happen is to a URL this app's own
+    /// builder produced for the champion+role champ select reported.
+    /// Coachless only — u.gg's runes live on the build page.
+    /// </summary>
+    public static bool IsAllowedRunesTarget(Uri? target, string? championKey, int? roleId)
+    {
+        if (target is null) return false;
+        if (SiteDeepLink.CoachlessRunesUrl(championKey, roleId) is not { } expected)
+            return false;
+        return string.Equals(expected.AbsoluteUri, target.AbsoluteUri, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// The champion slug addressed by a build-page URL, folded the way the
     /// deep links fold it — or null when the URL is not that site's
     /// build-page shape. Pure string work; redirects (coachless 302s
@@ -342,6 +357,35 @@ public interface ISiteAutoImportExecutor
         string? championKey,
         int? roleId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Navigate a background/hidden webview to the Coachless per-slot RUNES
+    /// page and extract the full rune page. Deliberately NOT defaulted to a
+    /// null-returning stub: a fake that silently skipped this would let the
+    /// tests pass while production imported no runes at all.
+    /// </summary>
+    Task<string?> FetchCoachlessRunesAsync(
+        Uri url,
+        string? championKey,
+        int? roleId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Dispose every hidden worker webview this run created, now that the run
+    /// is over (2.1.0).
+    ///
+    /// <para>Before 2.1.0 the workers lived until the window closed. Measured
+    /// on the user's machine 2026-09-08: ~2.1GB of WebView2 utility processes
+    /// at 81% of system RAM against a ~55MB CoachBuild.Desktop, because four
+    /// site profiles plus the import workers all stayed resident. A worker's
+    /// page holds nothing worth keeping — the site tabs own the profiles, so
+    /// cookies and consent survive in the profile directory — which makes
+    /// per-run teardown free.</para>
+    ///
+    /// <para>Called after EVERY run, success or failure, so a failed import
+    /// cannot be the one that leaks.</para>
+    /// </summary>
+    void ReleaseImportWorkers();
 }
 
 /// <summary>
@@ -380,22 +424,36 @@ public sealed class SiteAutoImportService
 {
     private readonly ISiteAutoImportExecutor _executor;
     private readonly ItemSetApplyService _items;
+    private readonly RuneApplyService? _runes;
     private readonly IChampionDirectory _champions;
     private readonly ISiteAutoImportSink _sink;
     private AutoImportState _state = AutoImportState.Initial;
     private int _active;
     private string? _lastSkipNote;
+    /// <summary>
+    /// True once this flight has actually driven a webview, so the worker
+    /// teardown runs after real work and not after every idle tick. Reset at
+    /// the start of each flight; only ever touched inside the single flight.
+    /// </summary>
+    private bool _fetchedThisRun;
 
+    /// <param name="runes">
+    /// The rune write service, for the Coachless runes page (2.1.0). Null
+    /// keeps the pre-2.1.0 items-only behaviour: the runes leg is skipped
+    /// entirely rather than half-run.
+    /// </param>
     public SiteAutoImportService(
         ISiteAutoImportExecutor executor,
         ItemSetApplyService items,
         IChampionDirectory champions,
-        ISiteAutoImportSink sink)
+        ISiteAutoImportSink sink,
+        RuneApplyService? runes = null)
     {
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _items = items ?? throw new ArgumentNullException(nameof(items));
         _champions = champions ?? throw new ArgumentNullException(nameof(champions));
         _sink = sink ?? throw new ArgumentNullException(nameof(sink));
+        _runes = runes;
     }
 
     /// <summary>The committed debounce state, for tests.</summary>
@@ -405,6 +463,7 @@ public sealed class SiteAutoImportService
     {
         if (input is null) return;
         if (Interlocked.CompareExchange(ref _active, 1, 0) == 1) return;
+        _fetchedThisRun = false;
         try
         {
             await RunAsync(input, cancellationToken).ConfigureAwait(false);
@@ -415,6 +474,21 @@ public sealed class SiteAutoImportService
         }
         finally
         {
+            // Hand the Chromium trees back the moment the run is over --
+            // success, typed failure or exception alike. Guarded by the flag
+            // so the 750ms ticks that fetch NOTHING (the overwhelming
+            // majority) do not churn a teardown call per tick.
+            if (_fetchedThisRun)
+            {
+                try
+                {
+                    _executor.ReleaseImportWorkers();
+                }
+                catch (Exception error)
+                {
+                    _sink.LogInfo($"auto-import: worker release failed ({error.Message})");
+                }
+            }
             Interlocked.Exchange(ref _active, 0);
         }
     }
@@ -502,12 +576,88 @@ public sealed class SiteAutoImportService
             _sink.LogInfo("auto-import: nothing writable from this run -- nothing was imported");
         }
 
+        await ImportCoachlessRunesAsync(fetch, input, cancellationToken).ConfigureAwait(false);
+
         _state = AutoImportCoordinator.RecordCompleted(
             _state, input.ChampionId.Value, input.RoleId, input.ChampionName, outcomes);
     }
 
+    /// <summary>
+    /// The Coachless RUNES leg (2.1.0): fetch the per-slot WPA runes page for
+    /// the champion+role this run acted on, and write the full rune page.
+    ///
+    /// <para>Runs only when this run actually touched Coachless, so a u.gg-only
+    /// trigger never navigates a second Coachless page. It is deliberately
+    /// INDEPENDENT of the item write above: the item set has already landed by
+    /// the time this runs, so a rune failure costs the user nothing they had —
+    /// it is logged and noted, never escalated, and never a dialog.</para>
+    ///
+    /// <para>Honest per-part failure, per the brief: a page that yields no
+    /// complete rune page produces the extractor's own typed reason (which
+    /// names the missing slot) and writes NOTHING. There is no partial rune
+    /// page and no guessed slot — the 0.127.0 validator
+    /// (<c>PerkTreeCatalog.ValidatePage</c>, reached through
+    /// <c>SiteImportApplier.ApplyRunesOnlyAsync</c>) is the same gate the
+    /// u.gg button uses.</para>
+    /// </summary>
+    private async Task ImportCoachlessRunesAsync(
+        IReadOnlyList<AutoImportSiteTarget> fetch,
+        AutoImportInput input,
+        CancellationToken cancellationToken)
+    {
+        if (_runes is null) return;
+        if (input.ChampionId is not > 0 || string.IsNullOrWhiteSpace(input.ChampionName)) return;
+        var touchedCoachless = false;
+        foreach (var target in fetch)
+        {
+            if (target.Site == CompanionTab.Coachless) { touchedCoachless = true; break; }
+        }
+        if (!touchedCoachless) return;
+        if (SiteDeepLink.CoachlessRunesUrl(input.ChampionKey, input.RoleId) is not { } url) return;
+
+        string? raw;
+        _fetchedThisRun = true;
+        try
+        {
+            raw = await _executor.FetchCoachlessRunesAsync(
+                url, input.ChampionKey, input.RoleId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            _sink.LogInfo($"auto-import: Coachless runes fetch failed ({error.Message})");
+            return;
+        }
+
+        if (!SiteImportPayload.TryParse(raw, out var payload, out var failure) || payload is null)
+        {
+            _sink.LogInfo($"auto-import: Coachless yielded no rune build ({failure})");
+            return;
+        }
+        if (!PayloadMatchesContext(payload, input))
+        {
+            _sink.LogInfo(
+                $"auto-import: Coachless runes yielded \"{payload.ChampionSlug}\", " +
+                "not the selected champion -- ignored");
+            return;
+        }
+
+        try
+        {
+            var result = await SiteImportApplier.ApplyRunesOnlyAsync(
+                payload, input.ChampionName, input.ChampionId.Value,
+                _runes, cancellationToken).ConfigureAwait(false);
+            _sink.LogInfo($"auto-import: {result.Message}");
+            _sink.StatusNote(result.Message);
+        }
+        catch (Exception error)
+        {
+            _sink.LogInfo($"auto-import: Coachless rune write failed ({error.Message})");
+        }
+    }
+
     private async Task<string?> FetchTargetAsync(AutoImportSiteTarget target, CancellationToken cancellationToken)
     {
+        _fetchedThisRun = true;
         try
         {
             return target.ExtractInPlace

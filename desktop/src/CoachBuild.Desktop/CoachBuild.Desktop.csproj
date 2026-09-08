@@ -10,7 +10,7 @@
     <StartupObject>CoachBuild.Desktop.Program</StartupObject>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Deterministic>true</Deterministic>
-    <Version>2.0.1</Version>
+    <Version>2.1.0</Version>
     <ApplicationIcon>Assets\tray-icon.ico</ApplicationIcon>
     <AssemblyName>CoachBuild.Desktop</AssemblyName>
     <RootNamespace>CoachBuild.Desktop</RootNamespace>

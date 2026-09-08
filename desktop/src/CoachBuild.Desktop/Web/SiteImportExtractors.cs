@@ -464,6 +464,313 @@ public static class SiteImportExtractors
         })();
         """;
 
+    /// <summary>
+    /// The Coachless RUNES page extractor
+    /// (<c>coachless.gg/runes/tree/{slug}/{primary}/{secondary}?role={role}</c>).
+    ///
+    /// <para>WHY A SECOND PAGE. The builds overview
+    /// (<see cref="CoachlessStepTemplate"/>) renders keystone OPTIONS and zero
+    /// minor runes or shards, so it can never yield a full rune page — the
+    /// walk has always imported items only and reported "no rune page on this
+    /// site". Coachless ranks the rest of the tree on a dedicated Runes page,
+    /// and this script reads it. Read-only: no click, no navigation, one JSON
+    /// string out.</para>
+    ///
+    /// <para>THE URL SNAPS. The path carries a tree pair, but the site
+    /// redirects any valid pair to the one it recommends: the 2026-09-08
+    /// browser capture asked for <c>/runes/tree/nasus/precision/domination</c>
+    /// and landed on <c>/runes/tree/nasus/precision/resolve</c>. So the deep
+    /// link's pair (<see cref="SiteDeepLink.RunesProbePrimary"/>) is a probe,
+    /// and this script derives BOTH tree ids from the rendered perk icons'
+    /// own <c>/perk-images/Styles/{Tree}/…</c> segment — never from the URL,
+    /// which may name the pair that was asked for rather than the one shown.
+    /// </para>
+    ///
+    /// <para>DOM ANCHORS, read off the rendered fixture
+    /// <c>_research/site-import/coachless-nasus-runes.html</c> (captured
+    /// 2026-09-08 by the browser harness, 360KB, Angular-rendered). The page
+    /// has NO tables — the builds overview's <c>th.entry-name.title</c> probe
+    /// returns nothing here — and instead groups
+    /// <c>cl-rune-card</c> elements into one container PER SLOT ROW, which is
+    /// what makes this readable without chunking by threes:</para>
+    /// <list type="bullet">
+    ///   <item><c>.primary-runes .keystone-selector</c> — one container, the
+    ///   tree's keystones (4 for Precision in the fixture).</item>
+    ///   <item><c>.primary-runes .secondary-selector</c> — THREE containers,
+    ///   the three primary minor rows, 3 cards each
+    ///   ([AbsorbLife, Triumph, PresenceOfMind] /
+    ///   [LegendAlacrity, LegendHaste, LegendBloodline] /
+    ///   [CoupDeGrace, CutDown, LastStand]).</item>
+    ///   <item><c>.secondary-runes .secondary-selector</c> — three more, the
+    ///   secondary tree's rows (Resolve, in the fixture).</item>
+    ///   <item><c>.modifier-shards .shard-selector</c> — three containers,
+    ///   the Offense/Flex/Defense shard rows in that DOM order.</item>
+    /// </list>
+    ///
+    /// <para>Per card: the rune's identity comes off <c>.rune-icon img</c>'s
+    /// filename stem through the injected <see cref="PerkIconMap"/> (the same
+    /// fold u.gg uses — Coachless serves ddragon's own perk filenames), and a
+    /// shard's off <c>cl-rune-shard-icon img</c> through
+    /// <see cref="ShardIconMap.ToCoachlessJson"/> (Coachless serves its OWN
+    /// short stat icons, <c>as</c>/<c>ah</c>/<c>ms</c>/<c>health</c>, hence
+    /// the alias table). The ranking number is <c>.rune-delta</c>'s first
+    /// span — the WPA delta, e.g. <c>+0.59</c> — and the sample size is
+    /// <c>.rune-matchcount</c>. Cards the site has no data for render
+    /// <c>is-empty</c> with a literal <c>-.--</c> delta and are skipped.</para>
+    ///
+    /// <para>THE PICK, per the client's own rune rules: the top-WPA keystone;
+    /// the top-WPA rune of each of the three primary rows; for the secondary
+    /// tree the top rune of each row, then the best TWO of those three rows
+    /// (the client takes two secondaries from two different rows); and the
+    /// top shard of each of the three shard rows. Ties keep the earlier card,
+    /// which is the site's own order.</para>
+    ///
+    /// <para>PARTIAL IS A TYPED FAILURE, NOT A GUESS. A full rune page is all
+    /// or nothing at the client, so any missing part — an unreadable tree, a
+    /// row whose cards all lack data, fewer than two usable secondary rows —
+    /// returns <c>{ error }</c> naming that part, and C# reports it and
+    /// writes nothing. <c>itemBlocks</c> is always empty here: this page has
+    /// no items, and the walk owns those.</para>
+    /// </summary>
+    public const string CoachlessRunesTemplate = """
+        (function () {
+          function fail(message) { return JSON.stringify({ error: message }); }
+          function norm(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+          function stemOf(src) {
+            var s = String(src || '');
+            var slash = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+            if (slash >= 0) s = s.slice(slash + 1);
+            var cut = s.search(/[?#]/);
+            if (cut >= 0) s = s.slice(0, cut);
+            var dot = s.lastIndexOf('.');
+            if (dot > 0) s = s.slice(0, dot);
+            return s;
+          }
+          function lookup(map, folded) {
+            var id = map[folded];
+            return (typeof id === 'number' && id > 0 && Math.floor(id) === id) ? id : 0;
+          }
+          function perkId(src) { return lookup(PERK_MAP, norm(stemOf(src))); }
+          function shardId(src) {
+            var folded = norm(stemOf(src));
+            if (folded.indexOf('statmods') === 0) folded = folded.slice(8);
+            if (folded.slice(-4) === 'icon') folded = folded.slice(0, -4);
+            return lookup(SHARD_MAP, folded) || lookup(SHARD_MAP, norm(stemOf(src)));
+          }
+          var PERK_MAP = __PERK_MAP_JSON__;
+          var SHARD_MAP = __SHARD_MAP_JSON__;
+          var TREE_MAP = __TREE_MAP_JSON__;
+
+          var href = String((typeof location !== 'undefined' && location.href) || '');
+          var page = href.match(/coachless\.gg\/runes\/tree\/([a-z0-9]+)/i);
+          if (!page) return fail('not a champion runes page');
+          var slug = page[1].toLowerCase();
+          var role = '';
+          var roleMatch = href.match(/[?&]role=([a-z]+)/i);
+          if (roleMatch) role = roleMatch[1].toLowerCase();
+
+          function hasClass(el, name) {
+            if (!el) return false;
+            var cls = el.classList;
+            if (cls && cls.contains && cls.contains(name)) return true;
+            return (' ' + String(el.className || '') + ' ').indexOf(' ' + name + ' ') >= 0;
+          }
+          function rowsUnder(hostSelector, rowClass) {
+            var host = document.querySelector(hostSelector);
+            if (!host) return [];
+            var found = host.querySelectorAll('.' + rowClass);
+            var out = [];
+            for (var i = 0; i < found.length; i++) {
+              var cards = found[i].getElementsByTagName('cl-rune-card');
+              if (cards.length) out.push(cards);
+            }
+            return out;
+          }
+          function iconSrc(card, tagName) {
+            var hosts = card.getElementsByTagName(tagName);
+            for (var h = 0; h < hosts.length; h++) {
+              var images = hosts[h].getElementsByTagName('img');
+              if (images.length) return String(images[0].getAttribute('src') || '');
+            }
+            var any = card.getElementsByTagName('img');
+            return any.length ? String(any[0].getAttribute('src') || '') : '';
+          }
+          function deltaOf(card) {
+            // The site prints "-.--" for a card it has no sample for, and
+            // marks those is-empty. Both are "no reading", never a zero.
+            if (hasClass(card, 'is-empty')) return null;
+            var holder = card.querySelector('.rune-delta');
+            if (!holder) return null;
+            var span = holder.getElementsByTagName('span')[0];
+            var text = span ? String(span.textContent || '') : '';
+            var m = text.replace(/\s+/g, '').match(/^([+-]?\d+(?:\.\d+)?)$/);
+            if (!m) return null;
+            var value = parseFloat(m[1]);
+            return isFinite(value) ? value : null;
+          }
+          // Top WPA of one row. Returns { id, delta } or null when no card in
+          // the row carries both a readable id and a reading.
+          function bestOf(cards, iconTag, resolveId) {
+            var best = null;
+            for (var i = 0; i < cards.length; i++) {
+              var delta = deltaOf(cards[i]);
+              if (delta === null) continue;
+              var id = resolveId(iconSrc(cards[i], iconTag));
+              if (!id) continue;
+              // Strictly greater keeps the site's own order on a tie.
+              if (best === null || delta > best.delta) best = { id: id, delta: delta };
+            }
+            return best;
+          }
+          function treeOf(cards) {
+            for (var i = 0; i < cards.length; i++) {
+              var m = iconSrc(cards[i], 'clr-rune-icon')
+                .match(/\/perk-images\/Styles\/([A-Za-z]+)\//);
+              if (m) {
+                var id = lookup(TREE_MAP, norm(m[1]));
+                if (id) return id;
+              }
+            }
+            return 0;
+          }
+
+          var keystoneRows = rowsUnder('.primary-runes', 'keystone-selector');
+          if (!keystoneRows.length) return fail('the runes page showed no keystone row');
+          var primaryRows = rowsUnder('.primary-runes', 'secondary-selector');
+          if (primaryRows.length !== 3)
+            return fail('the runes page showed ' + primaryRows.length + ' primary rune rows, not 3');
+          var secondaryRows = rowsUnder('.secondary-runes', 'secondary-selector');
+          if (secondaryRows.length !== 3)
+            return fail('the runes page showed ' + secondaryRows.length + ' secondary rune rows, not 3');
+          var shardRows = rowsUnder('.modifier-shards', 'shard-selector');
+          if (shardRows.length !== 3)
+            return fail('the runes page showed ' + shardRows.length + ' shard rows, not 3');
+
+          var primaryStyleId = treeOf(keystoneRows[0]);
+          if (!primaryStyleId) return fail('the runes page did not name its primary tree');
+          var subStyleId = treeOf(secondaryRows[0]);
+          if (!subStyleId) return fail('the runes page did not name its secondary tree');
+
+          var keystone = bestOf(keystoneRows[0], 'clr-rune-icon', perkId);
+          if (!keystone) return fail('no keystone on the runes page carried a WPA reading');
+
+          var perkIds = [keystone.id];
+          for (var r = 0; r < 3; r++) {
+            var pick = bestOf(primaryRows[r], 'clr-rune-icon', perkId);
+            if (!pick) return fail('primary rune row ' + (r + 1) + ' carried no WPA reading');
+            perkIds.push(pick.id);
+          }
+
+          // The client takes TWO secondaries, from two different rows. Rank
+          // the rows by their own winner, keep the best two, and emit them in
+          // row order so the page reads the way the client draws it.
+          var ranked = [];
+          for (var s = 0; s < 3; s++) {
+            var top = bestOf(secondaryRows[s], 'clr-rune-icon', perkId);
+            if (top) ranked.push({ row: s, id: top.id, delta: top.delta });
+          }
+          if (ranked.length < 2)
+            return fail('only ' + ranked.length + ' secondary rune rows carried a WPA reading, need 2');
+          ranked.sort(function (a, b) { return b.delta - a.delta || a.row - b.row; });
+          var chosen = [ranked[0], ranked[1]];
+          chosen.sort(function (a, b) { return a.row - b.row; });
+          perkIds.push(chosen[0].id, chosen[1].id);
+
+          var shardIds = [];
+          for (var d = 0; d < 3; d++) {
+            var shard = bestOf(shardRows[d], 'cl-rune-shard-icon', shardId);
+            if (!shard) return fail('shard row ' + (d + 1) + ' carried no WPA reading');
+            shardIds.push(shard.id);
+          }
+
+          return JSON.stringify({
+            source: 'coachless',
+            championSlug: slug,
+            role: role,
+            runes: {
+              primaryStyleId: primaryStyleId,
+              subStyleId: subStyleId,
+              perkIds: perkIds,
+              shardIds: shardIds
+            },
+            itemBlocks: []
+          });
+        })();
+        """;
+
+    /// <summary>
+    /// The consent-wall step: dismiss a RECOGNIZED TCF consent dialog, once,
+    /// at the start of an import.
+    ///
+    /// <para>WHY IT EXISTS. Field log 2026-09-08 17:48:15 —
+    /// <c>auto-import: Coachless extraction failed (no build on page)</c>. A
+    /// hidden worker's first-ever load of either site hits the consent modal,
+    /// which is what the slot tables sit behind, so the walk discovers zero
+    /// slots and reports an honest but useless no-build. The user asked for
+    /// this import; clicking the dialog they would have clicked is part of
+    /// that one sanctioned interaction, and nothing else about the read-only
+    /// rule moves.</para>
+    ///
+    /// <para>ANCHORS, off the same 2026-09-08 fixtures the extractors use, so
+    /// this recognizes exactly two dialogs and nothing else:</para>
+    /// <list type="bullet">
+    ///   <item>Coachless runs Quantcast Choice —
+    ///   <c>#qc-cmp2-container</c> holding <c>button#accept-btn</c> (its label
+    ///   is "AGREE"), see <c>coachless-jhin-adc.html</c>.</item>
+    ///   <item>u.gg runs Google Funding Choices —
+    ///   <c>.fc-consent-root</c> holding
+    ///   <c>button.fc-cta-consent</c> (aria-label "Consent"), see
+    ///   <c>ugg-jhin-adc.html</c>.</item>
+    /// </list>
+    ///
+    /// <para>It clicks the ACCEPT control specifically, never a
+    /// "reject"/"more options" sibling, and never a button it merely guessed
+    /// at by text: an unrecognized wall stays up and the import fails
+    /// honestly, which is the same outcome as before this existed. Returns
+    /// <c>{ dismissed, reason }</c> — <c>dismissed:false</c> with
+    /// <c>reason:"none"</c> is the ordinary case on every load after the
+    /// first.</para>
+    /// </summary>
+    public const string ConsentDismissTemplate = """
+        (function () {
+          function done(dismissed, reason) {
+            return JSON.stringify({ dismissed: !!dismissed, reason: reason });
+          }
+          function shown(el) {
+            if (!el) return false;
+            if (typeof el.offsetParent !== 'undefined' && el.offsetParent === null) {
+              // offsetParent is null for position:fixed too, which every one
+              // of these overlays is -- fall back to the box.
+              if (!el.getClientRects || !el.getClientRects().length) return false;
+            }
+            return true;
+          }
+          var WALLS = [
+            { site: 'coachless', root: '#qc-cmp2-container', accept: '#accept-btn' },
+            { site: 'u.gg', root: '.fc-consent-root', accept: 'button.fc-cta-consent' }
+          ];
+          // An already-accepted profile often keeps the consent SHELL in the
+          // DOM with its buttons torn out. That is not a wall, so it must not
+          // stop the scan -- note it and keep looking, or a leftover shell on
+          // one site would mask the other's live dialog.
+          var seen = 'none';
+          for (var i = 0; i < WALLS.length; i++) {
+            var root = document.querySelector(WALLS[i].root);
+            if (!root || !shown(root)) continue;
+            var accept = root.querySelector(WALLS[i].accept);
+            if (!accept) { seen = 'wall-without-accept'; continue; }
+            if (!shown(accept)) { seen = 'accept-hidden'; continue; }
+            if (typeof MouseEvent === 'function') {
+              accept.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            } else if (accept.click) {
+              accept.click();
+            }
+            return done(true, WALLS[i].site);
+          }
+          return done(false, seen);
+        })();
+        """;
+
     private static readonly string BuiltUGgScript = UGgTemplate
         .Replace("__PERK_MAP_JSON__", PerkIconMap.ToJson(), StringComparison.Ordinal)
         .Replace("__SHARD_MAP_JSON__", ShardIconMap.ToJson(), StringComparison.Ordinal);
@@ -474,8 +781,19 @@ public static class SiteImportExtractors
             """{"action":"inspect"}""",
             StringComparison.Ordinal);
 
+    private static readonly string BuiltCoachlessRunesScript = CoachlessRunesTemplate
+        .Replace("__PERK_MAP_JSON__", PerkIconMap.ToJson(), StringComparison.Ordinal)
+        .Replace("__SHARD_MAP_JSON__", ShardIconMap.ToCoachlessJson(), StringComparison.Ordinal)
+        .Replace("__TREE_MAP_JSON__", PerkTreeNames.ToJson(), StringComparison.Ordinal);
+
     /// <summary>The runnable u.gg extractor: template with both icon tables injected.</summary>
     public static string UGgScript => BuiltUGgScript;
+
+    /// <summary>The runnable Coachless runes-page extractor, with all three tables injected.</summary>
+    public static string CoachlessRunesScript => BuiltCoachlessRunesScript;
+
+    /// <summary>The runnable consent-dismiss step. No tables to inject.</summary>
+    public static string ConsentDismissScript => ConsentDismissTemplate;
 
     /// <summary>
     /// A runnable Coachless step script for one sequencer step: the
@@ -567,6 +885,27 @@ public static class SiteImportExtractors
             && string.Equals(segments[1], "champions", StringComparison.OrdinalIgnoreCase)
             && segments[2].Length > 0
             && string.Equals(segments[3], "build", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// <c>coachless.gg/runes/tree/{slug}/{primary}/{secondary}</c> — the
+    /// per-slot WPA runes page. The tree pair is accepted as rendered, not as
+    /// requested: the site redirects a probe pair to its own recommendation,
+    /// so pinning the pair here would refuse the page we actually landed on.
+    /// </summary>
+    public static bool IsCoachlessRunesUrl(Uri uri)
+    {
+        if (uri is null) return false;
+        if (!uri.Scheme.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.Equals(uri.Host, "coachless.gg", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(uri.Host, "www.coachless.gg", StringComparison.OrdinalIgnoreCase)) return false;
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length == 5
+            && string.Equals(segments[0], "runes", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(segments[1], "tree", StringComparison.OrdinalIgnoreCase)
+            && segments[2].Length > 0
+            && PerkTreeNames.Resolve(segments[3]) > 0
+            && PerkTreeNames.Resolve(segments[4]) > 0;
     }
 
     /// <summary><c>coachless.gg/builds/{slug}</c> exactly (not <c>/builds/creator</c>).</summary>

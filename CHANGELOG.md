@@ -1,5 +1,106 @@
 # Changelog
 
+## Desktop 2.1.0 — field-test fixes (2026-09-08)
+
+Six defects found by playing real games on 2.0.1, not by reading the code.
+Evidence: `_research/site-import/user-evidence/companion-field-test.log` and the
+screenshots beside it.
+
+### Coachless now imports a full rune page
+
+The builds overview ranks keystones only, so a Coachless import was honestly
+items-only ("no rune page on this site"). Coachless ranks the rest of the tree
+on a **separate** page, `/runes/tree/{slug}/{primary}/{secondary}?role={role}`,
+and the auto-import now reads it.
+
+- The tree pair in the path is a **probe, not a claim**: the site snaps any
+  valid pair to the one it recommends (verified in a browser 2026-09-08 —
+  `nasus/precision/domination` redirected to `nasus/precision/resolve`). The
+  extractor therefore reads both tree ids off the rendered perk icons'
+  `/perk-images/Styles/{Tree}/` segment, never off the URL.
+- The page has **no tables** — it groups `cl-rune-card` elements into one
+  container per slot row (`.primary-runes .keystone-selector`, three
+  `.primary-runes .secondary-selector`, three
+  `.secondary-runes .secondary-selector`, three
+  `.modifier-shards .shard-selector`), so the extractor reads rows directly
+  instead of chunking by threes.
+- The pick is top WPA per row, then the best **two rows** for the secondary
+  tree (the client takes two secondaries from two different rows). Cards the
+  site has no sample for render `is-empty` with a `-.--` delta and are skipped,
+  never read as zero.
+- Coachless serves its own short stat icons (`as`/`ah`/`ms`/`health`), so
+  `ShardIconMap.CoachlessAliases` maps them onto the ids the shard-row check
+  already accepts. u.gg's injected table is unchanged.
+- Every failure is typed and names the missing part ("primary rune row 2
+  carried no WPA reading"); nothing partial is ever written, and the write goes
+  through the same 0.127.0 validator and `RuneApplyService` the u.gg button uses.
+- **Related fix:** `SiteImportPayload.TryParse` used to flatten every reason
+  that was not "no build" into a generic "site page not recognized", which would
+  have discarded exactly this detail. Reasons now pass through, sanitized and
+  length-capped.
+
+### MyStats (op.gg) opens the user's own profile
+
+The field log contained **zero** `opgg:` lines for a whole session: the tab
+silently fell back to op.gg home. Two causes, both fixed.
+
+- **Timing.** The profile was resolved once, on the tab's first navigation. The
+  log shows ~60s of "League client not connected" at launch, so opening MyStats
+  early resolved nothing and never tried again. The resolve is now retried on
+  the rising edge of the LCU connection, and navigates **only** if the tab is
+  still on op.gg's own landing page — a profile the user chose is left alone.
+- **Silence.** Failures were swallowed. Both branches now log one line:
+  `opgg: profile resolved {region}/{name}-{tag}` or
+  `opgg: identity unavailable (…) -- opening home`.
+
+### One chrome row instead of two
+
+The URL text box (a 300px read-only label in a window with no address bar) and
+the Zoom −/100%/+ cluster are gone; back/forward/refresh survive as small
+buttons at the head of the tab strip. The content area gains 74px. Zoom is
+unaffected: Ctrl +/−/0 are now explicit shortcuts on the window, WebView2's own
+Ctrl+scroll still works, and per-site zoom still persists.
+
+### Rune and item set names never say "Unknown"
+
+A practice tool or custom lobby assigns no position, and the 2.0.1 template
+stamped `CoachBuild import: Nasus Unknown (u.gg)` into the client. A missing
+role is now omitted (`CoachBuild import: Nasus (u.gg)`), in page titles, item
+set titles and status lines alike. The roleless title is deliberately a
+different page from the roled one.
+
+### The consent wall no longer breaks a fresh import
+
+Field log 17:48:15 — `auto-import: Coachless extraction failed (no build on
+page)`. The slot tables sit behind a TCF consent modal. Two independent causes:
+
+- **Profile divergence (the root bug).** When the site tab had not been opened,
+  the hidden worker fell back to a private `auto-{site}` Chromium profile, so
+  accepting consent in the visible tab did nothing for it and the wall returned
+  on every run. Workers now use the site's own profile folder — one acceptance,
+  shared cookies, as the 1.3.0 brief always required.
+- **The wall itself.** At the start of every import the worker dismisses a
+  *recognized* dialog once (`#qc-cmp2-container #accept-btn` on Coachless,
+  `.fc-consent-root button.fc-cta-consent` on u.gg — both read off the captured
+  fixtures) and logs `{site}: dismissed consent dialog`. It clicks the accept
+  control only, never a reject/more-options sibling, and never guesses a button
+  by its text: an unrecognized wall stays up and the import fails honestly.
+
+### Memory: WebView2 trees are handed back
+
+Measured on the user's machine: ~2.1GB of WebView2 utility processes at 81% of
+system RAM against a ~55MB `CoachBuild.Desktop`.
+
+- Import workers are disposed after **every** run, success or failure, instead
+  of at window close.
+- A site tab not visible for 10 minutes (`SiteTabIdlePolicy.IdleTimeout`, the
+  one place the number lives) has its WebView2 disposed. The tab button stays
+  and revisiting recreates it through the existing lazy path; profile
+  directories persist, so cookies, consent and sign-ins survive.
+- The visible tab and the Draft tab are never torn down. One line is logged per
+  teardown and per recreation. The decision is a pure function
+  (`SiteTabIdlePolicy.Decide`) and is unit-tested without a browser.
+
 ## Desktop 2.0.0 — local-first shell, hosted web app retired (2026-09-08)
 
 **The product is now one Windows application.** There is no website, no

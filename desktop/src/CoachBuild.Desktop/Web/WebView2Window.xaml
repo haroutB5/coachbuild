@@ -65,6 +65,16 @@
             </Setter>
         </Style>
 
+        <!-- Small back/forward/refresh for the merged single chrome row. Same
+             template as IconButton, tighter box, so they read as chrome
+             beside the tab strip rather than competing with it. -->
+        <Style x:Key="NavButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+            <Setter Property="Padding" Value="9,4" />
+            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="MinWidth" Value="30" />
+        </Style>
+
         <Style x:Key="TabButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
@@ -128,8 +138,15 @@
     </Window.Resources>
 
     <Grid Background="{StaticResource CanvasBrush}">
+        <!-- 2.1.0: ONE chrome row, not two.
+             The URL text box and the Zoom -/100%/+ cluster are gone: the
+             window has no address bar to type into, so the box was a 300px
+             read-only label, and zoom keeps its keyboard shortcuts and its
+             per-site persistence (CompanionTabsPreferences) without three
+             permanent controls. Back/forward/refresh survive as small buttons
+             at the head of the tab row. Net: the 74px row is gone and the
+             content area is 74px taller. -->
         <Grid.RowDefinitions>
-            <RowDefinition Height="74" />
             <RowDefinition Height="56" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -140,108 +157,35 @@
                 Background="{StaticResource ChromeBrush}"
                 BorderBrush="{StaticResource LineBrush}"
                 BorderThickness="0,0,0,1">
-            <Grid Margin="24,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="260" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-
-                <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="COACH"
-                                   Style="{StaticResource ChromeText}"
-                                   Foreground="{StaticResource GoldBrush}"
-                                   FontSize="18"
-                                   FontWeight="Bold" />
-                        <TextBlock Text="BUILD"
-                                   Style="{StaticResource ChromeText}"
-                                   FontSize="18"
-                                   FontWeight="Bold" />
-                    </StackPanel>
-                    <TextBlock Text="Research console"
-                               Style="{StaticResource ChromeText}"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               FontSize="11"
-                               Margin="1,2,0,0" />
-                </StackPanel>
-
-                <StackPanel Grid.Column="1"
-                            Orientation="Horizontal"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center">
+            <Grid Margin="18,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Style="{StaticResource ChromeText}"
+                               FontSize="15"
+                               FontWeight="Bold"
+                               VerticalAlignment="Center"
+                               Margin="0,0,14,0">
+                        <Run Text="COACH" Foreground="{StaticResource GoldBrush}" />
+                        <Run Text="BUILD" />
+                    </TextBlock>
                     <Button x:Name="BackButton"
-                            Style="{StaticResource IconButton}"
+                            Style="{StaticResource NavButton}"
                             Content="‹"
                             ToolTip="Back"
                             Click="OnBackClick" />
                     <Button x:Name="ForwardButton"
-                            Style="{StaticResource IconButton}"
+                            Style="{StaticResource NavButton}"
                             Content="›"
                             ToolTip="Forward"
                             Click="OnForwardClick" />
                     <Button x:Name="RefreshButton"
-                            Style="{StaticResource IconButton}"
+                            Style="{StaticResource NavButton}"
                             Content="↻"
                             ToolTip="Refresh"
-                            Click="OnRefreshClick" />
-                    <Border Background="#091727"
-                            BorderBrush="#1D3851"
-                            BorderThickness="1"
-                            CornerRadius="8"
-                            Height="37"
-                            Width="300"
-                            Padding="12,0"
-                            VerticalAlignment="Center">
-                        <TextBlock x:Name="AddressText"
-                                   Text="Ready"
-                                   Style="{StaticResource ChromeText}"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   TextTrimming="CharacterEllipsis"
-                                   VerticalAlignment="Center"
-                                   FontSize="12" />
-                    </Border>
-                </StackPanel>
-
-                <StackPanel Grid.Column="2"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Center">
-                    <TextBlock Text="Zoom"
-                               Style="{StaticResource ChromeText}"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               FontSize="11"
-                               VerticalAlignment="Center"
-                               Margin="0,0,8,0" />
-                    <Button x:Name="ZoomOutButton"
-                            Style="{StaticResource IconButton}"
-                            Content="−"
-                            ToolTip="Zoom out"
-                            Click="OnZoomOutClick" />
-                    <TextBlock x:Name="ZoomText"
-                               Text="100%"
-                               Style="{StaticResource ChromeText}"
-                               Foreground="{StaticResource GoldBrightBrush}"
-                               Width="43"
-                               TextAlignment="Center"
-                               VerticalAlignment="Center"
-                               FontSize="12"
-                               FontWeight="SemiBold" />
-                    <Button x:Name="ZoomInButton"
-                            Style="{StaticResource IconButton}"
-                            Content="+"
-                            ToolTip="Zoom in"
-                            Click="OnZoomInClick"
-                            Margin="0" />
-                </StackPanel>
-            </Grid>
-        </Border>
-
-        <Border Grid.Row="1"
-                Background="#091727"
-                BorderBrush="{StaticResource LineBrush}"
-                BorderThickness="0,0,0,1">
-            <Grid Margin="18,0">
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            Click="OnRefreshClick"
+                            Margin="0,0,12,0" />
+                    <Border Width="1"
+                            Background="{StaticResource LineBrush}"
+                            Margin="0,10,12,10" />
                     <Button x:Name="CompanionTabButton"
                             Style="{StaticResource TabButton}"
                             Content="✦  Draft"
@@ -275,7 +219,7 @@
         </Border>
 
         <Border x:Name="OfferBar"
-                Grid.Row="2"
+                Grid.Row="1"
                 Background="#172A3A"
                 BorderBrush="#385873"
                 BorderThickness="0,0,0,1"
@@ -331,7 +275,7 @@
         </Border>
 
         <Grid x:Name="ContentHost"
-              Grid.Row="3"
+              Grid.Row="2"
               Background="{StaticResource SiteCanvasBrush}">
             <Grid x:Name="BrowserHost" />
 
@@ -438,7 +382,7 @@
             </Grid>
         </Grid>
 
-        <Border Grid.Row="4"
+        <Border Grid.Row="3"
                 Background="#07111D"
                 BorderBrush="#1C354C"
                 BorderThickness="0,1,0,0">

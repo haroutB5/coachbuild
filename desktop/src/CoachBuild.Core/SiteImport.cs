@@ -131,13 +131,50 @@ public sealed record SiteImportPayload(
         }
     }
 
+    /// <summary>
+    /// The extractor's own reason, kept.
+    ///
+    /// <para>Until 2.1.0 this collapsed EVERYTHING that was not "no build"
+    /// into the generic <see cref="SiteImportFailures.NotRecognized"/>. That
+    /// was harmless while the only extractor errors were two canned strings,
+    /// and actively wrong once the Coachless runes extractor started naming
+    /// the exact missing part ("primary rune row 2 carried no WPA reading") —
+    /// the honest per-part failure the import is supposed to report was being
+    /// thrown away one layer above where it was produced.</para>
+    ///
+    /// <para>The two canned reasons still normalize (callers match on them).
+    /// Anything else is passed through, but SANITIZED first: these strings
+    /// reach a status line and a log file, and although every one of them is
+    /// authored by our own scripts, the script runs on a third-party page and
+    /// some of them interpolate page-derived text (a slot title). So control
+    /// characters go, whitespace collapses, and the length is capped.</para>
+    /// </summary>
     private static string NormalizeExtractorError(string error)
     {
         var normalized = error.Trim().ToLowerInvariant();
-        return normalized.Contains("no build", StringComparison.Ordinal)
-            ? SiteImportFailures.NoBuild
-            : SiteImportFailures.NotRecognized;
+        if (normalized.Contains("no build", StringComparison.Ordinal))
+            return SiteImportFailures.NoBuild;
+        // "not a champion build page", "not a champion runes page", "not a
+        // build page" -- every extractor's this-is-the-wrong-page reason.
+        if (normalized.Contains("not recognized", StringComparison.Ordinal) ||
+            (normalized.StartsWith("not a ", StringComparison.Ordinal) &&
+             normalized.EndsWith(" page", StringComparison.Ordinal)))
+            return SiteImportFailures.NotRecognized;
+
+        var cleaned = new string(error
+            .Trim()
+            .Select(character => char.IsControl(character) ? ' ' : character)
+            .ToArray());
+        cleaned = string.Join(' ', cleaned.Split(
+            ' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        if (cleaned.Length == 0) return SiteImportFailures.NotRecognized;
+        return cleaned.Length <= MaxExtractorErrorLength
+            ? cleaned
+            : cleaned[..MaxExtractorErrorLength].TrimEnd() + "…";
     }
+
+    /// <summary>Cap on a passed-through extractor reason, so a status line stays a line.</summary>
+    private const int MaxExtractorErrorLength = 160;
 
     private static bool TryReadSource(string? value, out SiteImportSource source)
     {
@@ -442,8 +479,74 @@ public static class ShardIconMap
             || ByName.TryGetValue(Normalize(value), out shardId);
     }
 
+    /// <summary>
+    /// Coachless's own shard icon filenames, folded into the same table.
+    ///
+    /// <para>Coachless does NOT serve ddragon's StatMods filenames — it
+    /// serves its own short stat icons (<c>cdn.coachless.gg/stat-icons/ah.png</c>).
+    /// Read off the 2026-09-08 <c>coachless-nasus-runes.html</c> fixture, whose
+    /// nine shard cards are, in the site's own DOM order,
+    /// [adaptiveforce, as, ah] / [adaptiveforce, ms, healthscaling] /
+    /// [health, tenacity, healthscaling] — which is exactly the client's
+    /// Offense/Flex/Defense shard grid with <c>as</c>=attack speed,
+    /// <c>ah</c>=ability haste, <c>ms</c>=move speed and <c>health</c>=flat
+    /// health. Each alias therefore lands on the id
+    /// <see cref="PerkTreeCatalog.ShardRows"/> already accepts for that row,
+    /// and the row check still rejects anything that does not.</para>
+    ///
+    /// <para>Kept SEPARATE from <see cref="ByName"/> on purpose: u.gg's
+    /// injected map must stay byte-identical, so only the Coachless runes
+    /// script is handed the merged table.</para>
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, int> CoachlessAliases =
+        new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["as"] = 5005,
+            ["ah"] = 5007,
+            ["ms"] = 5010,
+            ["health"] = 5001,
+        };
+
     public static string ToJson() =>
         JsonSerializer.Serialize(ByName, JsonOptions.Wire);
+
+    /// <summary>The table plus <see cref="CoachlessAliases"/>, for the Coachless runes script only.</summary>
+    public static string ToCoachlessJson()
+    {
+        var merged = new Dictionary<string, int>(ByName, StringComparer.Ordinal);
+        foreach (var (name, id) in CoachlessAliases) merged[name] = id;
+        return JsonSerializer.Serialize(merged, JsonOptions.Wire);
+    }
+}
+
+/// <summary>
+/// Rune-tree style ids by the lowercase tree name both the Coachless runes
+/// URL (<c>/runes/tree/nasus/precision/resolve</c>) and every site's perk
+/// icon path (<c>/perk-images/Styles/Precision/…</c>) spell out. The ids are
+/// the same five <see cref="PerkTreeCatalog.Trees"/> keys — this is only the
+/// name column, so a page that names a tree in words can be read without a
+/// second catalog to drift.
+/// </summary>
+public static class PerkTreeNames
+{
+    public static readonly IReadOnlyDictionary<string, int> StyleIdsByName =
+        new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["precision"] = 8000,
+            ["domination"] = 8100,
+            ["sorcery"] = 8200,
+            ["inspiration"] = 8300,
+            ["resolve"] = 8400,
+        };
+
+    public static int Resolve(string? name) =>
+        name is not null &&
+        StyleIdsByName.TryGetValue(name.Trim().ToLowerInvariant(), out var id)
+            ? id
+            : 0;
+
+    public static string ToJson() =>
+        JsonSerializer.Serialize(StyleIdsByName, JsonOptions.Wire);
 }
 
 /// <summary>
@@ -464,7 +567,19 @@ public static class SiteImportValidator
         _ => "the site",
     };
 
-    public static string RoleLabel(string? role) => role?.Trim().ToLowerInvariant() switch
+    /// <summary>
+    /// The display label for a role token, or NULL when the page named no
+    /// role we recognize.
+    ///
+    /// <para>Null, not <c>"Unknown"</c>. Practice tool and custom lobbies
+    /// assign no position, so champ select hands the import an empty role and
+    /// the 2.0.1 template stamped the literal word into the client:
+    /// <c>CoachBuild import: Nasus Unknown (u.gg)</c> (field-tested
+    /// 2026-09-08). A missing role is an absence to omit, never a value to
+    /// print — every caller composes through <see cref="PageTitle"/> or
+    /// <see cref="ChampionLabel"/>, which drop the role entirely.</para>
+    /// </summary>
+    public static string? RoleLabel(string? role) => role?.Trim().ToLowerInvariant() switch
     {
         "top" => "Top",
         "jungle" or "jg" or "jun" => "Jungle",
@@ -472,17 +587,31 @@ public static class SiteImportValidator
         "adc" or "bottom" or "bot" or "carry" => "ADC",
         "support" or "sup" or "utility" => "Support",
         { Length: > 0 } raw => char.ToUpperInvariant(raw[0]) + raw[1..],
-        _ => "Unknown",
+        _ => null,
     };
 
     /// <summary>
+    /// The champion as a status line names it: <c>Nasus (Top)</c> with a
+    /// role, bare <c>Nasus</c> without one.
+    /// </summary>
+    public static string ChampionLabel(string championName, string? role) =>
+        RoleLabel(role) is { } label ? $"{championName} ({label})" : championName;
+
+    /// <summary>
     /// The shared page title for both writes, e.g.
-    /// <c>CoachBuild import: Jhin ADC (u.gg)</c>. CoachBuild-prefixed so both
-    /// apply gates accept it, and exact-title reuse in
+    /// <c>CoachBuild import: Jhin ADC (u.gg)</c> — or, when the lobby assigned
+    /// no role, <c>CoachBuild import: Nasus (u.gg)</c>. CoachBuild-prefixed so
+    /// both apply gates accept it, and exact-title reuse in
     /// <see cref="RuneApplyService"/> means a re-import edits the same page.
+    ///
+    /// <para>The roleless title is a DIFFERENT title, so a roleless import
+    /// edits its own page rather than overwriting a roled one. That is
+    /// deliberate: the two really are different builds.</para>
     /// </summary>
     public static string PageTitle(string championName, string? role, SiteImportSource source) =>
-        $"CoachBuild import: {championName} {RoleLabel(role)} ({Label(source)})";
+        RoleLabel(role) is { } label
+            ? $"CoachBuild import: {championName} {label} ({Label(source)})"
+            : $"CoachBuild import: {championName} ({Label(source)})";
 
     public static string? ValidateRunes(SiteImportRunes? runes)
     {
@@ -662,9 +791,9 @@ public static class SiteImportApplier
                 $"runes applied to \"{title}\", but the item set was rejected ({itemFailure.Hint ?? itemFailure.Reason})");
 
         var totalItems = payload.ItemBlocks.Sum(block => block.ItemIds.Count);
-        var roleLabel = SiteImportValidator.RoleLabel(payload.Role);
+        var who = SiteImportValidator.ChampionLabel(championName, payload.Role);
         return new SiteImportSuccess(
-            $"Imported runes + {totalItems}-item set for {championName} ({roleLabel}) from {SiteImportValidator.Label(payload.Source)}");
+            $"Imported runes + {totalItems}-item set for {who} from {SiteImportValidator.Label(payload.Source)}");
     }
 
     /// <summary>
@@ -703,9 +832,9 @@ public static class SiteImportApplier
                 runeFailure.Reason,
                 $"runes not applied ({runeFailure.Hint ?? runeFailure.Reason}) -- nothing was imported");
 
-        var roleLabel = SiteImportValidator.RoleLabel(payload.Role);
+        var who = SiteImportValidator.ChampionLabel(championName, payload.Role);
         return new SiteImportSuccess(
-            $"Imported runes for {championName} ({roleLabel}) from {SiteImportValidator.Label(payload.Source)}");
+            $"Imported runes for {who} from {SiteImportValidator.Label(payload.Source)}");
     }
 
     /// <summary>
@@ -778,9 +907,10 @@ public static class SiteImportApplier
         foreach (var (contribution, _) in valid)
         {
             var totalItems = contribution.Payload.ItemBlocks.Sum(block => block.ItemIds.Count);
-            var roleLabel = SiteImportValidator.RoleLabel(contribution.Payload.Role);
+            var who = SiteImportValidator.ChampionLabel(
+                contribution.ChampionName, contribution.Payload.Role);
             results.Add(new SiteImportSuccess(
-                $"Auto-imported {totalItems}-item set for {contribution.ChampionName} ({roleLabel}) from {SiteImportValidator.Label(contribution.Payload.Source)}"));
+                $"Auto-imported {totalItems}-item set for {who} from {SiteImportValidator.Label(contribution.Payload.Source)}"));
         }
         return results;
     }

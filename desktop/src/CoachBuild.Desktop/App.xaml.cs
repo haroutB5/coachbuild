@@ -1090,7 +1090,8 @@ public partial class App : WpfApplication
                     createdWindow.AttachAutoImport(
                         coreServices.AutoImportItemSets,
                         coreServices.ChampionDirectory,
-                        line => _log?.Info(line));
+                        line => _log?.Info(line),
+                        coreServices.AutoImportRunes);
                 }
                 _webView = createdWindow;
                 createdWindow.Closed += OnWebViewClosed;
@@ -1540,11 +1541,19 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         new OpGgProfileResolver(_lcu).ResolveAsync(cancellationToken);
 
     /// <summary>
-    /// The bridge's item-set service for the window's automatic import. The
-    /// auto path writes ITEM SETS ONLY (the runes button owns rune pages),
-    /// so this is the one LCU writer it ever receives.
+    /// The bridge's item-set service for the window's automatic import.
     /// </summary>
     public ItemSetApplyService AutoImportItemSets => _bridge.ItemSetApplyService;
+
+    /// <summary>
+    /// The bridge's rune service for the automatic import's Coachless RUNES
+    /// leg (2.1.0). Until 2.1.0 the auto path wrote item sets only and the
+    /// runes button owned every rune page; Coachless's per-slot WPA runes
+    /// page changed that, so the auto path now also writes a full rune page
+    /// when it can read a complete one. Same service, same 0.127.0 validator,
+    /// same exact-title reuse as the button.
+    /// </summary>
+    public RuneApplyService AutoImportRunes => _bridge.RuneApplyService;
 
     /// <summary>
     /// The roster the auto-import resolves payload slugs through (by id, so

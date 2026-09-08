@@ -259,6 +259,244 @@ public sealed class SiteImportTests
             SiteImportValidator.PageTitle("Ahri", "mid", SiteImportSource.Coachless));
     }
 
+    // A practice tool / custom lobby assigns no position, so champ select
+    // hands the import an empty role. 2.0.1 stamped the literal word into the
+    // client ("CoachBuild import: Nasus Unknown (u.gg)", field-tested
+    // 2026-09-08). The role must be OMITTED, never named.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Unknown_role_is_omitted_from_the_page_title(string? role)
+    {
+        var title = SiteImportValidator.PageTitle("Nasus", role, SiteImportSource.UGg);
+
+        Assert.Equal("CoachBuild import: Nasus (u.gg)", title);
+        Assert.DoesNotContain("Unknown", title, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(SiteImportValidator.RoleLabel(role));
+        Assert.Equal("Nasus", SiteImportValidator.ChampionLabel("Nasus", role));
+    }
+
+    [Fact]
+    public void Known_role_still_rides_in_the_title_and_the_status_label()
+    {
+        Assert.Equal(
+            "CoachBuild import: Nasus Top (u.gg)",
+            SiteImportValidator.PageTitle("Nasus", "top", SiteImportSource.UGg));
+        Assert.Equal("Nasus (Top)", SiteImportValidator.ChampionLabel("Nasus", "top"));
+    }
+
+    // The two shapes must not collide: exact-title reuse means a roleless
+    // import would otherwise edit the roled page.
+    [Fact]
+    public void Roleless_and_roled_titles_are_distinct_pages()
+    {
+        Assert.NotEqual(
+            SiteImportValidator.PageTitle("Nasus", null, SiteImportSource.UGg),
+            SiteImportValidator.PageTitle("Nasus", "top", SiteImportSource.UGg));
+    }
+
+    // ── Extractor reasons survive the parse ──────────────────────────────────
+
+    /// <summary>
+    /// The brief for the Coachless runes page asks for an honest typed
+    /// failure PER MISSING PART. That only works if the reason the script
+    /// authored survives the parser, which before 2.1.0 it did not — every
+    /// reason but "no build" was flattened to "site page not recognized".
+    /// </summary>
+    [Fact]
+    public void A_precise_extractor_reason_reaches_the_caller()
+    {
+        Assert.False(SiteImportPayload.TryParse(
+            """{"error":"primary rune row 2 carried no WPA reading"}""",
+            out var payload,
+            out var failure));
+
+        Assert.Null(payload);
+        Assert.Equal("primary rune row 2 carried no WPA reading", failure);
+    }
+
+    // The two canned reasons still normalize: callers match on them by name.
+    [Theory]
+    [InlineData("""{"error":"no build on page"}""", SiteImportFailures.NoBuild)]
+    [InlineData("""{"error":"not a champion build page"}""", SiteImportFailures.NotRecognized)]
+    [InlineData("""{"error":"not a champion runes page"}""", SiteImportFailures.NotRecognized)]
+    [InlineData("""{"error":"not a build page"}""", SiteImportFailures.NotRecognized)]
+    public void The_canned_extractor_reasons_still_normalize(string raw, string expected)
+    {
+        Assert.False(SiteImportPayload.TryParse(raw, out _, out var failure));
+        Assert.Equal(expected, failure);
+    }
+
+    /// <summary>
+    /// A passed-through reason reaches a status line and a log file, and some
+    /// reasons interpolate page-derived text (a slot title). So it is
+    /// sanitized: no control characters, no newlines, bounded length.
+    /// </summary>
+    [Fact]
+    public void A_passed_through_reason_is_sanitized()
+    {
+        Assert.False(SiteImportPayload.TryParse(
+            "{\"error\":\"slot \\\"1st\\r\\nItem\\\"  \\t had\\u0000 no rows\"}",
+            out _,
+            out var failure));
+
+        Assert.DoesNotContain('\n', failure);
+        Assert.DoesNotContain('\r', failure);
+        Assert.DoesNotContain('\0', failure);
+        Assert.DoesNotContain("  ", failure, StringComparison.Ordinal);
+        Assert.Contains("had no rows", failure, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_very_long_reason_is_capped_to_one_line()
+    {
+        var shouted = new string('x', 500);
+        Assert.False(SiteImportPayload.TryParse(
+            $$"""{"error":"{{shouted}}"}""", out _, out var failure));
+
+        Assert.True(failure.Length < 200, $"reason was {failure.Length} chars");
+        Assert.EndsWith("…", failure, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_blank_reason_falls_back_to_the_canned_one()
+    {
+        Assert.False(SiteImportPayload.TryParse("""{"error":"   "}""", out _, out var failure));
+        Assert.Equal(SiteImportFailures.NotRecognized, failure);
+    }
+
+    // ── Coachless runes page: the tables its extractor needs ─────────────────
+
+    [Theory]
+    [InlineData("precision", 8000)]
+    [InlineData("domination", 8100)]
+    [InlineData("sorcery", 8200)]
+    [InlineData("inspiration", 8300)]
+    [InlineData("resolve", 8400)]
+    [InlineData("Precision", 8000)]
+    public void Tree_names_resolve_to_the_catalog_style_ids(string name, int styleId)
+    {
+        Assert.Equal(styleId, PerkTreeNames.Resolve(name));
+        // Control: the name column must not drift from the slot catalog.
+        Assert.True(PerkTreeCatalog.Trees.ContainsKey(styleId));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("preciseness")]
+    public void An_unknown_tree_name_resolves_to_zero_not_a_guess(string? name)
+    {
+        Assert.Equal(0, PerkTreeNames.Resolve(name));
+    }
+
+    // Coachless serves its own short stat icons, so the shared ddragon table
+    // alone cannot read its shard rows. Each alias must land on an id the
+    // shard-row check already accepts for the row it appears in.
+    [Theory]
+    [InlineData("as", 5005, 0)]
+    [InlineData("ah", 5007, 0)]
+    [InlineData("ms", 5010, 1)]
+    [InlineData("health", 5001, 1)]
+    public void Coachless_shard_aliases_land_on_ids_valid_for_their_row(
+        string alias, int shardId, int row)
+    {
+        Assert.Equal(shardId, ShardIconMap.CoachlessAliases[alias]);
+        Assert.Contains(shardId, PerkTreeCatalog.ShardRows[row]);
+    }
+
+    [Fact]
+    public void The_coachless_shard_table_extends_the_shared_one_without_editing_it()
+    {
+        var merged = ShardIconMap.ToCoachlessJson();
+        var shared = ShardIconMap.ToJson();
+
+        // Every shared entry survives...
+        foreach (var (name, id) in ShardIconMap.ByName)
+            Assert.Contains($"\"{name}\":{id}", merged, StringComparison.Ordinal);
+        // ...every alias is added...
+        foreach (var (name, id) in ShardIconMap.CoachlessAliases)
+        {
+            Assert.Contains($"\"{name}\":{id}", merged, StringComparison.Ordinal);
+            // ...and none of them leaked into u.gg's table, which must stay
+            // byte-identical to what it was before Coachless needed aliases.
+            Assert.DoesNotContain($"\"{name}\":", shared, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The rune page the Coachless runes extractor must produce for the
+    /// captured fixture, checked against the SAME 0.127.0 validator the write
+    /// path uses.
+    ///
+    /// <para>The ids are not invented here: they are read off
+    /// <c>_research/site-import/coachless-nasus-runes.html</c> (Nasus top,
+    /// captured 2026-09-08) by applying the extractor's documented rule —
+    /// top WPA per slot row — to the rendered cards. Keystone row:
+    /// PressTheAttack -1.74, LethalTempo -4.22, <b>FleetFootwork +0.59</b>,
+    /// Conqueror -1.36. Primary rows: (AbsorbLife -2.46, Triumph -0.01,
+    /// <b>PresenceOfMind +0.78</b>), (LegendAlacrity -4.60,
+    /// <b>LegendHaste +0.05</b>, LegendBloodline -0.63),
+    /// (CoupDeGrace -1.41, <b>CutDown +0.59</b>, LastStand +0.02). Secondary
+    /// rows win at Demolish -0.26, <b>BonePlating +0.46</b> and
+    /// <b>Overgrowth +0.43</b> — the best TWO rows, so Demolish is dropped.
+    /// Shard rows win at <b>ah +0.27</b>, <b>ms +0.82</b>,
+    /// <b>tenacity +1.32</b>.</para>
+    ///
+    /// <para>If this page validates, the ids, the tree pair, the row
+    /// assignments and the two-different-rows secondary rule all agree with
+    /// the client's own rules. What it does NOT prove is that the JS reads
+    /// those cards — that needs the live page.</para>
+    /// </summary>
+    [Fact]
+    public void The_nasus_runes_fixture_page_passes_the_client_validator()
+    {
+        const int precision = 8000;
+        const int resolve = 8400;
+        int[] perks =
+        [
+            8021, // FleetFootwork  (keystone, +0.59)
+            8009, // PresenceOfMind (primary row 1, +0.78)
+            9105, // LegendHaste    (primary row 2, +0.05)
+            8017, // CutDown        (primary row 3, +0.59)
+            8473, // BonePlating    (secondary row 2, +0.46)
+            8451, // Overgrowth     (secondary row 3, +0.43)
+        ];
+        int[] shards = [5007, 5010, 5013]; // ah, ms, tenacity
+
+        Assert.Null(PerkTreeCatalog.ValidatePage(precision, resolve, perks, shards));
+
+        // The parts the pick rule depends on, asserted individually so a
+        // failure names which one moved.
+        Assert.True(PerkTreeCatalog.IsKeystoneOf(precision, 8021));
+        Assert.Equal(0, PerkTreeCatalog.MinorRow(precision, 8009));
+        Assert.Equal(1, PerkTreeCatalog.MinorRow(precision, 9105));
+        Assert.Equal(2, PerkTreeCatalog.MinorRow(precision, 8017));
+        // Two secondaries, two DIFFERENT rows -- that is why the walk keeps
+        // the best two rows rather than the best two runes.
+        Assert.Equal(1, PerkTreeCatalog.MinorRow(resolve, 8473));
+        Assert.Equal(2, PerkTreeCatalog.MinorRow(resolve, 8451));
+    }
+
+    /// <summary>
+    /// The mutant for the test above: taking the best two RUNES instead of
+    /// the best two ROWS would pick BonePlating (+0.46) and Overgrowth
+    /// (+0.43) here too — so the discriminating case is a page whose two best
+    /// runes share a row. That page must be REJECTED, which is what makes
+    /// the row rule load-bearing rather than incidental.
+    /// </summary>
+    [Fact]
+    public void Two_secondaries_from_one_row_are_rejected()
+    {
+        // Overgrowth and Revitalize are both Resolve minor row 2.
+        int[] sameRow = [8021, 8009, 9105, 8017, 8451, 8453];
+        Assert.Equal(2, PerkTreeCatalog.MinorRow(8400, 8451));
+        Assert.Equal(2, PerkTreeCatalog.MinorRow(8400, 8453));
+
+        Assert.NotNull(PerkTreeCatalog.ValidatePage(8000, 8400, sameRow, [5007, 5010, 5013]));
+    }
+
     // ── Applier orchestration at the LCU seam ────────────────────────────────
 
     private static SiteImportPayload JhinUgg() => new(

@@ -203,7 +203,7 @@ made them non-obvious. Do not re-derive them.
   before any upstream request. Four days of false "unhealthy" in 2026-07 came from
   asking u.gg for 60001.
 
-## What the site tabs do (unchanged from 1.3.x)
+## What the site tabs do
 
 `desktop/src/CoachBuild.Desktop/Web/` — `CompanionTabs.cs` is the whole pure layer
 (tab model, deep links, nav policy, preferences).
@@ -212,27 +212,69 @@ made them non-obvious. Do not re-derive them.
   directory (`WebView2/` for Draft — the legacy root, so an upgrade signs nobody
   out — plus `WebView2/ugg`, `/coachless`, `/opgg`). Cloudflare clearance and
   cookies persist per site without sharing storage with the app session.
+  **2.1.0: the hidden import workers use those same folders.** They used to fall
+  back to a private `auto-{site}` profile whenever the site tab had not been
+  opened, which meant consent accepted in the visible tab did nothing for the
+  worker — the standing cause of `Coachless extraction failed (no build on page)`.
 - `SiteNavigationPolicy` allows **https only, any host**, and refuses non-http
   schemes so a page cannot hand Windows a `steam:`/`ms-settings:` URI through
   `NewWindowRequested`. There is no address bar, so every navigation still starts
   from a link on a site the user chose.
 - **Read-mostly is structural, not a promise.** `SiteTabComplianceTests` fails the
-  build if an `ExecuteScriptAsync` call appears outside the four sanctioned
-  extractor families (`RunRunesImportAsync`, `RunCoachlessWalkAsync`,
-  `ExtractVisibleOnUiAsync`, `FetchViaWorkerAsync`) or if automated navigation
-  reaches any call site but the allowlisted worker fetch. **In 2.0.0 the count
-  dropped from five to four**: the fifth was the `coachbuild-version` meta read,
-  retired with the hosted page.
+  build if an `ExecuteScriptAsync` call appears outside the sanctioned extractor
+  families or if automated navigation reaches a call site that does not assert an
+  allowlist first. The list is **six** in 2.1.0 (`RunRunesImportAsync`,
+  `RunCoachlessWalkAsync`, `ExtractVisibleOnUiAsync`, `FetchViaWorkerOnUiAsync`,
+  `FetchCoachlessRunesOnUiAsync`, `DismissConsentAsync`) and automated navigation
+  has **two** entries, `NavigateWorkerAndWaitAsync` (build pages) and
+  `NavigateRunesWorkerAndWaitAsync` (the runes page), each asserting its own
+  allowlist before they share `NavigateAndWaitCoreAsync`. Widening either set is a
+  deliberate edit to a named list, never a silent drift.
+- **Consent walls** (2.1.0): at the start of an import the worker dismisses a
+  *recognized* TCF dialog once — `#qc-cmp2-container #accept-btn` (Coachless,
+  Quantcast Choice) or `.fc-consent-root button.fc-cta-consent` (u.gg, Google
+  Funding Choices), both read off the captured fixtures — and logs
+  `{site}: dismissed consent dialog`. Accept controls only; no text matching; an
+  unrecognized wall stays up and the import fails honestly.
 - **Auto item-set import** (`SiteAutoImport.cs`): on champ-select lock, once per
   champion+role, and on a visible build-page URL change, both sites' item sets are
   fetched in the background and written in **one merged call**, so the per-site
   `CoachBuild import: {Champ} {Role} (u.gg)` / `(Coachless)` titles coexist. Two
   sequential single-set writes would not — the merge drops every `CoachBuild*` set
   it reads, which is exactly why the batch exists.
-- **The Import runes button** is u.gg-only, one read-only script per click, hidden
-  on Coachless (there is no rune page there).
+- **Runes.** The u.gg **Import runes button** is one read-only script per click.
+  Since 2.1.0 the auto-import also writes runes for **Coachless**, from its
+  separate `/runes/tree/{slug}/{primary}/{secondary}?role=` page
+  (`CoachlessRunesTemplate`). The tree pair in the URL is a probe — the site
+  redirects to the pair it recommends, so the extractor reads both tree ids off
+  the rendered perk icons. Pick rule: top WPA per slot row, best **two rows** for
+  the secondary tree; `is-empty` cards (`-.--`) are skipped, never read as zero.
+  Any missing part is a typed failure naming it, and nothing partial is written.
+- **Roles may be absent.** Practice tool and custom lobbies assign no position.
+  `SiteImportValidator.RoleLabel` returns **null**, and `PageTitle` /
+  `ChampionLabel` omit it — never the literal word "Unknown" (2.0.1 shipped
+  `CoachBuild import: Nasus Unknown (u.gg)`).
 - **op.gg** resolves `gameName`/`tagLine` and the platform id from the LCU and
   opens the user's own profile; anything missing opens `op.gg` without guessing.
+  2.1.0 retries the resolve on the **rising edge of the LCU connection** (the tab
+  can be opened before the client is up, which is why a whole field-test session
+  produced zero `opgg:` lines), navigating only if the tab is still on op.gg home,
+  and logs both branches.
+- **Memory** (2.1.0). Import workers are disposed after every run. A site tab
+  invisible for `SiteTabIdlePolicy.IdleTimeout` (10 min, one constant) has its
+  WebView2 disposed; the tab button stays and revisiting recreates it lazily, with
+  cookies and sign-ins intact in the profile dir. The visible tab and Draft are
+  never torn down. `SiteTabIdlePolicy.Decide` is pure and unit-tested.
+
+### Verifying the extractors without a browser
+
+`node _research/site-import/verify-extractors.mjs` runs the **shipped
+const-string scripts verbatim** against the **real captured fixtures**
+(`ugg-jhin-adc.html`, `coachless-jhin-adc.html`, `coachless-nasus-runes.html`)
+through a minimal DOM in that file. It is not part of the build — no DOM on this
+box — but it is the only thing that proves the JS reads what the pages contain,
+including the exact rune page the runes extractor must produce. Run it after any
+extractor edit; the C# suite can only pin anchors and payload shapes.
 
 ## The web-freshness check is gone
 

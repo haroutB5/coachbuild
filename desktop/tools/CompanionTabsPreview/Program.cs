@@ -25,7 +25,7 @@ namespace CoachBuild.Desktop.CompanionTabsPreview;
 /// </summary>
 internal static class Program
 {
-    private const string AppOrigin = "https://coachbuild.vercel.app";
+    private const string AppOrigin = "https://coachbuild.local";
     private const string Token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     [STAThread]

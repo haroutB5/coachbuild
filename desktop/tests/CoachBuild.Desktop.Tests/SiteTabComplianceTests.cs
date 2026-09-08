@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using CoachBuild.Desktop.Web;
 using Xunit;
 
 namespace CoachBuild.Desktop.Tests;
@@ -79,16 +80,23 @@ public sealed class SiteTabComplianceTests
         Assert.Contains("RunCoachlessWalkAsync", source, StringComparison.Ordinal);
         Assert.Contains("ExtractVisibleOnUiAsync", source, StringComparison.Ordinal);
         Assert.Contains("FetchViaWorkerOnUiAsync", source, StringComparison.Ordinal);
+        // 2.1.0 adds two sanctioned sites, both named here rather than left
+        // to widen the net silently: the Coachless RUNES page read, and the
+        // consent-wall dismissal every import path runs first.
+        Assert.Contains("FetchCoachlessRunesOnUiAsync", source, StringComparison.Ordinal);
+        Assert.Contains("DismissConsentAsync", source, StringComparison.Ordinal);
         // Invocations only. The names also appear in prose; counting comments
         // would make this assertion fail for a documentation edit.
         var invocations = Regex.Matches(source, @"\.\s*ExecuteScriptAsync\s*\(");
-        Assert.True(invocations.Count >= 4, "control: all four script families must exist");
+        Assert.True(invocations.Count >= 6, "control: all six script families must exist");
         var allowedSites = new HashSet<string>(
             [
                 "RunRunesImportAsync",
                 "RunCoachlessWalkAsync",
                 "ExtractVisibleOnUiAsync",
                 "FetchViaWorkerOnUiAsync",
+                "FetchCoachlessRunesOnUiAsync",
+                "DismissConsentAsync",
             ],
             StringComparer.Ordinal);
         foreach (Match invocation in invocations)
@@ -100,9 +108,8 @@ public sealed class SiteTabComplianceTests
             .ToHashSet(StringComparer.Ordinal);
         Assert.Equal(allowedSites.Count, sites.Count);
         Assert.Subset(allowedSites, sites);
-        // Extractor steps only: every invocation runs one of the three
-        // shipped scripts (or the version meta read), never a hand-rolled
-        // DOM query smuggled in at the call site.
+        // Extractor steps only: every invocation runs one of the shipped
+        // scripts, never a hand-rolled DOM query smuggled in at the call site.
         foreach (Match invocation in invocations)
         {
             var callText = source.Substring(
@@ -110,9 +117,45 @@ public sealed class SiteTabComplianceTests
             Assert.True(
                 callText.Contains("UGgScript", StringComparison.Ordinal) ||
                 callText.Contains("CoachlessStepScript(", StringComparison.Ordinal) ||
-                callText.Contains("CoachlessInspectScript", StringComparison.Ordinal),
+                callText.Contains("CoachlessInspectScript", StringComparison.Ordinal) ||
+                callText.Contains("CoachlessRunesScript", StringComparison.Ordinal) ||
+                callText.Contains("ConsentDismissScript", StringComparison.Ordinal),
                 "every script call must run an extractor step");
         }
+    }
+
+    /// <summary>
+    /// The consent-wall click is the ONE interaction the import performs
+    /// outside the Coachless slot walk, and it must stay exactly that: a
+    /// click on a recognized accept control, never a navigation, never a
+    /// reload, never a text-matched "looks like a cookie button" sweep.
+    /// </summary>
+    [Fact]
+    public void The_consent_step_clicks_two_named_accept_controls_and_nothing_else()
+    {
+        var script = SiteImportExtractors.ConsentDismissScript;
+
+        // The two walls, by the anchors captured in the 2026-09-08 fixtures.
+        Assert.Contains("#qc-cmp2-container", script, StringComparison.Ordinal);
+        Assert.Contains("#accept-btn", script, StringComparison.Ordinal);
+        Assert.Contains(".fc-consent-root", script, StringComparison.Ordinal);
+        Assert.Contains("button.fc-cta-consent", script, StringComparison.Ordinal);
+
+        // It must not reach for the reject/more-options siblings that sit in
+        // the same footer, nor move the page.
+        Assert.DoesNotContain("disagree", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("more-options", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("do-not-consent", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("location.href =", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("location.assign", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("location.reload", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("fetch(", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("XMLHttpRequest", script, StringComparison.Ordinal);
+
+        // And it must not guess a button by its words -- an unrecognized wall
+        // stays up and the import fails honestly.
+        Assert.DoesNotContain("textContent", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("innerText", script, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -132,7 +175,10 @@ public sealed class SiteTabComplianceTests
             StringComparison.Ordinal);
         Assert.True(start > 0, "control: the runes handler must exist");
 
-        var end = source.IndexOf("private void OnZoomOutClick", start, StringComparison.Ordinal);
+        // 2.1.0 removed the zoom chrome buttons, so the member after the
+        // handler is the zoom SHORTCUT handler that replaced them.
+        var end = source.IndexOf(
+            "protected override void OnKeyDown", start, StringComparison.Ordinal);
         Assert.True(end > start, "control: the member after it must exist");
 
         var body = source[start..end];
@@ -214,13 +260,23 @@ public sealed class SiteTabComplianceTests
         Assert.Contains("NavigateSiteHome", source, StringComparison.Ordinal);
         Assert.Contains("NavigateHosted", source, StringComparison.Ordinal);
         Assert.Contains("NavigateWorkerAndWaitAsync", source, StringComparison.Ordinal);
+        Assert.Contains("NavigateRunesWorkerAndWaitAsync", source, StringComparison.Ordinal);
         Assert.Contains("NotifySnapshotForAutoImport", source, StringComparison.Ordinal);
 
-        // Sibling calls (Navigate(state, ...)): user/chrome moves only.
-        var siblingCalls = Regex.Matches(source, @"(?<![\w.])Navigate\(state,");
-        Assert.True(siblingCalls.Count >= 4, "control: the chrome navigation calls must exist");
+        // Sibling calls (Navigate(state, ...)): user/chrome moves only. The
+        // op.gg retry joins them in 2.1.0 -- it corrects the MyStats tab to
+        // the user's own profile once the client connects, which is the same
+        // move NavigateSiteHome would have made had the client been up.
+        var siblingCalls = Regex.Matches(source, @"(?<![\w.])Navigate\((?:state|current),");
+        Assert.True(siblingCalls.Count >= 5, "control: the chrome navigation calls must exist");
         var allowedSiblings = new HashSet<string>(
-            ["OnNewWindowRequested", "NavigateHosted", "NavigateSiteHome", "OpenSiteOfferAsync"],
+            [
+                "OnNewWindowRequested",
+                "NavigateHosted",
+                "NavigateSiteHome",
+                "OpenSiteOfferAsync",
+                "RetryOpGgProfileAsync",
+            ],
             StringComparer.Ordinal);
         foreach (Match call in siblingCalls)
             Assert.Contains(EnclosingMethod(source, call.Index), allowedSiblings);
@@ -230,12 +286,12 @@ public sealed class SiteTabComplianceTests
         Assert.Equal(allowedSiblings.Count, siblingSites.Count);
         Assert.Subset(allowedSiblings, siblingSites);
 
-        // Dotted calls (the primitive plus the worker): the worker is the
-        // only automated one, and it asserts the allowlist in the same body.
+        // Dotted calls: the chrome primitive plus the ONE shared
+        // navigate-and-wait the two automated paths funnel through.
         var dottedCalls = Regex.Matches(source, @"\.Navigate\(");
         Assert.True(dottedCalls.Count >= 2, "control: the primitive and the worker navigate must exist");
         var allowedDotted = new HashSet<string>(
-            ["Navigate", "NavigateWorkerAndWaitAsync"],
+            ["Navigate", "NavigateAndWaitCoreAsync"],
             StringComparer.Ordinal);
         foreach (Match call in dottedCalls)
             Assert.Contains(EnclosingMethod(source, call.Index), allowedDotted);
@@ -245,15 +301,32 @@ public sealed class SiteTabComplianceTests
         Assert.Equal(allowedDotted.Count, dottedSites.Count);
         Assert.Subset(allowedDotted, dottedSites);
 
-        var workerStart = source.IndexOf(
+        // Both automated entries assert their OWN allowlist before reaching
+        // the shared primitive -- build pages and runes pages have different
+        // allowed shapes, so one shared check would have to be the looser of
+        // the two.
+        AssertGuards(
+            source,
             "private async Task<bool> NavigateWorkerAndWaitAsync",
-            StringComparison.Ordinal);
-        var workerEnd = source.IndexOf("private ", workerStart + 10, StringComparison.Ordinal);
-        Assert.True(workerEnd > workerStart, "control: the member after the worker navigate must exist");
-        Assert.Contains(
-            "IsAllowedAutoImportTarget",
-            source[workerStart..workerEnd],
-            StringComparison.Ordinal);
+            "IsAllowedAutoImportTarget");
+        AssertGuards(
+            source,
+            "private async Task<bool> NavigateRunesWorkerAndWaitAsync",
+            "IsAllowedRunesTarget");
+
+        // ...and the shared primitive is reachable from exactly those two.
+        var coreCalls = Regex.Matches(source, @"NavigateAndWaitCoreAsync\(");
+        var coreCallers = coreCalls
+            .Select(call => EnclosingMethod(source, call.Index))
+            .ToHashSet(StringComparer.Ordinal);
+        // Exactly the two allowlisted entries. (The definition's own
+        // signature does not count as a caller: EnclosingMethod resolves a
+        // match at the signature to the member BEFORE it.)
+        Assert.Equal(
+            new HashSet<string>(
+                ["NavigateWorkerAndWaitAsync", "NavigateRunesWorkerAndWaitAsync"],
+                StringComparer.Ordinal),
+            coreCallers);
 
         // The trigger starts work; it does not move pages.
         var triggerStart = source.IndexOf(
@@ -264,6 +337,19 @@ public sealed class SiteTabComplianceTests
         Assert.True(triggerEnd > triggerStart, "control: the member after the trigger must exist");
         Assert.DoesNotContain("Navigate(", source[triggerStart..triggerEnd], StringComparison.Ordinal);
         Assert.Contains("OnSnapshotAsync", source[triggerStart..triggerEnd], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A method must assert the named allowlist inside its own body, before
+    /// the member that follows it.
+    /// </summary>
+    private static void AssertGuards(string source, string signature, string guard)
+    {
+        var start = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start > 0, $"control: {signature} must exist");
+        var end = source.IndexOf("private ", start + 10, StringComparison.Ordinal);
+        Assert.True(end > start, $"control: the member after {signature} must exist");
+        Assert.Contains(guard, source[start..end], StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -308,7 +394,12 @@ public sealed class SiteTabComplianceTests
             StringComparison.Ordinal);
         Assert.True(start > 0, "control: the context entry point must exist");
 
-        var end = source.IndexOf("public void GoBack", start, StringComparison.Ordinal);
+        // The member IMMEDIATELY after it. Widening this to a later member
+        // (it used to run to GoBack) would sweep unrelated methods into the
+        // body and make the assertion below about them instead -- 2.1.0's
+        // op.gg retry sits in that gap and legitimately navigates.
+        var end = source.IndexOf(
+            "public void UpdateSiteImportAvailability", start, StringComparison.Ordinal);
         Assert.True(end > start, "control: the method after it must exist");
 
         var body = source[start..end];
