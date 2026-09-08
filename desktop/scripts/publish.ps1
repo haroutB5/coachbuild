@@ -22,8 +22,41 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $PSScriptRoot '..\artifacts'
 }
 $packageScript = Join-Path $PSScriptRoot 'package.ps1'
-& $packageScript -Version $Version -OutputDirectory $OutputDirectory -Vpk $Vpk
-if ($LASTEXITCODE -ne 0) { throw "Packaging failed with exit code $LASTEXITCODE" }
+
+# SAC smoke-gate (2026-09-08): Smart App Control's cloud verdict on a brand-new
+# unsigned hash is effectively random — a build was blocked on 2.1.0 QA while a
+# rebuild of the SAME commit ran fine. The app ships unsigned, so before
+# uploading, prove the packaged binary actually LOADS on this machine by
+# running its --self-test. A SAC block kills the process during assembly load
+# (0xE0434352 / -532462766); self-test itself exits 0 (pass) or 1 (checks
+# failed — still proves the hash loads). On a load failure, rebuild into a
+# fresh subdirectory (a rebuild produces a new MVID/hash) and probe again.
+$maxAttempts = 3
+$attemptDir = $OutputDirectory
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    if ($attempt -gt 1) {
+        $attemptDir = Join-Path $OutputDirectory "sac-retry-$attempt"
+        Write-Host "SAC gate: rebuilding with a fresh hash into $attemptDir (attempt $attempt of $maxAttempts)"
+    }
+    & $packageScript -Version $Version -OutputDirectory $attemptDir -Vpk $Vpk
+    if ($LASTEXITCODE -ne 0) { throw "Packaging failed with exit code $LASTEXITCODE" }
+
+    $probeExe = Join-Path $attemptDir "publish-win-x64-$Version\CoachBuild.Desktop.exe"
+    $probe = Start-Process -FilePath $probeExe -ArgumentList '--self-test' -PassThru -Wait -WindowStyle Hidden
+    if ($probe.ExitCode -eq 0 -or $probe.ExitCode -eq 1) {
+        if ($probe.ExitCode -eq 1) {
+            Write-Warning 'SAC gate: binary loads but --self-test reported failures; continuing (hash is SAC-viable).'
+        } else {
+            Write-Host "SAC gate: packaged binary loads and self-tests clean (attempt $attempt)."
+        }
+        break
+    }
+    Write-Warning "SAC gate: packaged binary failed to load (exit $($probe.ExitCode)) - likely a Smart App Control per-hash block."
+    if ($attempt -eq $maxAttempts) {
+        throw "SAC gate: $maxAttempts consecutive builds failed to load; not publishing a build that dies on launch. Investigate before releasing."
+    }
+}
+$OutputDirectory = $attemptDir
 
 if ([string]::IsNullOrWhiteSpace($GitHubToken)) {
     throw 'Set GITHUB_TOKEN or pass -GitHubToken before publishing.'
