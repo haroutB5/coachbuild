@@ -54,6 +54,30 @@ public sealed class HighDpiManifestTests
     }
 
     /// <summary>
+    /// A malformed manifest fails SxS activation context generation and the
+    /// exe dies at launch with "side-by-side configuration is incorrect" on
+    /// EVERY machine — 2.1.0 shipped exactly this ("--" inside an XML comment,
+    /// caught only by the release smoke-gate). Tests never launch the exe, so
+    /// the manifest's XML validity and SxS-required identity attributes must
+    /// be pinned here.
+    /// </summary>
+    [Fact]
+    public void The_manifest_is_valid_xml_with_a_complete_assembly_identity()
+    {
+        var manifest = ReadRepoFile("desktop", "src", "CoachBuild.Desktop", "app.manifest");
+
+        var document = new System.Xml.XmlDocument();
+        document.LoadXml(manifest);
+
+        var identity = document.GetElementsByTagName("assemblyIdentity");
+        Assert.Equal(1, identity.Count);
+        Assert.False(string.IsNullOrEmpty(identity[0]!.Attributes?["type"]?.Value));
+        Assert.False(string.IsNullOrEmpty(identity[0]!.Attributes?["processorArchitecture"]?.Value));
+        Assert.False(string.IsNullOrEmpty(identity[0]!.Attributes?["name"]?.Value));
+        Assert.False(string.IsNullOrEmpty(identity[0]!.Attributes?["version"]?.Value));
+    }
+
+    /// <summary>
     /// The runtime call stays as a fallback for a host that strips the
     /// manifest, but it must not be the only path — that is the state that
     /// produced the blank chrome.
