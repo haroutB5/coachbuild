@@ -104,7 +104,13 @@ public sealed record DesktopPhaseSnapshot(
     /// champion roster has been fetched — the offer needs a NAME and a ddragon
     /// KEY, and a numeric id alone can build neither a label nor a slug.
     /// </summary>
-    ChampSelectContext? ChampSelect = null);
+    ChampSelectContext? ChampSelect = null,
+    /// <summary>
+    /// Whether the League client is currently connected (credentials present).
+    /// The site tabs' import button needs it for enablement; it rides the
+    /// existing 750 ms push rather than a new poll.
+    /// </summary>
+    bool LcuConnected = false);
 
 public sealed class NullDesktopHostServices : IDesktopHostServices
 {
@@ -546,6 +552,9 @@ public partial class App : WpfApplication
         // user is reading. Null (no champ select, or a roster that has not
         // loaded) clears the row rather than leaving a stale champion on it.
         _webView?.UpdateChampSelectContext(snapshot.ChampSelect);
+        // The import button's LCU half, on the same tick. Like the context
+        // above this only redraws chrome; it never touches a page.
+        _webView?.UpdateSiteImportAvailability(snapshot.LcuConnected);
 
         // AFTER SetUpdateBusy, never before. Closing the window clears the
         // restart-is-disruptive gate and kicks a staged-apply retry, and the
@@ -1125,7 +1134,8 @@ public partial class App : WpfApplication
                     Paths.WebView2UserDataFolder,
                     OnWebViewRepairCompleted,
                     preferenceStore?.Read(),
-                    preferenceStore is null ? null : preferenceStore.Save);
+                    preferenceStore is null ? null : preferenceStore.Save,
+                    (_services as CoreDesktopHostServices)?.CreateSiteImportHost());
                 _webView = createdWindow;
                 createdWindow.Closed += OnWebViewClosed;
                 createdWindow.WebVersionObserved += OnWebVersionObserved;
@@ -1585,6 +1595,15 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
 
     public CompanionState State => _state;
 
+    /// <summary>
+    /// The user-initiated site-import runner for the companion window: the
+    /// bridge's two LCU apply services plus the roster this host already
+    /// owns. Null when there is no host to build one from is handled by the
+    /// caller (the window disables its import button without one).
+    /// </summary>
+    public ISiteImportHost CreateSiteImportHost() =>
+        new SiteImportHost(_bridge.RuneApplyService, _bridge.ItemSetApplyService, _champions, _state);
+
     public WindowDecisionService WindowDecisions => _windowDecisions;
 
     /// <summary>
@@ -1702,7 +1721,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             _state.IsCompanionBusy,
             status.LastError,
             BuildOverlayState(),
-            BuildChampSelectContext(status.ChampSelect)));
+            BuildChampSelectContext(status.ChampSelect),
+            _state.ClientConnected));
     }
 
     /// <summary>

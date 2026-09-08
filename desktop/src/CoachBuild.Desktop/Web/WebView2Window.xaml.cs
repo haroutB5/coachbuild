@@ -13,10 +13,18 @@ namespace CoachBuild.Desktop.Web;
 /// application still has one window and one lifetime gate.
 ///
 /// <para>The hosted CoachBuild page is the only surface with the persistent
-/// session token and the only surface whose document is inspected: the version
-/// meta tag is read solely to support the existing web-freshness check. Site
-/// tabs are deliberately rendering-only; their pages are never scraped or
-/// scripted.</para>
+/// session token and the only surface whose document is inspected
+/// unprompted: the version meta tag is read solely to support the existing
+/// web-freshness check. Site tabs are rendering-only with EXACTLY ONE
+/// user-initiated exception: the import button runs a single read-only
+/// extractor script against the active site tab, once per click, and only
+/// while a champion build page is showing and the League client is
+/// connected (<see cref="SiteImportExtractors"/> for the scripts,
+/// <c>RunSiteImportAsync</c> below for the single call site).
+/// <c>SiteTabComplianceTests</c> pins that scope: site-tab script execution
+/// is reachable only from the import click handler (plus this file's
+/// Companion version read), the champ-select offer path cannot navigate,
+/// and no timer or event may scrape.</para>
 /// </summary>
 public partial class WebView2Window : Window
 {
@@ -53,6 +61,9 @@ public partial class WebView2Window : Window
     private readonly Dictionary<CompanionTab, BrowserTabState> _tabs = new();
     private CompanionTabsPreferences _preferences;
     private ChampSelectContext? _champSelectContext;
+    private readonly ISiteImportHost? _siteImport;
+    private bool _lcuConnected;
+    private bool _importRunning;
     private ReopenTarget _lastTarget = new(ReopenDestination.Home);
     private CompanionTab _activeTab = CompanionTab.Companion;
     private bool _hasActiveTab;
@@ -68,7 +79,8 @@ public partial class WebView2Window : Window
         string userDataFolder,
         Action<RepairResult>? repairCompleted = null,
         CompanionTabsPreferences? preferences = null,
-        Action<CompanionTabsPreferences>? preferencesChanged = null)
+        Action<CompanionTabsPreferences>? preferencesChanged = null,
+        ISiteImportHost? siteImport = null)
     {
         _environmentService = environmentService ?? throw new ArgumentNullException(nameof(environmentService));
         _policy = new HostedPagePolicy(appOrigin);
@@ -78,6 +90,9 @@ public partial class WebView2Window : Window
         _repairCompleted = repairCompleted;
         _preferencesChanged = preferencesChanged;
         _preferences = preferences ?? CompanionTabsPreferences.Default;
+        // Null (no host, e.g. the client never connected at startup) leaves
+        // the import button present but disabled with a tooltip saying why.
+        _siteImport = siteImport;
 
         InitializeComponent();
         Fallback.RepairRequested += OnRepairRequested;
@@ -249,6 +264,26 @@ public partial class WebView2Window : Window
         }
 
         _champSelectContext = context;
+        UpdateOfferBar();
+    }
+
+    /// <summary>
+    /// Receives the LCU connection projection on the existing snapshot tick.
+    /// Like the champ-select context above this only redraws chrome — the
+    /// import button's enabled state — and never touches a page.
+    /// </summary>
+    public void UpdateSiteImportAvailability(bool lcuConnected)
+    {
+        if (_disposed) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(
+                new Action(() => UpdateSiteImportAvailability(lcuConnected)),
+                System.Windows.Threading.DispatcherPriority.Background);
+            return;
+        }
+
+        _lcuConnected = lcuConnected;
         UpdateOfferBar();
     }
 
@@ -558,8 +593,11 @@ public partial class WebView2Window : Window
 
     private async Task ReadLoadedWebVersionAsync(BrowserTabState state)
     {
-        // This is the only ExecuteScriptAsync call in the window and the state
-        // guard makes it impossible for a third-party tab to reach it.
+        // One of exactly two ExecuteScriptAsync calls in the window (the
+        // compliance tests pin the count and the reachability): this one,
+        // Companion-guarded below, and the user-initiated site import in
+        // RunSiteImportAsync. The state guard makes it impossible for a
+        // third-party tab to reach THIS one.
         if (state.Tab != CompanionTab.Companion) return;
         var version = await QueryLoadedWebVersionAsync(state).ConfigureAwait(true);
         if (_disposed || state.Tab != CompanionTab.Companion) return;
@@ -815,6 +853,53 @@ public partial class WebView2Window : Window
     private async void OnCoachlessOfferClick(object sender, RoutedEventArgs e) =>
         await OpenSiteOfferAsync(CompanionTab.Coachless).ConfigureAwait(true);
 
+    private async void OnImportBuildClick(object sender, RoutedEventArgs e) =>
+        await RunSiteImportAsync().ConfigureAwait(true);
+
+    /// <summary>
+    /// The user-initiated build import: ONE <c>ExecuteScriptAsync</c> against
+    /// the ACTIVE SITE tab, then parse/validate/apply with no further page
+    /// contact. Reachable only from <see cref="ImportBuildButton"/>, which is
+    /// enabled only on a build-page URL while the client is connected — and
+    /// re-checked here, because the client may have closed between the last
+    /// snapshot tick and the click. Never navigates, never reloads; every
+    /// outcome (including an unexpected exception) lands on the status line
+    /// and writes nothing partial.
+    /// </summary>
+    private async Task RunSiteImportAsync()
+    {
+        if (_disposed || _importRunning) return;
+        var tab = ActiveTab;
+        var script = SiteImportExtractors.ScriptFor(tab);
+        var state = GetState(tab);
+        // Belt and braces behind the disabled button: without a host, a
+        // script, or a live site browser there is nothing to read.
+        if (script is null || state?.Core is null || _siteImport is null) return;
+
+        _importRunning = true;
+        UpdateOfferBar();
+        SetStatus($"Importing build from {CompanionTabs.LabelFor(tab)}…");
+        try
+        {
+            var raw = await state.Core.ExecuteScriptAsync(script).ConfigureAwait(true);
+            if (_disposed) return;
+            var result = await _siteImport.ImportBuildAsync(raw, _shutdownToken).ConfigureAwait(true);
+            if (_disposed) return;
+            SetStatus(result.Message);
+        }
+        catch (Exception error)
+        {
+            // The script surface carries no secrets (no token, no
+            // credentials), so naming the failure is safe and debuggable.
+            if (!_disposed) SetStatus($"Import failed ({error.Message}) -- nothing was imported");
+        }
+        finally
+        {
+            _importRunning = false;
+            if (!_disposed) UpdateOfferBar();
+        }
+    }
+
     private void OnZoomOutClick(object sender, RoutedEventArgs e) => ZoomOut();
 
     private void OnZoomInClick(object sender, RoutedEventArgs e) => ZoomIn();
@@ -971,28 +1056,70 @@ public partial class WebView2Window : Window
     {
         if (!Dispatcher.CheckAccess()) return;
         var context = _champSelectContext;
-        var hasContext = ShouldShowOfferBar(ActiveTab, context);
-        OfferBar.Visibility = hasContext ? Visibility.Visible : Visibility.Collapsed;
-        if (!hasContext || context is null) return;
+        var showOffer = ShouldShowOfferBar(ActiveTab, context);
+        // The import works outside champ select too (rune pages and item
+        // sets persist), so the bar also shows for a bare build page — with
+        // the chips hidden and only the import button working.
+        var importUrl = ShouldShowImport(ActiveTab, GetState(ActiveTab)?.Core?.Source);
+        OfferBar.Visibility = showOffer || importUrl ? Visibility.Visible : Visibility.Collapsed;
+        if (OfferBar.Visibility != Visibility.Visible) return;
 
-        var role = SiteDeepLink.RoleLabel(context.RoleId);
-        OfferHintText.Text = context.Locked
-            ? $"{context.ChampionName}{(role is null ? string.Empty : $" · {role}")} locked"
-            : $"{context.ChampionName}{(role is null ? string.Empty : $" · {role}")} hovered";
-        UggOfferButton.Content = "Open u.gg";
-        CoachlessOfferButton.Content = "Open Coachless";
+        ChampChipsPanel.Visibility = showOffer && context is not null
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        if (showOffer && context is not null)
+        {
+            var role = SiteDeepLink.RoleLabel(context.RoleId);
+            OfferHintText.Text = context.Locked
+                ? $"{context.ChampionName}{(role is null ? string.Empty : $" · {role}")} locked"
+                : $"{context.ChampionName}{(role is null ? string.Empty : $" · {role}")} hovered";
+            UggOfferButton.Content = "Open u.gg";
+            CoachlessOfferButton.Content = "Open Coachless";
 
-        var uggOffer = context.UrlFor(CompanionTabs.UGg);
-        var coachlessOffer = context.UrlFor(CompanionTabs.Coachless);
-        UggOfferButton.IsEnabled = uggOffer is not null
-            && !SiteNavigationPolicy.IsAlreadyThere(
-                GetState(CompanionTab.UGg)?.Core?.Source,
-                uggOffer);
-        CoachlessOfferButton.IsEnabled = coachlessOffer is not null
-            && !SiteNavigationPolicy.IsAlreadyThere(
-                GetState(CompanionTab.Coachless)?.Core?.Source,
-                coachlessOffer);
+            var uggOffer = context.UrlFor(CompanionTabs.UGg);
+            var coachlessOffer = context.UrlFor(CompanionTabs.Coachless);
+            UggOfferButton.IsEnabled = uggOffer is not null
+                && !SiteNavigationPolicy.IsAlreadyThere(
+                    GetState(CompanionTab.UGg)?.Core?.Source,
+                    uggOffer);
+            CoachlessOfferButton.IsEnabled = coachlessOffer is not null
+                && !SiteNavigationPolicy.IsAlreadyThere(
+                    GetState(CompanionTab.Coachless)?.Core?.Source,
+                    coachlessOffer);
+        }
+        else
+        {
+            OfferHintText.Text = "Import reads this build page";
+        }
+
+        var ready = _siteImport is not null && !_importRunning && importUrl && _lcuConnected;
+        ImportBuildButton.IsEnabled = ready;
+        ImportBuildButton.ToolTip = ImportTooltip(importUrl);
+        OfferCaptionText.Text = showOffer ? "Click a site to open" : "Import writes to the client";
     }
+
+    /// <summary>
+    /// The disabled reason, in the tooltip: the button must always say WHY it
+    /// will not run, not merely refuse.
+    /// </summary>
+    private string ImportTooltip(bool importUrl)
+    {
+        if (_siteImport is null) return "Import is unavailable in this window.";
+        if (_importRunning) return "Import already running…";
+        if (!importUrl) return "Open a champion build page to import its runes and item set.";
+        if (!_lcuConnected) return "Open the League client to import this build.";
+        return "Read this page's runes and item set into the League client.";
+    }
+
+    /// <summary>
+    /// The import half of the offer bar's visibility: a site tab showing that
+    /// site's build-page shape. Pure, so the button state and the extractor
+    /// share one definition of "a build page" through
+    /// <see cref="SiteImportExtractors.CanImportFromUrl"/>.
+    /// </summary>
+    internal static bool ShouldShowImport(CompanionTab activeTab, string? currentUrl) =>
+        activeTab != CompanionTab.Companion
+        && SiteImportExtractors.CanImportFromUrl(activeTab, currentUrl);
 
     /// <summary>
     /// The champ-select row belongs to the research tabs. Keeping it collapsed

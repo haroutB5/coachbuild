@@ -30,23 +30,33 @@ public sealed class SiteTabComplianceTests
     }
 
     /// <summary>
-    /// The only script the window runs is the hosted page's own version meta
-    /// read, and it is gated on the Companion tab. A second
-    /// <c>ExecuteScriptAsync</c> is how DOM reading of a third-party site would
-    /// arrive, so the COUNT is pinned rather than the wording.
+    /// The window runs a script in exactly TWO places: the hosted page's own
+    /// version meta read, and the user-initiated site import. A third
+    /// <c>ExecuteScriptAsync</c> is how a background scrape of a third-party
+    /// site would arrive, so the COUNT is pinned rather than the wording —
+    /// and each call site is pinned to its enclosing method below, so a move
+    /// out of the click handler fails loudly instead of drifting.
     /// </summary>
     [Fact]
-    public void The_window_scripts_exactly_one_page_and_it_is_the_hosted_one()
+    public void The_window_scripts_exactly_two_places_version_read_and_import_click()
     {
         var source = ReadSource(WindowSource);
 
-        // Control: the call this app is allowed to make must be present, or the
-        // "exactly one" assertion below is measuring nothing.
+        // Controls: both calls this app is allowed to make must be present,
+        // or the "exactly two" assertion below is measuring nothing.
         Assert.Contains("coachbuild-version", source, StringComparison.Ordinal);
-        // Invocations only. The name also appears in the comment that explains
-        // why there is exactly one of them, and counting prose would make this
-        // assertion fail for a documentation edit.
-        Assert.Single(Regex.Matches(source, @"\.\s*ExecuteScriptAsync\s*\("));
+        Assert.Contains("RunSiteImportAsync", source, StringComparison.Ordinal);
+        // Invocations only. The name also appears in prose that explains why
+        // there are exactly two of them, and counting comments would make
+        // this assertion fail for a documentation edit.
+        var invocations = Regex.Matches(source, @"\.\s*ExecuteScriptAsync\s*\(");
+        Assert.Equal(2, invocations.Count);
+        Assert.Equal(
+            "QueryLoadedWebVersionAsync",
+            EnclosingMethod(source, invocations[0].Index));
+        Assert.Equal(
+            "RunSiteImportAsync",
+            EnclosingMethod(source, invocations[1].Index));
     }
 
     /// <summary>
@@ -78,6 +88,55 @@ public sealed class SiteTabComplianceTests
     }
 
     /// <summary>
+    /// The import's script call sits inside the click handler and nothing
+    /// else: no navigation-completed hook, no poll tick, no event may reach
+    /// it. The handler also cannot Navigate or Reload — the import READS the
+    /// page the user is on; moving it would turn a read into a redirect.
+    /// </summary>
+    [Fact]
+    public void The_import_script_is_reachable_only_from_the_click_handler()
+    {
+        var source = ReadSource(WindowSource);
+        var start = source.IndexOf(
+            "private async Task RunSiteImportAsync",
+            StringComparison.Ordinal);
+        Assert.True(start > 0, "control: the import handler must exist");
+
+        var end = source.IndexOf("private void OnZoomOutClick", start, StringComparison.Ordinal);
+        Assert.True(end > start, "control: the member after it must exist");
+
+        var body = source[start..end];
+        Assert.Contains("ExecuteScriptAsync", body, StringComparison.Ordinal);
+        // Control: the handler must still hand the scrape to the host.
+        Assert.Contains("ImportBuildAsync", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Navigate(", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Reload(", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// No timer, no looper, no render hook in the window may trigger a
+    /// scrape: the import runs once per user click or not at all. The window
+    /// currently owns no timer of any kind, so the absence is pinned
+    /// outright; the sibling count test is what ties "no trigger" to "no
+    /// third script call".
+    /// </summary>
+    [Fact]
+    public void No_timer_or_background_trigger_exists_for_a_scrape()
+    {
+        var source = ReadSource(WindowSource);
+
+        // Control: this is the window file and the click path exists, or the
+        // absences below are measuring nothing.
+        Assert.Contains("class WebView2Window", source, StringComparison.Ordinal);
+        Assert.Contains("OnImportBuildClick", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("DispatcherTimer", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("System.Timers", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("System.Threading.Timer", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("CompositionTarget", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tick +=", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// No timer, no phase hook, no snapshot tick may navigate a site tab. The
     /// offer chip is an offer; the user clicks it or nothing happens.
     /// </summary>
@@ -98,6 +157,19 @@ public sealed class SiteTabComplianceTests
         Assert.DoesNotContain("Reload", body, StringComparison.Ordinal);
         // Control: the method must still do the one thing it is for.
         Assert.Contains("UpdateOfferBar", body, StringComparison.Ordinal);
+    }
+
+    private static string EnclosingMethod(string source, int index)
+    {
+        // The nearest preceding member declaration: window members each start
+        // their own line at one indent level, so continuations and call sites
+        // cannot match.
+        var preceding = source[..index];
+        var declarations = Regex.Matches(
+            preceding,
+            @"\n    (?:private|public|internal)[^\n{]*?\b(\w+)\s*\(");
+        Assert.NotEmpty(declarations);
+        return declarations[^1].Groups[1].Value;
     }
 
     private static string ReadSource(string relativePath)

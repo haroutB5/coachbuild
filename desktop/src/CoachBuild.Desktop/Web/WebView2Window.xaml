@@ -102,10 +102,20 @@
             </Setter>
         </Style>
 
-        <Style x:Key="OfferButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
-            <Setter Property="Background" Value="#183752" />
-            <Setter Property="BorderBrush" Value="#3A6281" />
-            <Setter Property="Foreground" Value="#F7E4B0" />
+        <Style x:Key="PrimaryOfferButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+            <Setter Property="Background" Value="#D8A64E" />
+            <Setter Property="BorderBrush" Value="#F1C76B" />
+            <Setter Property="Foreground" Value="#081321" />
+            <Setter Property="Padding" Value="14,7" />
+            <Setter Property="Margin" Value="0,0,10,0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+
+        <Style x:Key="SecondaryOfferButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+            <Setter Property="Background" Value="#12283C" />
+            <Setter Property="BorderBrush" Value="#2A4A63" />
+            <Setter Property="Foreground" Value="#BCD0E1" />
             <Setter Property="Padding" Value="11,7" />
             <Setter Property="Margin" Value="0,0,7,0" />
             <Setter Property="FontSize" Value="12" />
@@ -284,16 +294,26 @@
                 <StackPanel Grid.Column="1"
                             Orientation="Horizontal"
                             VerticalAlignment="Center">
-                    <Button x:Name="UggOfferButton"
-                            Style="{StaticResource OfferButton}"
-                            Content="Open u.gg"
-                            Click="OnUggOfferClick" />
-                    <Button x:Name="CoachlessOfferButton"
-                            Style="{StaticResource OfferButton}"
-                            Content="Open Coachless"
-                            Click="OnCoachlessOfferClick" />
+                    <Button x:Name="ImportBuildButton"
+                            Style="{StaticResource PrimaryOfferButton}"
+                            Content="Import build"
+                            ToolTip="Read this page's runes and item set into the League client."
+                            Click="OnImportBuildClick" />
+                    <StackPanel x:Name="ChampChipsPanel"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center">
+                        <Button x:Name="UggOfferButton"
+                                Style="{StaticResource SecondaryOfferButton}"
+                                Content="Open u.gg"
+                                Click="OnUggOfferClick" />
+                        <Button x:Name="CoachlessOfferButton"
+                                Style="{StaticResource SecondaryOfferButton}"
+                                Content="Open Coachless"
+                                Click="OnCoachlessOfferClick" />
+                    </StackPanel>
                 </StackPanel>
-                <TextBlock Grid.Column="2"
+                <TextBlock x:Name="OfferCaptionText"
+                           Grid.Column="2"
                            Text="Click a site to open"
                            Style="{StaticResource ChromeText}"
                            Foreground="{StaticResource MutedTextBrush}"

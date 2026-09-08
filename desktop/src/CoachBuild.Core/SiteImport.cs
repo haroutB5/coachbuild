@@ -372,6 +372,81 @@ public static class PerkIconMap
 }
 
 /// <summary>
+/// ddragon-derived stat-shard identity table. The extractor JS needs this
+/// because shard ids surface on site pages inside CDN image URLs
+/// (<c>perk-images/StatMods/StatModsAdaptiveForceIcon.webp</c>) whose
+/// filenames are display names, not ids.
+///
+/// <para>PROVENANCE, entry by entry, from the 2026-09-08 fixtures (not from
+/// memory): the u.gg Jhin ADC page renders its three shard rows in
+/// Offense/Flex/Defense order with
+/// [AdaptiveForce, AttackSpeed, CDRScaling],
+/// [AdaptiveForce, MovementSpeed, HealthPlus] and
+/// {HealthScaling(active), HealthPlus, Tenacity}, while its embedded
+/// <c>world_emerald_plus_adc</c> build object — triple-matched to the
+/// displayed build by header winrate/matches, rune set and shard set —
+/// reports <c>active_shards: [5008,5008,5011]</c>. Positional reads give
+/// 5008/5005/5007 and 5008/5010/5001; the active-shard read gives
+/// HealthScaling = 5011 (u.gg's own alt text agrees: "The Health Shard",
+/// the client's name for flat health), leaving Tenacity = 5013 by
+/// elimination. Armor (5002) and MagicRes (5003) never appear in the
+/// fixtures — the current client no longer offers them — and are carried
+/// only as ddragon-canonical aliases so an older page shape resolves
+/// instead of erroring; the shard-row check still rejects them.</para>
+/// </summary>
+public static class ShardIconMap
+{
+    public static readonly IReadOnlyDictionary<string, int> ByName =
+        new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["adaptiveforce"] = 5008,
+            ["attackspeed"] = 5005,
+            ["cdrscaling"] = 5007,
+            ["healthscaling"] = 5011,
+            ["healthplus"] = 5001,
+            ["movementspeed"] = 5010,
+            ["tenacity"] = 5013,
+            ["armor"] = 5002,
+            ["magicres"] = 5003,
+        };
+
+    /// <summary>Normalizes a filename, key or display name the way the table keys are folded.</summary>
+    public static string Normalize(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        return new string(value.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+    }
+
+    public static bool TryResolve(string? value, out int shardId)
+    {
+        shardId = 0;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        // Image URLs arrive whole
+        // (.../perk-images/StatMods/StatModsAdaptiveForceIcon.webp),
+        // so reduce to the bare filename stem before folding: the table keys
+        // carry neither the shared StatMods prefix nor the Icon suffix every
+        // ddragon statmod filename wears.
+        var stem = value.Trim();
+        var slash = Math.Max(stem.LastIndexOf('/'), stem.LastIndexOf('\\'));
+        if (slash >= 0) stem = stem[(slash + 1)..];
+        var dot = stem.LastIndexOf('.');
+        if (dot > 0) stem = stem[..dot];
+        var folded = Normalize(stem);
+        const string prefix = "statmods";
+        const string suffix = "icon";
+        if (folded.StartsWith(prefix, StringComparison.Ordinal))
+            folded = folded[prefix.Length..];
+        if (folded.EndsWith(suffix, StringComparison.Ordinal))
+            folded = folded[..^suffix.Length];
+        return ByName.TryGetValue(folded, out shardId)
+            || ByName.TryGetValue(Normalize(value), out shardId);
+    }
+
+    public static string ToJson() =>
+        JsonSerializer.Serialize(ByName, JsonOptions.Wire);
+}
+
+/// <summary>
 /// Pre-write validation for a scraped payload, plus the LCU request builders.
 /// Validation runs ENTIRELY before the first LCU call: wrong or partial data
 /// reports precisely and writes nothing — no partial rune page.

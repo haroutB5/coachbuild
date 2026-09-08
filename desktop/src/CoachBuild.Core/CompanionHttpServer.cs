@@ -91,6 +91,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
     public CompanionState State => _state;
     public RedactedLog Log => _log;
     public RuneApplyService RuneApplyService => _runes;
+    public ItemSetApplyService ItemSetApplyService => _itemSets;
     public ISkillOrderProvider SkillOrderProvider => _skillOrders;
     public bool IsRunning => _listener?.IsListening == true;
 

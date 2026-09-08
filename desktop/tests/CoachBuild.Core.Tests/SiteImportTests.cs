@@ -389,5 +389,94 @@ public sealed class SiteImportTests
         Assert.Contains(title, failure.Message, StringComparison.Ordinal);
     }
 
+    // ── ShardIconMap (fixture-verified u.gg StatMods names) ──────────────────
+
+    [Fact]
+    public void The_shard_table_covers_every_current_statmod()
+    {
+        // 9 aliases: the 7 icons the current client offers, plus armor and
+        // magic resist as ddragon-canonical aliases for older page shapes.
+        // The shard-row check still rejects the two retirees, so a wrong
+        // alias here fails loudly at validation, never in the client.
+        Assert.Equal(9, ShardIconMap.ByName.Count);
+    }
+
+    [Theory]
+    [InlineData("StatModsAdaptiveForceIcon.webp", 5008)]
+    [InlineData("StatModsAttackSpeedIcon.webp", 5005)]
+    [InlineData("StatModsCDRScalingIcon.webp", 5007)]
+    [InlineData("StatModsMovementSpeedIcon.webp", 5010)]
+    [InlineData("StatModsTenacityIcon.webp", 5013)]
+    [InlineData("StatModsHealthPlusIcon.webp", 5001)]
+    // The treacherous one: the SCALING-named icon is the FLAT-health shard.
+    // Pinned because every reader's first instinct is to "fix" it — the
+    // 2026-09-08 u.gg fixture proves it (embedded active_shards [5008,5008,
+    // 5011] against a Defense row showing this icon active).
+    [InlineData("StatModsHealthScalingIcon.webp", 5011)]
+    [InlineData("https://static.bigbrain.gg/assets/lol/riot_static/14.2.1/img/perk-images/StatMods/StatModsAdaptiveForceIcon.webp", 5008)]
+    public void Shard_icon_filenames_resolve_to_their_shard_id(string alias, int expected)
+    {
+        Assert.True(ShardIconMap.TryResolve(alias, out var id), $"alias '{alias}' resolved to nothing");
+        Assert.Equal(expected, id);
+    }
+
+    [Fact]
+    public void Unknown_shard_text_resolves_to_nothing_rather_than_a_guess()
+    {
+        Assert.False(ShardIconMap.TryResolve("SomeNewShard", out _));
+        Assert.False(ShardIconMap.TryResolve(null, out _));
+    }
+
+    // ── The real extractor output, end to end ────────────────────────────────
+
+    /// <summary>
+    /// The byte-exact payload the u.gg extractor produced from the real
+    /// captured Jhin ADC fixture (verified by the _research harness): it must
+    /// parse, validate clean, and apply. This is the contract between the
+    /// Desktop JS and this parser — if the extractor's shape drifts, this is
+    /// the test that names the drift.
+    /// </summary>
+    [Fact]
+    public async Task The_verified_u_gg_fixture_payload_parses_validates_and_applies()
+    {
+        const string raw = """
+            {"source":"u.gg","championSlug":"jhin","role":"adc",
+             "runes":{"primaryStyleId":8000,"subStyleId":8300,
+              "perkIds":[8021,8009,9103,8017,8321,8316],"shardIds":[5008,5008,5011]},
+             "itemBlocks":[
+              {"title":"Starting Items","itemIds":[1120,2003]},
+              {"title":"Core Items","itemIds":[6697,3009,3046]},
+              {"title":"Fourth Item","itemIds":[3031,3094]},
+              {"title":"Fifth Item","itemIds":[3036,3094,3031]},
+              {"title":"Sixth Item","itemIds":[3036,3094,3072]},
+              {"title":"Seventh Item","itemIds":[3072,3142,3139]},
+              {"title":"Consumables","itemIds":[2055,2003,2140]}]}
+            """;
+
+        Assert.True(SiteImportPayload.TryParse(raw, out var payload, out var failure), failure);
+        Assert.Null(SiteImportValidator.ValidateRunes(payload!.Runes));
+        Assert.Null(SiteImportValidator.ValidateItems(payload.ItemBlocks));
+        Assert.Equal(
+            "CoachBuild import: Jhin ADC (u.gg)",
+            SiteImportValidator.PageTitle("Jhin", payload.Role, payload.Source));
+
+        var api = new MockLcuApi();
+        api.Enqueue(HttpMethod.Get, "/lol-perks/v1/pages", Ok("[]"));
+        api.Enqueue(HttpMethod.Get, "/lol-perks/v1/inventory", Ok("{\"ownedPageCount\":5}"));
+        api.Enqueue(HttpMethod.Post, "/lol-perks/v1/pages", Ok("{\"id\":7}"));
+        api.Enqueue(HttpMethod.Put, "/lol-perks/v1/currentpage", Ok("7"));
+        api.Enqueue(HttpMethod.Get, "/lol-perks/v1/currentpage", Ok(
+            "{\"id\":7,\"name\":\"CoachBuild import: Jhin ADC (u.gg)\",\"isDeletable\":true," +
+            "\"primaryStyleId\":8000,\"subStyleId\":8300," +
+            "\"selectedPerkIds\":[8021,8009,9103,8017,8321,8316,5008,5008,5011],\"current\":true}"));
+        EnqueueItemWrite(api);
+
+        var result = await SiteImportApplier.ApplyAsync(
+            payload, "Jhin", 202, new RuneApplyService(api), new ItemSetApplyService(api));
+
+        var success = Assert.IsType<SiteImportSuccess>(result);
+        Assert.Equal("Imported runes + 19-item set for Jhin (ADC) from u.gg", success.Message);
+    }
+
     private static LcuResponse Ok(string raw) => new(true, 200, MockLcuApi.Json(raw), raw);
 }
