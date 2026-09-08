@@ -1,0 +1,428 @@
+using CoachBuild.Core;
+
+namespace CoachBuild.Desktop.Web;
+
+/// <summary>The three destinations the companion window can show.</summary>
+public enum CompanionTab
+{
+    /// <summary>The hosted CoachBuild web app. The only tab with a session token.</summary>
+    Companion,
+    UGg,
+    Coachless,
+}
+
+/// <summary>
+/// A third-party site the window renders for the user to READ.
+///
+/// <para><b>Rendering only.</b> Nothing in this app scrapes, parses, reads the
+/// DOM of, or automatically navigates these sites — that is the project rule
+/// stated in <c>CLAUDE.md</c> and it is the reason
+/// <see cref="SiteTabView"/> has no <c>ExecuteScriptAsync</c> call while the
+/// companion host does (it reads its OWN page's version meta tag). A test pins
+/// that asymmetry, because "we only render it" is a claim about code that has
+/// to stay true after someone adds a feature.</para>
+/// </summary>
+public sealed record SiteDefinition(
+    CompanionTab Tab,
+    string Key,
+    string Label,
+    Uri Home)
+{
+    /// <summary>The deep link for a champion+role, or null when this site cannot address one.</summary>
+    public Uri? BuildUrl(string? championKey, int? roleId) =>
+        SiteDeepLink.Build(Tab, championKey, roleId);
+
+    /// <summary>The host used for the site's first party pages.</summary>
+    public string Host => Home.Host;
+}
+
+public static class CompanionTabs
+{
+    public const string CompanionLabel = "Companion";
+
+    public static readonly SiteDefinition UGg = new(
+        CompanionTab.UGg,
+        "ugg",
+        "u.gg",
+        new Uri("https://u.gg/", UriKind.Absolute));
+
+    public static readonly SiteDefinition Coachless = new(
+        CompanionTab.Coachless,
+        "coachless",
+        "Coachless",
+        new Uri("https://coachless.gg/", UriKind.Absolute));
+
+    public static IReadOnlyList<SiteDefinition> Sites { get; } = [UGg, Coachless];
+
+    /// <summary>The tab order the strip renders, left to right. Companion is always first.</summary>
+    public static IReadOnlyList<CompanionTab> Order { get; } =
+        [CompanionTab.Companion, CompanionTab.UGg, CompanionTab.Coachless];
+
+    public static SiteDefinition? SiteFor(CompanionTab tab) => tab switch
+    {
+        CompanionTab.UGg => UGg,
+        CompanionTab.Coachless => Coachless,
+        _ => null,
+    };
+
+    public static string LabelFor(CompanionTab tab) => SiteFor(tab)?.Label ?? CompanionLabel;
+
+    /// <summary>The persisted key for a tab. Stable across releases — it is written to settings.</summary>
+    public static string KeyFor(CompanionTab tab) => SiteFor(tab)?.Key ?? "companion";
+
+    /// <summary>
+    /// Parses a persisted key. An unknown value resolves to
+    /// <see cref="CompanionTab.Companion"/> rather than throwing: a settings
+    /// file written by a newer build must never stop this one from opening a
+    /// window.
+    /// </summary>
+    public static CompanionTab ParseKey(string? key) => key?.Trim().ToLowerInvariant() switch
+    {
+        "ugg" => CompanionTab.UGg,
+        "coachless" => CompanionTab.Coachless,
+        _ => CompanionTab.Companion,
+    };
+
+    /// <summary>
+    /// Returns the WebView2 profile directory for a tab.
+    ///
+    /// <para>The existing companion profile is intentionally kept at the old
+    /// root path so a native upgrade does not sign the user out. Third-party
+    /// tabs live in their own children and can therefore never share cookies,
+    /// local storage, cache or service workers with the hosted app or each
+    /// other.</para>
+    /// </summary>
+    public static string ProfileFolder(string root, CompanionTab tab)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        var fullRoot = Path.GetFullPath(root);
+        var site = SiteFor(tab);
+        return site is null ? fullRoot : Path.Combine(fullRoot, site.Key);
+    }
+}
+
+/// <summary>
+/// The small part of companion UI state that belongs to the browser window.
+/// It deliberately contains no cookies or URLs: those stay in WebView2's
+/// profile directories. The settings lane can map this value into the native
+/// settings document through <see cref="ICompanionTabsPreferencesStore"/>.
+/// </summary>
+public sealed record CompanionTabsPreferences
+{
+    public const double DefaultZoomFactor = 1.0;
+    public const double MinZoomFactor = 0.5;
+    public const double MaxZoomFactor = 2.0;
+    public const double ZoomStep = 0.1;
+
+    public CompanionTabsPreferences(
+        CompanionTab lastTab = CompanionTab.Companion,
+        IReadOnlyDictionary<CompanionTab, double>? zoomFactors = null)
+    {
+        LastTab = IsKnownTab(lastTab) ? lastTab : CompanionTab.Companion;
+        ZoomFactors = NormalizeZooms(zoomFactors);
+    }
+
+    public CompanionTab LastTab { get; }
+
+    public IReadOnlyDictionary<CompanionTab, double> ZoomFactors { get; }
+
+    public static CompanionTabsPreferences Default { get; } = new();
+
+    public double ZoomFor(CompanionTab tab) =>
+        ZoomFactors.TryGetValue(tab, out var value) ? value : DefaultZoomFactor;
+
+    public CompanionTabsPreferences WithLastTab(CompanionTab tab) =>
+        new(IsKnownTab(tab) ? tab : CompanionTab.Companion, ZoomFactors);
+
+    public CompanionTabsPreferences WithZoom(CompanionTab tab, double zoomFactor)
+    {
+        if (!IsKnownTab(tab)) return this;
+        var zooms = new Dictionary<CompanionTab, double>(ZoomFactors)
+        {
+            [tab] = NormalizeZoom(zoomFactor),
+        };
+        return new(LastTab, zooms);
+    }
+
+    public static bool IsKnownTab(CompanionTab tab) =>
+        tab is CompanionTab.Companion or CompanionTab.UGg or CompanionTab.Coachless;
+
+    public static double NormalizeZoom(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value)) return DefaultZoomFactor;
+        return Math.Clamp(value, MinZoomFactor, MaxZoomFactor);
+    }
+
+    private static IReadOnlyDictionary<CompanionTab, double> NormalizeZooms(
+        IReadOnlyDictionary<CompanionTab, double>? zoomFactors)
+    {
+        var result = new Dictionary<CompanionTab, double>();
+        if (zoomFactors is null) return result;
+        foreach (var pair in zoomFactors)
+        {
+            if (IsKnownTab(pair.Key)) result[pair.Key] = NormalizeZoom(pair.Value);
+        }
+        return result;
+    }
+}
+
+/// <summary>
+/// Persistence seam for the browser chrome. The WPF window never assumes a
+/// particular settings file shape; callers can adapt the existing native
+/// settings store and keep tab state alongside calibration and other desktop
+/// preferences.
+/// </summary>
+public interface ICompanionTabsPreferencesStore
+{
+    CompanionTabsPreferences Read();
+
+    void Save(CompanionTabsPreferences preferences);
+}
+
+/// <summary>
+/// Champion deep links for the site tabs. PURE — no network, no DOM, no client.
+///
+/// <para>Both URL shapes were confirmed by loading them in a real browser on
+/// 2026-09-07 rather than assumed:</para>
+/// <list type="bullet">
+///   <item><c>https://u.gg/lol/champions/{slug}/build/{role}</c> — the shape
+///   u.gg's own role tabs link to. A query form (<c>?role=</c>) also resolves,
+///   but the path form is the one the site itself considers canonical.</item>
+///   <item><c>https://coachless.gg/builds/{slug}?role={role}</c> — the shape
+///   coachless.gg's own champion links use.</item>
+/// </list>
+///
+/// <para><b>The slug is the ddragon key folded by
+/// <see cref="ChampionNameKey.Normalize"/></b>, which is the same fold the
+/// champion resolver already uses. That gives <c>monkeyking</c> for Wukong and
+/// <c>drmundo</c>/<c>belveth</c>/<c>kaisa</c> for the apostrophe-and-space
+/// champions. Verified: u.gg serves <c>/lol/champions/monkeyking/build/jungle</c>
+/// directly, and coachless.gg 302s <c>/builds/monkeyking</c> to
+/// <c>/builds/wukong</c> — both accept the key, so no per-site champion name
+/// table has to exist and drift.</para>
+/// </summary>
+public static class SiteDeepLink
+{
+    /// <summary>
+    /// The role token both sites use, from the app's own role id
+    /// (<c>ComplianceRules.RoleIdFromPosition</c>: 0 top, 1 jungle, 2 middle,
+    /// 3 bottom, 4 utility). Anything else is null and the link drops the role
+    /// rather than guessing one.
+    /// </summary>
+    public static string? RoleToken(int? roleId) => roleId switch
+    {
+        0 => "top",
+        1 => "jungle",
+        2 => "mid",
+        3 => "adc",
+        4 => "support",
+        _ => null,
+    };
+
+    /// <summary>The human label for a role id, for the champ-select chip. Null when unknown.</summary>
+    public static string? RoleLabel(int? roleId) => roleId switch
+    {
+        0 => "Top",
+        1 => "Jungle",
+        2 => "Mid",
+        3 => "ADC",
+        4 => "Support",
+        _ => null,
+    };
+
+    public static string? Slug(string? championKey)
+    {
+        var slug = ChampionNameKey.Normalize(championKey);
+        return string.IsNullOrEmpty(slug) ? null : slug;
+    }
+
+    public static Uri? Build(CompanionTab tab, string? championKey, int? roleId)
+    {
+        if (Slug(championKey) is not { } slug) return null;
+        var role = RoleToken(roleId);
+        return tab switch
+        {
+            CompanionTab.UGg => new Uri(
+                role is null
+                    ? $"https://u.gg/lol/champions/{slug}/build"
+                    : $"https://u.gg/lol/champions/{slug}/build/{role}",
+                UriKind.Absolute),
+            CompanionTab.Coachless => new Uri(
+                role is null
+                    ? $"https://coachless.gg/builds/{slug}"
+                    : $"https://coachless.gg/builds/{slug}?role={role}",
+                UriKind.Absolute),
+            _ => null,
+        };
+    }
+}
+
+/// <summary>
+/// What champ select currently says, projected for the site tabs' chip.
+///
+/// <para><see cref="Locked"/> distinguishes a locked-in champion from a hover
+/// (<c>championPickIntent</c>). Both offer the same link; only the wording
+/// differs, because offering a page for a champion the user is still only
+/// hovering is useful and pretending it is settled is not.</para>
+/// </summary>
+public sealed record ChampSelectContext(
+    int ChampionId,
+    string ChampionKey,
+    string ChampionName,
+    int? RoleId,
+    bool Locked)
+{
+    /// <summary>
+    /// The chip's label for a site. Deliberately a full sentence-shaped offer
+    /// ("Open X on u.gg"), never a bare icon: this button navigates a page the
+    /// user may be reading, so what it will do has to be legible before it is
+    /// clicked.
+    /// </summary>
+    public string ChipLabel(SiteDefinition site)
+    {
+        ArgumentNullException.ThrowIfNull(site);
+        var role = SiteDeepLink.RoleLabel(RoleId);
+        var who = role is null ? ChampionName : $"{ChampionName} {role}";
+        return Locked
+            ? $"Open {who} on {site.Label}"
+            : $"Open {who} on {site.Label} (hovered)";
+    }
+
+    public Uri? UrlFor(SiteDefinition site)
+    {
+        ArgumentNullException.ThrowIfNull(site);
+        return site.BuildUrl(ChampionKey, RoleId);
+    }
+}
+
+/// <summary>
+/// The navigation policy for the SITE tabs. Deliberately not
+/// <see cref="HostedPagePolicy"/>: that one is a same-origin lock for the app's
+/// own pages, and applying it here would break every outbound link on a stats
+/// site and make the tab feel broken.
+///
+/// <para>What it still refuses, and why:</para>
+/// <list type="bullet">
+///   <item><b>Anything that is not http(s).</b> A page must not be able to hand
+///   Windows a <c>steam:</c>/<c>riot:</c>/<c>ms-settings:</c> URI and have this
+///   app launch it. WebView2 does not follow those itself, but
+///   <c>NewWindowRequested</c> hands us the URI and a naive handler would.</item>
+///   <item><b>Plain http.</b> Both sites are https; a downgrade is either a
+///   typo or a hostile redirect.</item>
+/// </list>
+///
+/// <para>It does NOT restrict the host. A stats site that cannot reach its own
+/// patch notes or a wiki entry is a worse product than a tab that can, and the
+/// window has no address bar, so every navigation still starts from a link on
+/// one of the two sites the user asked for.</para>
+/// </summary>
+public static class SiteNavigationPolicy
+{
+    /// <summary>
+    /// Returns true only for a public HTTPS target. Site tabs can follow the
+    /// HTTPS redirects and CDN pages their sites need, but they cannot be used
+    /// to reach the local machine or launch an OS URI handler.
+    /// </summary>
+    public static bool IsAllowed(Uri? target) =>
+        target is not null
+        && target.IsAbsoluteUri
+        && string.Equals(target.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+        && !IsLocalTarget(target);
+
+    public static bool IsAllowed(string? target) =>
+        Uri.TryCreate(target, UriKind.Absolute, out var uri) && IsAllowed(uri);
+
+    /// <summary>Site-tab overload that makes the absence of a hosted session explicit.</summary>
+    public static bool IsAllowed(SiteDefinition? site, Uri? target) =>
+        site is not null && IsAllowed(target);
+
+    /// <summary>
+    /// True when <paramref name="current"/> is already the page
+    /// <paramref name="offer"/> would navigate to, so the chip can stand down
+    /// instead of offering a link to where the user already is.
+    ///
+    /// <para>Path-and-host only: both sites rewrite their own query strings
+    /// (coachless normalises <c>?role=</c>, u.gg appends analytics params), and
+    /// a comparison that included those would leave the chip permanently lit.</para>
+    /// </summary>
+    public static bool IsAlreadyThere(string? current, Uri? offer)
+    {
+        if (offer is null) return false;
+        if (!Uri.TryCreate(current, UriKind.Absolute, out var now)) return false;
+        if (!string.Equals(now.Host, offer.Host, StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.Equals(
+            now.AbsolutePath.TrimEnd('/'),
+            offer.AbsolutePath.TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase)) return false;
+
+        // A role is part of the offer. Ignore analytics and other query
+        // parameters, while keeping `?role=top` distinct from `?role=jungle`.
+        // u.gg encodes its role in the final path segment; Coachless uses the
+        // query form.
+        var offeredRole = RoleFromUri(offer);
+        var currentRole = RoleFromUri(now);
+        return string.Equals(offeredRole, currentRole, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? RoleFromUri(Uri uri)
+    {
+        var query = ParseRoleQuery(uri.Query);
+        if (query is not null) return query;
+
+        var segments = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length == 0) return null;
+        var last = segments[^1];
+        return last.ToLowerInvariant() switch
+        {
+            "top" or "jungle" or "mid" or "adc" or "support" => last,
+            _ => null,
+        };
+    }
+
+    private static string? ParseRoleQuery(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return null;
+        foreach (var pair in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = pair.IndexOf('=');
+            if (separator < 0) continue;
+            var key = Uri.UnescapeDataString(pair[..separator]);
+            if (!string.Equals(key, "role", StringComparison.OrdinalIgnoreCase)) continue;
+            var value = Uri.UnescapeDataString(pair[(separator + 1)..]).Trim().ToLowerInvariant();
+            return value is "top" or "jungle" or "mid" or "adc" or "support" ? value : null;
+        }
+        return null;
+    }
+
+    private static bool IsLocalTarget(Uri target)
+    {
+        var host = target.DnsSafeHost.TrimEnd('.');
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".local", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("0", StringComparison.OrdinalIgnoreCase)) return true;
+
+        if (System.Net.IPAddress.TryParse(host, out var address))
+        {
+            if (System.Net.IPAddress.IsLoopback(address)) return true;
+            var bytes = address.GetAddressBytes();
+            if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+            {
+                // RFC 1918 private, link-local and the carrier-grade NAT range.
+                return bytes[0] == 10
+                    || bytes[0] == 127
+                    || (bytes[0] == 169 && bytes[1] == 254)
+                    || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31)
+                    || (bytes[0] == 192 && bytes[1] == 168)
+                    || (bytes[0] == 100 && bytes[1] is >= 64 and <= 127);
+            }
+
+            // Unique-local (fc00::/7) and link-local (fe80::/10) IPv6.
+            return (bytes[0] & 0xFE) == 0xFC
+                || (bytes[0] == 0xFE && (bytes[1] & 0xC0) == 0x80);
+        }
+
+        return false;
+    }
+}

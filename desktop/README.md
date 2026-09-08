@@ -27,9 +27,17 @@ PowerShell companion while the staged native rollout proves parity.
 - **Overlay:** transparent, borderless, topmost, non-focusable and click-through
   by default. It becomes keyboard-interactive only for calibration/adjustment.
   Calibration is stored by monitor resolution and DPI.
-- **WebView2:** one owned window navigates between `/draft` and canonical Builds
-  URLs. Navigation is same-origin only. Missing runtime state stays in an
-  app-owned fallback and never opens the default browser.
+- **WebView2:** one owned window with three tabs — Companion, u.gg, Coachless
+  (1.1.0). The Companion tab navigates between `/draft` and canonical Builds
+  URLs and is same-origin only; it is the only tab carrying the session token
+  and the only one whose document is ever scripted (the version meta tag).
+  Site tabs are **rendering only** — no scraping, no DOM reads, no automated
+  navigation — and are restricted to https. Each tab's WebView2 is created on
+  first visit and gets its own profile directory under `WebView2/`, so cookies
+  and site preferences persist without sharing storage with the hosted app.
+  Missing runtime state stays in an app-owned fallback and never opens the
+  default browser; a failed page load is a separate state that names the site
+  and offers a retry.
 - **Updates:** Velopack checks/downloads in the background, defers application
   while the companion is busy, then applies and relaunches when the gate clears.
 

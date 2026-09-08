@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CoachBuild.Desktop.Web;
 
 namespace CoachBuild.Desktop.Overlay;
 
@@ -8,6 +10,25 @@ public sealed class OverlaySettings
     public string? LaneOverride { get; set; }
 
     public bool OverlayVisible { get; set; } = true;
+
+    /// <summary>
+    /// The last companion-window tab selected by the user. This is a stable
+    /// key (for example <c>companion</c>, <c>ugg</c>, or <c>coachless</c>),
+    /// rather than the enum name, so changing the native UI's type names does
+    /// not strand an existing profile. Unknown keys are normalised to
+    /// <c>companion</c> when the settings are read.
+    /// </summary>
+    [JsonPropertyName("lastCompanionTab")]
+    public string LastCompanionTab { get; set; } = OverlaySettingsStore.CompanionTabKey;
+
+    /// <summary>
+    /// WebView zoom factors keyed by the same stable site keys used by the
+    /// companion tab model. The map intentionally includes the hosted
+    /// Companion tab as well as third-party sites; the UI can use one helper
+    /// for every destination.
+    /// </summary>
+    [JsonPropertyName("zoomFactors")]
+    public Dictionary<string, double> ZoomFactors { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     [JsonPropertyName("autostartConfigured")]
     public bool AutostartConfigured { get; set; }
@@ -64,12 +85,24 @@ public sealed class PersistedCalibration
 }
 
 /// <summary>
-/// Merge-safe settings persistence for lane, overlay visibility, and
-/// resolution/DPI-tagged calibration. It also reads the Electron settings
-/// shape once, so an upgrade does not silently discard a user's alignment.
+/// Merge-safe settings persistence for lane, overlay visibility, companion tab
+/// preferences, and resolution/DPI-tagged calibration. It also reads the
+/// Electron settings shape once, so an upgrade does not silently discard a
+/// user's alignment.
 /// </summary>
-public sealed class OverlaySettingsStore
+public sealed class OverlaySettingsStore : ICompanionTabsPreferencesStore
 {
+    public const string CompanionTabKey = "companion";
+    public const string UggTabKey = "ugg";
+    public const string CoachlessTabKey = "coachless";
+
+    // Keep the persistence boundary in lockstep with the typed tab model. A
+    // corrupt profile can therefore never make a WebView zoom operation leave
+    // the range the tab UI promises to its callers.
+    public const double DefaultZoomFactor = CompanionTabsPreferences.DefaultZoomFactor;
+    public const double MinZoomFactor = CompanionTabsPreferences.MinZoomFactor;
+    public const double MaxZoomFactor = CompanionTabsPreferences.MaxZoomFactor;
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.General)
     {
         WriteIndented = true,
@@ -77,13 +110,22 @@ public sealed class OverlaySettingsStore
         Converters = { new JsonStringEnumConverter() },
     };
 
+    // Each store instance has its own cache and lock, so two callers in this
+    // process can otherwise perform stale read/modify/write cycles. This gate
+    // closes that window. The desktop app is single-instance, so no separate
+    // lock-file protocol is needed for the production process boundary.
+    private static readonly ConcurrentDictionary<string, object> ProcessGates = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly object _gate = new();
     private readonly string _path;
+    private readonly string _canonicalPath;
     private OverlaySettings? _cachedSettings;
+    private CompanionTabsPreferences? _cachedCompanionPreferences;
 
     public OverlaySettingsStore(string path)
     {
         _path = path ?? throw new ArgumentNullException(nameof(path));
+        _canonicalPath = System.IO.Path.GetFullPath(_path);
     }
 
     public string Path => _path;
@@ -101,7 +143,10 @@ public sealed class OverlaySettingsStore
         ArgumentNullException.ThrowIfNull(settings);
         lock (_gate)
         {
-            WriteCore(Normalize(CloneSettings(settings)));
+            lock (GetProcessGate())
+            {
+                WriteCore(Normalize(CloneSettings(settings)));
+            }
         }
     }
 
@@ -109,9 +154,12 @@ public sealed class OverlaySettingsStore
     {
         lock (_gate)
         {
-            var settings = ReadCore();
-            settings.LaneOverride = NormalizeLane(lane);
-            WriteCore(settings);
+            lock (GetProcessGate())
+            {
+                var settings = ReadLatestCore();
+                settings.LaneOverride = NormalizeLane(lane);
+                WriteCore(settings);
+            }
         }
     }
 
@@ -119,9 +167,12 @@ public sealed class OverlaySettingsStore
     {
         lock (_gate)
         {
-            var settings = ReadCore();
-            settings.OverlayVisible = visible;
-            WriteCore(settings);
+            lock (GetProcessGate())
+            {
+                var settings = ReadLatestCore();
+                settings.OverlayVisible = visible;
+                WriteCore(settings);
+            }
         }
     }
 
@@ -129,9 +180,12 @@ public sealed class OverlaySettingsStore
     {
         lock (_gate)
         {
-            var settings = ReadCore();
-            settings.AutostartConfigured = configured;
-            WriteCore(settings);
+            lock (GetProcessGate())
+            {
+                var settings = ReadLatestCore();
+                settings.AutostartConfigured = configured;
+                WriteCore(settings);
+            }
         }
     }
 
@@ -143,9 +197,101 @@ public sealed class OverlaySettingsStore
     {
         lock (_gate)
         {
+            lock (GetProcessGate())
+            {
+                var settings = ReadLatestCore();
+                settings.RankSampleSecret = NormalizeSecret(secret);
+                WriteCore(settings);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Stores the user's last selected companion tab. The key is deliberately
+    /// string-based so this settings layer does not depend on the WebView tab
+    /// model; <c>CompanionTabs.KeyFor</c> is the producer of the keys in the UI.
+    /// Invalid or missing values fail closed to the hosted Companion tab.
+    /// </summary>
+    public void SetLastCompanionTab(string? tabKey)
+    {
+        lock (_gate)
+        {
+            lock (GetProcessGate())
+            {
+                var settings = ReadLatestCore();
+                settings.LastCompanionTab = NormalizeCompanionTabKey(tabKey);
+                WriteCore(settings);
+            }
+        }
+    }
+
+    /// <summary>Returns the persisted zoom for a tab/site, or 1.0 by default.</summary>
+    public double GetZoomFactor(string? siteKey)
+    {
+        var key = NormalizeSiteKey(siteKey);
+        if (key is null) return DefaultZoomFactor;
+
+        lock (_gate)
+        {
             var settings = ReadCore();
-            settings.RankSampleSecret = NormalizeSecret(secret);
-            WriteCore(settings);
+            return settings.ZoomFactors.TryGetValue(key, out var factor)
+                ? NormalizeZoomFactor(factor)
+                : DefaultZoomFactor;
+        }
+    }
+
+    /// <summary>
+    /// Persists a tab/site zoom factor after clamping it to WebView2's safe
+    /// range. Non-finite values fall back to the default factor.
+    /// </summary>
+    public void SetZoomFactor(string? siteKey, double factor)
+    {
+        var key = NormalizeSiteKey(siteKey);
+        if (key is null) return;
+
+        lock (_gate)
+        {
+            lock (GetProcessGate())
+            {
+                var settings = ReadLatestCore();
+                settings.ZoomFactors[key] = NormalizeZoomFactor(factor);
+                WriteCore(settings);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adapts the existing native settings store to the typed seam consumed by
+    /// the companion WebView. The persisted document remains flat and keyed by
+    /// stable strings; the Web layer can therefore use its enum without
+    /// changing the long-lived desktop settings shape.
+    /// </summary>
+    CompanionTabsPreferences ICompanionTabsPreferencesStore.Read()
+    {
+        lock (_gate)
+        {
+            var preferences = ToCompanionTabsPreferences(ReadCore());
+            _cachedCompanionPreferences = preferences;
+            return preferences;
+        }
+    }
+
+    void ICompanionTabsPreferencesStore.Save(CompanionTabsPreferences preferences) =>
+        SaveCompanionTabsPreferences(preferences);
+
+    private void SaveCompanionTabsPreferences(CompanionTabsPreferences preferences)
+    {
+        ArgumentNullException.ThrowIfNull(preferences);
+        lock (_gate)
+        {
+            lock (GetProcessGate())
+            {
+                var settings = ReadLatestCore();
+                MergeCompanionPreferences(settings, preferences, _cachedCompanionPreferences);
+
+                WriteCore(settings);
+                _cachedCompanionPreferences = ToCompanionTabsPreferences(settings);
+            }
         }
     }
 
@@ -153,13 +299,16 @@ public sealed class OverlaySettingsStore
     {
         lock (_gate)
         {
-            var settings = ReadCore();
-            settings.Calibrations[display.Key] = new PersistedCalibration
+            lock (GetProcessGate())
             {
-                Resolution = display,
-                Geometry = geometry.Normalize(),
-            };
-            WriteCore(settings);
+                var settings = ReadLatestCore();
+                settings.Calibrations[display.Key] = new PersistedCalibration
+                {
+                    Resolution = display,
+                    Geometry = geometry.Normalize(),
+                };
+                WriteCore(settings);
+            }
         }
     }
 
@@ -194,8 +343,19 @@ public sealed class OverlaySettingsStore
     {
         if (_cachedSettings is not null) return _cachedSettings;
 
+        return _cachedSettings = ReadLatestCore();
+    }
+
+    /// <summary>
+    /// Reads the current on-disk snapshot, bypassing this instance's cache.
+    /// Every mutation uses this path so a store created before another store's
+    /// write still merges the latest settings instead of restoring its stale
+    /// snapshot.
+    /// </summary>
+    private OverlaySettings ReadLatestCore()
+    {
         var settings = TryRead(_path);
-        if (settings is not null) return _cachedSettings = Normalize(settings);
+        if (settings is not null) return Normalize(settings);
 
         // Electron's old path/shape. This is read-only migration input; the
         // first native write moves it into the new file.
@@ -205,11 +365,14 @@ public sealed class OverlaySettingsStore
         if (!string.Equals(legacyPath, _path, StringComparison.OrdinalIgnoreCase))
         {
             var legacy = TryReadLegacy(legacyPath);
-            if (legacy is not null) return _cachedSettings = Normalize(legacy);
+            if (legacy is not null) return Normalize(legacy);
         }
 
-        return _cachedSettings = new OverlaySettings();
+        return Normalize(new OverlaySettings());
     }
+
+    private object GetProcessGate() =>
+        ProcessGates.GetOrAdd(_canonicalPath, static _ => new object());
 
     private void WriteCore(OverlaySettings settings)
     {
@@ -231,6 +394,8 @@ public sealed class OverlaySettingsStore
         {
             LaneOverride = settings.LaneOverride,
             OverlayVisible = settings.OverlayVisible,
+            LastCompanionTab = settings.LastCompanionTab,
+            ZoomFactors = CloneZoomFactors(settings.ZoomFactors),
             AutostartConfigured = settings.AutostartConfigured,
             // Every field has to be here: Save() clones before it writes, so a
             // field missed in this method is silently reset to its default on
@@ -257,6 +422,72 @@ public sealed class OverlaySettingsStore
                 StringComparer.OrdinalIgnoreCase);
     }
 
+    private static Dictionary<string, double> CloneZoomFactors(
+        Dictionary<string, double>? factors)
+    {
+        var result = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        if (factors is null) return result;
+
+        foreach (var pair in factors)
+        {
+            if (NormalizeSiteKey(pair.Key) is { } key)
+                result[key] = NormalizeZoomFactor(pair.Value);
+        }
+
+        return result;
+    }
+
+    private static CompanionTabsPreferences ToCompanionTabsPreferences(OverlaySettings settings)
+    {
+        var zooms = new Dictionary<CompanionTab, double>();
+        foreach (var tab in CompanionTabs.Order)
+        {
+            var key = CompanionTabs.KeyFor(tab);
+            if (settings.ZoomFactors.TryGetValue(key, out var factor))
+                zooms[tab] = NormalizeZoomFactor(factor);
+        }
+
+        return new(CompanionTabs.ParseKey(settings.LastCompanionTab), zooms);
+    }
+
+    private static void MergeCompanionPreferences(
+        OverlaySettings latest,
+        CompanionTabsPreferences incoming,
+        CompanionTabsPreferences? baseline)
+    {
+        // A preference object is a snapshot. If it came from this store, only
+        // write fields the caller changed from that snapshot; this keeps a
+        // second store's newer tab/zoom choice intact. A caller with no read
+        // baseline is treated as a complete initial preference snapshot.
+        if (baseline is null || incoming.LastTab != baseline.LastTab)
+            latest.LastCompanionTab = CompanionTabs.KeyFor(incoming.LastTab);
+
+        foreach (var tab in CompanionTabs.Order)
+        {
+            var incomingHas = incoming.ZoomFactors.TryGetValue(tab, out var incomingZoom);
+            // Not `baseline?.ZoomFactors.TryGetValue(...)`: a conditional access
+            // may skip the call, so the compiler cannot prove the out variable
+            // was assigned.
+            var baselineZoom = CompanionTabsPreferences.DefaultZoomFactor;
+            var baselineHas = baseline is not null
+                && baseline.ZoomFactors.TryGetValue(tab, out baselineZoom);
+            var changed = baseline is null
+                ? incomingHas
+                : incomingHas != baselineHas
+                    || incomingHas && !AreEqualZooms(incomingZoom, baselineZoom);
+            if (!changed) continue;
+
+            var key = CompanionTabs.KeyFor(tab);
+            if (incomingHas)
+                latest.ZoomFactors[key] = NormalizeZoomFactor(incomingZoom);
+            else
+                latest.ZoomFactors.Remove(key);
+        }
+    }
+
+    private static bool AreEqualZooms(double left, double right) =>
+        NormalizeZoomFactor(left) == NormalizeZoomFactor(right);
+
     private static OverlaySettings? TryRead(string path)
     {
         try
@@ -266,7 +497,53 @@ public sealed class OverlaySettingsStore
         }
         catch
         {
-            return null;
+            // A malformed preference value should not hide otherwise valid
+            // overlay settings. Recover the two newer preference properties
+            // independently, then let the normal serializer validate the
+            // established settings shape.
+            try
+            {
+                if (!File.Exists(path)) return null;
+                using var document = JsonDocument.Parse(File.ReadAllText(path));
+                if (document.RootElement.ValueKind != JsonValueKind.Object) return null;
+
+                var values = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+                foreach (var property in document.RootElement.EnumerateObject())
+                    values[property.Name] = property.Value.Clone();
+
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    if (string.Equals(property.Name, "lastCompanionTab", StringComparison.OrdinalIgnoreCase)
+                        && property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                    {
+                        values[property.Name] = JsonSerializer.SerializeToElement(CompanionTabKey, JsonOptions);
+                    }
+
+                    if (!string.Equals(property.Name, "zoomFactors", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    var factors = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                    if (property.Value.ValueKind == JsonValueKind.Object)
+                    {
+                        foreach (var factor in property.Value.EnumerateObject())
+                        {
+                            if (factor.Value.ValueKind == JsonValueKind.Number
+                                && factor.Value.TryGetDouble(out var number)
+                                && double.IsFinite(number))
+                                factors[factor.Name] = number;
+                        }
+                    }
+
+                    values[property.Name] = JsonSerializer.SerializeToElement(factors, JsonOptions);
+                }
+
+                return JsonSerializer.Deserialize<OverlaySettings>(
+                    JsonSerializer.Serialize(values, JsonOptions),
+                    JsonOptions);
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 
@@ -310,6 +587,8 @@ public sealed class OverlaySettingsStore
     {
         settings.LaneOverride = NormalizeLane(settings.LaneOverride);
         settings.RankSampleSecret = NormalizeSecret(settings.RankSampleSecret);
+        settings.LastCompanionTab = NormalizeCompanionTabKey(settings.LastCompanionTab);
+        settings.ZoomFactors = CloneZoomFactors(settings.ZoomFactors);
         settings.Calibrations = CloneMap(settings.Calibrations);
         settings.ItemRowCalibrations = CloneMap(settings.ItemRowCalibrations);
         return settings;
@@ -326,5 +605,29 @@ public sealed class OverlaySettingsStore
     {
         var value = secret?.Trim();
         return string.IsNullOrEmpty(value) ? null : value;
+    }
+
+    private static string NormalizeCompanionTabKey(string? tabKey) =>
+        tabKey?.Trim().ToLowerInvariant() switch
+        {
+            UggTabKey => UggTabKey,
+            CoachlessTabKey => CoachlessTabKey,
+            _ => CompanionTabKey,
+        };
+
+    private static string? NormalizeSiteKey(string? siteKey)
+    {
+        if (string.IsNullOrWhiteSpace(siteKey)) return null;
+
+        var value = siteKey.Trim().ToLowerInvariant();
+        return value is CompanionTabKey or UggTabKey or CoachlessTabKey
+            ? value
+            : null;
+    }
+
+    private static double NormalizeZoomFactor(double factor)
+    {
+        if (double.IsNaN(factor) || double.IsInfinity(factor)) return DefaultZoomFactor;
+        return Math.Clamp(factor, MinZoomFactor, MaxZoomFactor);
     }
 }

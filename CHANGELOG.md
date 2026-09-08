@@ -108,6 +108,40 @@ stays console-only — additive and feature-detected, no version gate. How to
 use it: update the desktop app from the tray, reproduce the game, then open
 the log folder from the tray and send companion.log (or Send diagnostics).
 
+## Desktop 1.1.0 — u.gg and Coachless open inside the companion (2026-09-08)
+
+The companion window has tabs: **Companion · u.gg · Coachless**. Both stats
+sites render in-window, so checking a matchup mid-queue no longer means
+alt-tabbing to a browser. WebView2 is real Chromium, which is why this works
+at all — u.gg refuses to be iframed, and nothing here is an iframe.
+
+- **Lazy per tab.** A site's WebView2 is created on its first visit, so
+  startup is unchanged for anyone who never opens one, and the tray app does
+  not carry three Chromium process trees to sit in the notification area.
+- **Separate profiles.** The hosted app keeps the existing profile directory
+  (an upgrade does not sign anyone out); each site gets its own child folder,
+  so cookies, consent choices and Cloudflare's clearance persist across
+  restarts without sharing storage with the CoachBuild session.
+- **Back/forward, refresh, per-site zoom, and the last tab you used** are
+  remembered. Zoom is per site: 120% on Coachless does not shrink u.gg.
+- **A champ-select offer, never a redirect.** When the client reports a
+  champion — locked *or hovered* — the tab strip shows an offer to open that
+  champion's page for the detected role. It is a button. Nothing navigates a
+  page you are reading, and the label says "hovered" when that is what it is.
+- **Champ select still owns the Companion tab.** The automatic open loads the
+  draft page, but if you already have the window open on u.gg mid-champ-select
+  it refreshes underneath and leaves you where you are.
+- **Rendering only, and structurally so.** No scraping, no DOM reads, no
+  automated navigation of either site. The window makes exactly one
+  `ExecuteScriptAsync` call — the hosted page's own version meta tag — and a
+  test fails the build if a second one appears or if that one stops being
+  gated on the Companion tab.
+
+A failed site load names the site ("u.gg could not load this page…") and
+offers a retry. It deliberately never mentions the WebView2 runtime: that
+wording belongs to the repair screen, and a dropped connection is not a
+missing runtime.
+
 ## Desktop 1.0.25 — decision lines land in companion.log (2026-09-03)
 
 Companion half of the above: the new POST /client-log endpoint (session- and

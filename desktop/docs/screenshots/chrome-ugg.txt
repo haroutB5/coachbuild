@@ -1,0 +1,15 @@
+window: 'CoachBuild  •  Research'
+CompanionTabButton     visible  enabled   name='✦  Companion' rect=232x75
+UggTabButton           visible  enabled   name='u.gg' rect=113x75
+CoachlessTabButton     visible  enabled   name='Coachless' rect=175x75
+BackButton             visible  disabled  name='‹' rect=58x76
+ForwardButton          visible  disabled  name='›' rect=58x76
+RefreshButton          visible  enabled   name='↻' rect=74x76
+ZoomOutButton          visible  enabled   name='−' rect=69x76
+ZoomInButton           visible  enabled   name='+' rect=69x76
+ZoomText               visible  enabled   name='100%' rect=86x32
+OfferBar               <not present>
+OfferHintText          <not present>
+UggOfferButton         <not present>
+CoachlessOfferButton   <not present>
+StatusText             visible  enabled   name='u.gg ready' rect=2438x27

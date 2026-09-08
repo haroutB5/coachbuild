@@ -2,6 +2,7 @@ global using System.IO;
 
 using System.Text.Json;
 using CoachBuild.Desktop.Overlay;
+using CoachBuild.Desktop.Web;
 using Xunit;
 
 namespace CoachBuild.Desktop.Tests;
@@ -42,6 +43,184 @@ public sealed class SettingsStoreTests
         {
             var store = new OverlaySettingsStore(Path.Combine(root, "desktop-settings.json"));
             Assert.True(store.Read().OverlayVisible);
+            Assert.Equal(OverlaySettingsStore.CompanionTabKey, store.Read().LastCompanionTab);
+            Assert.Equal(
+                OverlaySettingsStore.DefaultZoomFactor,
+                store.GetZoomFactor(OverlaySettingsStore.UggTabKey));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CompanionTabAndPerSiteZoomSurviveRoundTrip()
+    {
+        var root = MakeTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "desktop-settings.json");
+            var store = new OverlaySettingsStore(path);
+
+            store.SetLastCompanionTab(" UGG ");
+            store.SetZoomFactor(" UGG ", 1.35);
+            store.SetZoomFactor("coachless", 1.8);
+
+            var afterRestart = new OverlaySettingsStore(path);
+            Assert.Equal(OverlaySettingsStore.UggTabKey, afterRestart.Read().LastCompanionTab);
+            Assert.Equal(1.35, afterRestart.GetZoomFactor("ugg"), precision: 3);
+            Assert.Equal(1.8, afterRestart.GetZoomFactor("COACHLESS"), precision: 3);
+            Assert.Equal(
+                OverlaySettingsStore.DefaultZoomFactor,
+                afterRestart.GetZoomFactor("companion"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CorruptTabAndZoomValuesFailClosedAndClampAtThePersistenceBoundary()
+    {
+        var root = MakeTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "desktop-settings.json");
+            File.WriteAllText(path, """
+            {
+              "lastCompanionTab": "future-tab",
+              "zoomFactors": {
+                "companion": -4,
+                "ugg": 99,
+                "coachless": 0.1,
+                "future-site": 2
+              }
+            }
+            """);
+
+            var store = new OverlaySettingsStore(path);
+            var settings = store.Read();
+            Assert.Equal(OverlaySettingsStore.CompanionTabKey, settings.LastCompanionTab);
+            Assert.Equal(OverlaySettingsStore.MinZoomFactor, store.GetZoomFactor("companion"));
+            Assert.Equal(OverlaySettingsStore.MaxZoomFactor, store.GetZoomFactor("ugg"));
+            Assert.Equal(OverlaySettingsStore.MinZoomFactor, store.GetZoomFactor("coachless"));
+            Assert.Equal(
+                OverlaySettingsStore.DefaultZoomFactor,
+                store.GetZoomFactor("future-site"));
+            Assert.DoesNotContain("future-site", settings.ZoomFactors.Keys);
+
+            // Non-finite input cannot be represented by ordinary JSON, but it
+            // can reach the setter from WebView2/event code and must be safe.
+            store.SetZoomFactor("ugg", double.NaN);
+            Assert.Equal(OverlaySettingsStore.DefaultZoomFactor, store.GetZoomFactor("ugg"));
+
+            // A bad preference entry must not discard an unrelated valid
+            // setting while the profile is read.
+            File.WriteAllText(path, """
+            {
+              "laneOverride": "MID",
+              "lastCompanionTab": "coachless",
+              "zoomFactors": {
+                "ugg": "not-a-number",
+                "coachless": 4
+              }
+            }
+            """);
+            var tolerant = new OverlaySettingsStore(path);
+            Assert.Equal("MID", tolerant.Read().LaneOverride);
+            Assert.Equal(OverlaySettingsStore.CoachlessTabKey, tolerant.Read().LastCompanionTab);
+            Assert.Equal(OverlaySettingsStore.DefaultZoomFactor, tolerant.GetZoomFactor("ugg"));
+            Assert.Equal(OverlaySettingsStore.MaxZoomFactor, tolerant.GetZoomFactor("coachless"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TypedCompanionPreferencesSeamMapsStableKeysAndPreservesOverlayFields()
+    {
+        var root = MakeTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "desktop-settings.json");
+            var store = new OverlaySettingsStore(path);
+            store.SetLaneOverride("mid");
+
+            var preferencesStore = (ICompanionTabsPreferencesStore)store;
+            var selected = preferencesStore.Read()
+                .WithLastTab(CompanionTab.Coachless)
+                .WithZoom(CompanionTab.UGg, 3)
+                .WithZoom(CompanionTab.Coachless, 0.1);
+            preferencesStore.Save(selected);
+
+            var afterRestart = (ICompanionTabsPreferencesStore)new OverlaySettingsStore(path);
+            var preferences = afterRestart.Read();
+            Assert.Equal(CompanionTab.Coachless, preferences.LastTab);
+            Assert.Equal(CompanionTabsPreferences.MaxZoomFactor, preferences.ZoomFor(CompanionTab.UGg));
+            Assert.Equal(CompanionTabsPreferences.MinZoomFactor, preferences.ZoomFor(CompanionTab.Coachless));
+            Assert.Equal("MID", new OverlaySettingsStore(path).Read().LaneOverride);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void MutationsMergeLatestDiskSnapshotAcrossStoreInstances()
+    {
+        var root = MakeTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "desktop-settings.json");
+            var first = new OverlaySettingsStore(path);
+            var second = new OverlaySettingsStore(path);
+
+            // Prime both independent caches. Each subsequent mutation must
+            // reread the current file before changing its own field.
+            _ = first.Read();
+            _ = second.Read();
+
+            first.SetLastCompanionTab("coachless");
+            second.SetZoomFactor("ugg", 1.5);
+            first.SetLaneOverride("mid");
+            second.SetOverlayVisible(false);
+
+            var persisted = new OverlaySettingsStore(path).Read();
+            Assert.Equal(OverlaySettingsStore.CoachlessTabKey, persisted.LastCompanionTab);
+            Assert.Equal(1.5, persisted.ZoomFactors[OverlaySettingsStore.UggTabKey], precision: 3);
+            Assert.Equal("MID", persisted.LaneOverride);
+            Assert.False(persisted.OverlayVisible);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TypedPreferenceSnapshotsDoNotClobberAnotherStoreUpdate()
+    {
+        var root = MakeTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "desktop-settings.json");
+            var first = (ICompanionTabsPreferencesStore)new OverlaySettingsStore(path);
+            var second = (ICompanionTabsPreferencesStore)new OverlaySettingsStore(path);
+            var firstSnapshot = first.Read();
+            var secondSnapshot = second.Read();
+
+            first.Save(firstSnapshot.WithLastTab(CompanionTab.Coachless));
+            second.Save(secondSnapshot.WithZoom(CompanionTab.UGg, 1.5));
+
+            var persisted = (ICompanionTabsPreferencesStore)new OverlaySettingsStore(path);
+            var preferences = persisted.Read();
+            Assert.Equal(CompanionTab.Coachless, preferences.LastTab);
+            Assert.Equal(1.5, preferences.ZoomFor(CompanionTab.UGg), precision: 3);
         }
         finally
         {

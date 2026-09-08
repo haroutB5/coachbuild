@@ -57,18 +57,33 @@ public sealed class WebView2EnvironmentService
         return Task.FromResult(!string.IsNullOrWhiteSpace(version));
     }
 
-    public async Task<CoreWebView2Environment> CreateAsync(CancellationToken cancellationToken = default)
+    public Task<CoreWebView2Environment> CreateAsync(CancellationToken cancellationToken = default) =>
+        CreateAsync(_userDataFolder, cancellationToken);
+
+    /// <summary>
+    /// Creates an Evergreen environment in a caller-selected profile folder.
+    ///
+    /// <para>The runtime probe/bootstrapper is shared by all tabs, but a
+    /// WebView2 environment owns its cookies, local storage and service worker
+    /// data. The companion window uses this overload to give each destination
+    /// its own durable profile while keeping the old hosted-app folder as the
+    /// default for backwards compatibility.</para>
+    /// </summary>
+    public async Task<CoreWebView2Environment> CreateAsync(
+        string userDataFolder,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userDataFolder);
         cancellationToken.ThrowIfCancellationRequested();
         if (!await IsRuntimeAvailableAsync(cancellationToken).ConfigureAwait(false))
         {
             throw new WebView2RuntimeMissingException();
         }
 
-        Directory.CreateDirectory(_userDataFolder);
+        Directory.CreateDirectory(userDataFolder);
         return await CoreWebView2Environment.CreateAsync(
             browserExecutableFolder: null,
-            userDataFolder: _userDataFolder,
+            userDataFolder: userDataFolder,
             options: null).ConfigureAwait(false);
     }
 

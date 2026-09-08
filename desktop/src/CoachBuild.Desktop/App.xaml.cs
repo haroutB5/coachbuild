@@ -97,7 +97,14 @@ public sealed record DesktopPhaseSnapshot(
     LastOpenPage? LastOpen = null,
     bool IsCompanionBusy = false,
     string? Error = null,
-    OverlayState? Overlay = null);
+    OverlayState? Overlay = null,
+    /// <summary>
+    /// Who champ select says the player is on, projected for the site tabs'
+    /// offer bar. Null outside champ select, and null inside it until the
+    /// champion roster has been fetched — the offer needs a NAME and a ddragon
+    /// KEY, and a numeric id alone can build neither a label nor a slug.
+    /// </summary>
+    ChampSelectContext? ChampSelect = null);
 
 public sealed class NullDesktopHostServices : IDesktopHostServices
 {
@@ -531,6 +538,14 @@ public partial class App : WpfApplication
         };
         _tray?.UpdateState(_trayState);
         SetUpdateBusy(effectiveBusy);
+
+        // The site tabs' champ-select offer, refreshed on the same 750 ms
+        // projection as everything else. It is a LABEL AND A LINK and nothing
+        // else: the window's UpdateChampSelectContext only redraws the offer
+        // row and cannot navigate, so no tick of this loop can move a page the
+        // user is reading. Null (no champ select, or a roster that has not
+        // loaded) clears the row rather than leaving a stale champion on it.
+        _webView?.UpdateChampSelectContext(snapshot.ChampSelect);
 
         // AFTER SetUpdateBusy, never before. Closing the window clears the
         // restart-is-disruptive gate and kicks a staged-apply retry, and the
@@ -1077,6 +1092,7 @@ public partial class App : WpfApplication
         //     has since asked for is not taken away at load-in.
         Volatile.Write(ref _webViewUserOpened, userInitiated ? 1 : 0);
 
+        var created = _webView is null;
         if (_webView is null)
         {
             var runtimeAvailable = _webViewEnvironment is not null
@@ -1087,12 +1103,21 @@ public partial class App : WpfApplication
                 return;
             }
 
+            // The preference snapshot is READ at creation and written back
+            // through the store's merge path, never held as a second copy: the
+            // store is the one that knows how to fold a tab/zoom change into a
+            // settings document that also carries calibration and the account
+            // secret (OverlaySettingsStore.Save serialises the whole modelled
+            // type, so a blind overwrite from here would drop them).
+            var preferenceStore = _settingsStore as ICompanionTabsPreferencesStore;
             await Dispatcher.InvokeAsync(() => _webView = new WebView2Window(
                 _webViewEnvironment,
                 AppOrigin,
                 SessionToken,
                 Paths.WebView2UserDataFolder,
-                OnWebViewRepairCompleted)).Task.ConfigureAwait(false);
+                OnWebViewRepairCompleted,
+                preferenceStore?.Read(),
+                preferenceStore is null ? null : preferenceStore.Save)).Task.ConfigureAwait(false);
             _webView!.Closed += OnWebViewClosed;
             _webView!.WebVersionObserved += OnWebVersionObserved;
             Volatile.Write(ref _webViewVisible, 1);
@@ -1106,7 +1131,31 @@ public partial class App : WpfApplication
             }
         }
 
-        var openOperation = Dispatcher.InvokeAsync(new Func<Task>(() => _webView!.OpenAsync(target)));
+        // Which of the two open paths runs is decided by WHO asked, and the
+        // difference is the "never redirect a reader" rule from the tab design:
+        //
+        //   * The user (tray Reopen, a hand launch) gets OpenAsync, which shows
+        //     the window on the tab they left it on. Restoring u.gg here is the
+        //     point of remembering it.
+        //   * Champ select and the web-freshness check get OpenCompanionAsync,
+        //     which loads/refreshes the hosted page but leaves the SELECTED tab
+        //     alone. On a brand-new window that lands on Companion (the draft
+        //     page is why the window opened); on a window the user already has
+        //     open on u.gg mid-champ-select it refreshes Companion underneath
+        //     and does not yank the page they are reading out from under them.
+        //     That path does not raise the window itself, so a newly created
+        //     one is shown here.
+        var openOperation = userInitiated
+            ? Dispatcher.InvokeAsync(new Func<Task>(() => _webView!.OpenAsync(target)))
+            : Dispatcher.InvokeAsync(new Func<Task>(async () =>
+            {
+                if (created)
+                {
+                    _webView!.Show();
+                    _webView!.Activate();
+                }
+                await _webView!.OpenCompanionAsync(target).ConfigureAwait(true);
+            }));
         await openOperation.Task.Unwrap().ConfigureAwait(false);
     }
 
@@ -1630,7 +1679,49 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             lastOpen,
             _state.IsCompanionBusy,
             status.LastError,
-            BuildOverlayState()));
+            BuildOverlayState(),
+            BuildChampSelectContext(status.ChampSelect)));
+    }
+
+    /// <summary>
+    /// Projects the champ-select snapshot into the offer the site tabs render.
+    ///
+    /// <para><c>CompanionState.ToStatus</c> already returns null here for every
+    /// phase but ChampSelect, so the offer bar cannot survive into the game
+    /// without a second rule saying so.</para>
+    ///
+    /// <para><b>Locked and hovered are both offered, and the difference is
+    /// carried rather than flattened.</b> <c>cellChampionId</c> is the locked
+    /// pick; <c>championPickIntent</c> is the hover. A hover is exactly when a
+    /// player wants to read a champion's page — flattening the two would make
+    /// the chip claim a pick that has not happened, and dropping the hover
+    /// would withhold the offer at the only moment it changes a decision.</para>
+    ///
+    /// <para>Returns null when the roster has not loaded. That is deliberate:
+    /// the link slug and the button label both come from the roster entry, and
+    /// an offer built from a bare id would either read "Open 62 on u.gg" or
+    /// guess a slug. No offer is better than a wrong one.</para>
+    /// </summary>
+    private ChampSelectContext? BuildChampSelectContext(CompanionChampSelectSnapshot? champSelect)
+    {
+        if (champSelect is null) return null;
+        var locked = champSelect.CellChampionId is > 0;
+        var championId = champSelect.CellChampionId
+            ?? champSelect.PickIntent
+            ?? champSelect.ActionChampionId;
+        if (championId is not > 0) return null;
+
+        var roster = _champions.Cached;
+        if (roster is null) return null;
+        var champion = roster.FirstOrDefault(entry => entry.Id == championId.Value);
+        if (champion is null) return null;
+
+        return new ChampSelectContext(
+            champion.Id,
+            champion.Key,
+            champion.Name,
+            champSelect.RoleId,
+            locked);
     }
 
     public Task<bool> RepairWebView2Async(CancellationToken cancellationToken)
