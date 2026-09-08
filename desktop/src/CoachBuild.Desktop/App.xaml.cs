@@ -1079,6 +1079,7 @@ public partial class App : WpfApplication
 
     private async Task OpenTargetAsync(ReopenTarget target, bool userInitiated)
     {
+        if (_isShuttingDown) return;
         // The LATEST open decides ownership, and it is written on every open —
         // not only when a window is created. Both directions matter:
         //
@@ -1092,16 +1093,20 @@ public partial class App : WpfApplication
         //     has since asked for is not taken away at load-in.
         Volatile.Write(ref _webViewUserOpened, userInitiated ? 1 : 0);
 
-        var created = _webView is null;
-        if (_webView is null)
+        var window = _webView;
+        var created = window is null;
+        if (window is null)
         {
-            var runtimeAvailable = _webViewEnvironment is not null
-                && await _webViewEnvironment.IsRuntimeAvailableAsync(_shutdown.Token).ConfigureAwait(false);
-            if (_webViewEnvironment is null)
+            var environment = _webViewEnvironment;
+            if (environment is null)
             {
                 await Dispatcher.InvokeAsync(SetWebViewUnavailable).Task.ConfigureAwait(false);
                 return;
             }
+            var runtimeAvailable = await environment
+                .IsRuntimeAvailableAsync(_shutdown.Token)
+                .ConfigureAwait(false);
+            if (_isShuttingDown) return;
 
             // The preference snapshot is READ at creation and written back
             // through the store's merge path, never held as a second copy: the
@@ -1110,22 +1115,34 @@ public partial class App : WpfApplication
             // secret (OverlaySettingsStore.Save serialises the whole modelled
             // type, so a blind overwrite from here would drop them).
             var preferenceStore = _settingsStore as ICompanionTabsPreferencesStore;
-            await Dispatcher.InvokeAsync(() => _webView = new WebView2Window(
-                _webViewEnvironment,
-                AppOrigin,
-                SessionToken,
-                Paths.WebView2UserDataFolder,
-                OnWebViewRepairCompleted,
-                preferenceStore?.Read(),
-                preferenceStore is null ? null : preferenceStore.Save)).Task.ConfigureAwait(false);
-            _webView!.Closed += OnWebViewClosed;
-            _webView!.WebVersionObserved += OnWebVersionObserved;
+            window = await Dispatcher.InvokeAsync(() =>
+            {
+                if (_isShuttingDown) return (WebView2Window?)null;
+                var createdWindow = new WebView2Window(
+                    environment,
+                    AppOrigin,
+                    SessionToken,
+                    Paths.WebView2UserDataFolder,
+                    OnWebViewRepairCompleted,
+                    preferenceStore?.Read(),
+                    preferenceStore is null ? null : preferenceStore.Save);
+                _webView = createdWindow;
+                createdWindow.Closed += OnWebViewClosed;
+                createdWindow.WebVersionObserved += OnWebVersionObserved;
+                return createdWindow;
+            }).Task.ConfigureAwait(false);
+            if (window is null || _isShuttingDown) return;
             Volatile.Write(ref _webViewVisible, 1);
             SetUpdateBusy(IsUpdateBusyContext());
 
             if (!runtimeAvailable)
             {
-                await Dispatcher.InvokeAsync(() => _webView!.ShowRuntimeFallback(target)).Task.ConfigureAwait(false);
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (_isShuttingDown || !ReferenceEquals(_webView, window)) return;
+                    window.ShowRuntimeFallback(target);
+                }).Task.ConfigureAwait(false);
+                if (_isShuttingDown || !ReferenceEquals(_webView, window)) return;
                 SetWebViewUnavailable();
                 return;
             }
@@ -1145,16 +1162,21 @@ public partial class App : WpfApplication
         //     and does not yank the page they are reading out from under them.
         //     That path does not raise the window itself, so a newly created
         //     one is shown here.
+        if (_isShuttingDown) return;
         var openOperation = userInitiated
-            ? Dispatcher.InvokeAsync(new Func<Task>(() => _webView!.OpenAsync(target)))
+            ? Dispatcher.InvokeAsync(new Func<Task>(() =>
+                _isShuttingDown || !ReferenceEquals(_webView, window)
+                    ? Task.CompletedTask
+                    : window!.OpenAsync(target)))
             : Dispatcher.InvokeAsync(new Func<Task>(async () =>
             {
+                if (_isShuttingDown || !ReferenceEquals(_webView, window)) return;
                 if (created)
                 {
-                    _webView!.Show();
-                    _webView!.Activate();
+                    window!.Show();
+                    window.Activate();
                 }
-                await _webView!.OpenCompanionAsync(target).ConfigureAwait(true);
+                await window!.OpenCompanionAsync(target).ConfigureAwait(true);
             }));
         await openOperation.Task.Unwrap().ConfigureAwait(false);
     }
@@ -1706,13 +1728,30 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     {
         if (champSelect is null) return null;
         var locked = champSelect.CellChampionId is > 0;
-        var championId = champSelect.CellChampionId
-            ?? champSelect.PickIntent
-            ?? champSelect.ActionChampionId;
+        // The LCU wire uses 0 as the "not selected" sentinel. The normal
+        // resolver already strips it, but this boundary also receives state
+        // restored by tests and older bridge payloads, so choose the first
+        // positive candidate rather than letting a zero suppress a valid hover
+        // or in-progress action.
+        int? championId = champSelect.CellChampionId is > 0
+            ? champSelect.CellChampionId
+            : champSelect.PickIntent is > 0
+                ? champSelect.PickIntent
+                : champSelect.ActionChampionId is > 0
+                    ? champSelect.ActionChampionId
+                    : null;
         if (championId is not > 0) return null;
 
         var roster = _champions.Cached;
-        if (roster is null) return null;
+        if (roster is null)
+        {
+            // Champ select is the first surface that needs the roster on a
+            // fresh launch. The in-game player-list path also warms it, but
+            // waiting for that path means a first game's offer can never
+            // appear before the phase is cleared at load-in.
+            KickChampionDirectory();
+            return null;
+        }
         var champion = roster.FirstOrDefault(entry => entry.Id == championId.Value);
         if (champion is null) return null;
 

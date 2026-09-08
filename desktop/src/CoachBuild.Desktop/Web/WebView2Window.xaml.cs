@@ -239,6 +239,7 @@ public partial class WebView2Window : Window
     /// </summary>
     public void UpdateChampSelectContext(ChampSelectContext? context)
     {
+        if (_disposed) return;
         if (!Dispatcher.CheckAccess())
         {
             Dispatcher.BeginInvoke(
@@ -253,18 +254,21 @@ public partial class WebView2Window : Window
 
     public void GoBack()
     {
+        if (_disposed) return;
         if (GetState(ActiveTab)?.Browser is { CanGoBack: true } browser)
             browser.GoBack();
     }
 
     public void GoForward()
     {
+        if (_disposed) return;
         if (GetState(ActiveTab)?.Browser is { CanGoForward: true } browser)
             browser.GoForward();
     }
 
     public void Refresh()
     {
+        if (_disposed) return;
         var state = GetState(ActiveTab);
         if (state?.Core is null) return;
         state.Core.Reload();
@@ -368,7 +372,11 @@ public partial class WebView2Window : Window
                 // and WebView2 is an HwndHost so it has no IsTabStop at all.
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch,
                 VerticalAlignment = System.Windows.VerticalAlignment.Stretch,
-                Visibility = IsActiveTab(state) ? Visibility.Visible : Visibility.Collapsed,
+                // WebView2 is an HwndHost. Keep its native child hidden until
+                // CoreWebView2 is ready and UpdateChrome has selected the ready
+                // active tab; otherwise the blank HWND sits above WPF's loading,
+                // error, and landing layers because of airspace rules.
+                Visibility = Visibility.Collapsed,
                 Focusable = true,
                 AllowExternalDrop = false,
             };
@@ -462,6 +470,7 @@ public partial class WebView2Window : Window
         BrowserTabState state,
         CoreWebView2NavigationStartingEventArgs args)
     {
+        if (_disposed || state.Browser is null) return;
         state.IsLoading = true;
         state.Error = null;
         if (!IsAllowed(state.Tab, args.Uri))
@@ -487,6 +496,7 @@ public partial class WebView2Window : Window
         BrowserTabState state,
         CoreWebView2NavigationStartingEventArgs args)
     {
+        if (_disposed) return;
         if (state.Tab != CompanionTab.Companion && !SiteNavigationPolicy.IsAllowed(args.Uri))
             args.Cancel = true;
     }
@@ -495,6 +505,10 @@ public partial class WebView2Window : Window
         BrowserTabState state,
         CoreWebView2NavigationCompletedEventArgs args)
     {
+        // Core events can arrive after Window.Close has disposed the HWND. Do
+        // not touch state or WPF controls after that point; the initialization
+        // task has its own disposed checks and will finish quietly.
+        if (_disposed || state.Browser is null) return;
         state.IsLoading = false;
         if (args.IsSuccess)
         {
@@ -588,6 +602,7 @@ public partial class WebView2Window : Window
         // as an ordinary same-tab navigation after the same destination policy
         // check; unsolicited popups are simply swallowed.
         args.Handled = true;
+        if (_disposed) return;
         if (args.IsUserInitiated
             && Uri.TryCreate(args.Uri, UriKind.Absolute, out var target)
             && IsAllowed(state.Tab, target))
@@ -605,8 +620,8 @@ public partial class WebView2Window : Window
         CoreWebView2LaunchingExternalUriSchemeEventArgs args)
     {
         args.Cancel = true;
-            if (IsActiveTab(state))
-                SetStatus("External app links are blocked in the companion window.");
+        if (!_disposed && IsActiveTab(state))
+            SetStatus("External app links are blocked in the companion window.");
     }
 
     private static void OnPermissionRequested(
@@ -644,6 +659,7 @@ public partial class WebView2Window : Window
 
     private void OnNavigationStateChanged(BrowserTabState state)
     {
+        if (_disposed || state.Browser is null) return;
         if (IsActiveTab(state))
         {
             AddressText.Text = DisplayUrl(state.Core?.Source);
@@ -656,6 +672,7 @@ public partial class WebView2Window : Window
 
     private void OnZoomFactorChanged(BrowserTabState state)
     {
+        if (_disposed) return;
         if (state.Browser is not { } browser) return;
         var normalized = CompanionTabsPreferences.NormalizeZoom(browser.ZoomFactor);
         if (Math.Abs(normalized - browser.ZoomFactor) > 0.001)
@@ -684,9 +701,9 @@ public partial class WebView2Window : Window
 
     private void Navigate(BrowserTabState state, Uri url)
     {
-        if (state.Core is null || !IsAllowed(state.Tab, url))
+        if (_disposed || state.Core is null || !IsAllowed(state.Tab, url))
         {
-            if (IsActiveTab(state))
+            if (!_disposed && IsActiveTab(state))
                 ShowPageError(state, "CoachBuild blocked an unsafe navigation.");
             return;
         }
@@ -901,9 +918,7 @@ public partial class WebView2Window : Window
         foreach (var state in _tabs.Values)
         {
             if (state.Browser is not null)
-                state.Browser.Visibility = IsActiveTab(state) && hasReadyBrowser
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
+                state.Browser.Visibility = BrowserVisibilityFor(IsActiveTab(state), hasReadyBrowser);
         }
 
         Fallback.Visibility = isFallback ? Visibility.Visible : Visibility.Collapsed;
@@ -956,9 +971,7 @@ public partial class WebView2Window : Window
     {
         if (!Dispatcher.CheckAccess()) return;
         var context = _champSelectContext;
-        var hasContext = context is not null
-            && context.UrlFor(CompanionTabs.UGg) is not null
-            && context.UrlFor(CompanionTabs.Coachless) is not null;
+        var hasContext = ShouldShowOfferBar(ActiveTab, context);
         OfferBar.Visibility = hasContext ? Visibility.Visible : Visibility.Collapsed;
         if (!hasContext || context is null) return;
 
@@ -980,6 +993,29 @@ public partial class WebView2Window : Window
                 GetState(CompanionTab.Coachless)?.Core?.Source,
                 coachlessOffer);
     }
+
+    /// <summary>
+    /// The champ-select row belongs to the research tabs. Keeping it collapsed
+    /// on Companion prevents an automatic draft open from adding a second call
+    /// to action above the hosted app, while still preserving the context for
+    /// the site tab the user chooses.
+    /// </summary>
+    internal static bool ShouldShowOfferBar(
+        CompanionTab activeTab,
+        ChampSelectContext? context)
+    {
+        return activeTab != CompanionTab.Companion
+            && context is not null
+            && context.UrlFor(CompanionTabs.UGg) is not null
+            && context.UrlFor(CompanionTabs.Coachless) is not null;
+    }
+
+    /// <summary>
+    /// WPF cannot paint over a visible WebView2 HWND. This single decision is
+    /// used by UpdateChrome and is also the contract for a newly allocated tab.
+    /// </summary>
+    internal static Visibility BrowserVisibilityFor(bool isActiveTab, bool hasReadyBrowser) =>
+        isActiveTab && hasReadyBrowser ? Visibility.Visible : Visibility.Collapsed;
 
     private void HideBrowsersExcept(CompanionTab tab)
     {
@@ -1098,6 +1134,11 @@ public partial class WebView2Window : Window
             catch
             {
             }
+            state.Browser = null;
+            state.Core = null;
+            state.Initialized = false;
+            state.HasNavigated = false;
+            state.IsLoading = false;
         }
 
         _tabs.Clear();

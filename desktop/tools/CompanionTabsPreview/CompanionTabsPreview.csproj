@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Deterministic>true</Deterministic>
+    <AssemblyName>CompanionTabsPreview</AssemblyName>
+    <RootNamespace>CoachBuild.Desktop.CompanionTabsPreview</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CoachBuild.Desktop\CoachBuild.Desktop.csproj" />
+    <!-- WebView2Window.xaml's pack URI is intentionally app-relative. Carry
+         the production icon into this disposable host so WPF can load the
+         real window without running the production App resource dictionary. -->
+    <Resource Include="..\..\src\CoachBuild.Desktop\Assets\tray-icon.ico"
+              Link="Assets\tray-icon.ico" />
+  </ItemGroup>
+</Project>

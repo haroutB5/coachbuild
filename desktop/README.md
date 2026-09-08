@@ -28,13 +28,15 @@ PowerShell companion while the staged native rollout proves parity.
   by default. It becomes keyboard-interactive only for calibration/adjustment.
   Calibration is stored by monitor resolution and DPI.
 - **WebView2:** one owned window with three tabs — Companion, u.gg, Coachless
-  (1.1.0). The Companion tab navigates between `/draft` and canonical Builds
+  (1.1.1). The Companion tab navigates between `/draft` and canonical Builds
   URLs and is same-origin only; it is the only tab carrying the session token
   and the only one whose document is ever scripted (the version meta tag).
   Site tabs are **rendering only** — no scraping, no DOM reads, no automated
   navigation — and are restricted to https. Each tab's WebView2 is created on
   first visit and gets its own profile directory under `WebView2/`, so cookies
   and site preferences persist without sharing storage with the hosted app.
+  A native host remains hidden until its browser is ready, and callbacks arriving
+  after close are ignored, so app-owned loading/error states remain usable.
   Missing runtime state stays in an app-owned fallback and never opens the
   default browser; a failed page load is a separate state that names the site
   and offers a retry.

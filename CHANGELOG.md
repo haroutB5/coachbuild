@@ -1,5 +1,18 @@
 # Changelog
 
+## Desktop 1.1.1 — closing and loading states stay quiet (2026-09-08)
+
+The companion window now handles a few edge states more cleanly:
+
+- **Closing is safe.** Browser callbacks that arrive after the window closes are
+  ignored, so late navigation and status events do not touch disposed controls.
+- **Loading layers remain visible.** A new WebView2 host stays hidden until its
+  native browser is ready, leaving the WPF loading, error, and landing states
+  visible instead of a blank native surface.
+- **Champ select offers follow the research tabs.** The offer row stays out of
+  the hosted Companion tab, and a zero-valued LCU champion sentinel no longer
+  hides a valid hovered or in-progress champion candidate.
+
 ## 0.129.0 -- draft ingest rides out u.gg Cloudflare challenge waves honestly (2026-09-07)
 
 Since 2026-09-03 u.gg's Cloudflare has challenged MOST of the scheduled
