@@ -14,13 +14,20 @@ public enum CompanionTab
 /// <summary>
 /// A third-party site the window renders for the user to READ.
 ///
-/// <para><b>Rendering only.</b> Nothing in this app scrapes, parses, reads the
-/// DOM of, or automatically navigates these sites — that is the project rule
-/// stated in <c>CLAUDE.md</c> and it is the reason
-/// <see cref="SiteTabView"/> has no <c>ExecuteScriptAsync</c> call while the
-/// companion host does (it reads its OWN page's version meta tag). A test pins
-/// that asymmetry, because "we only render it" is a claim about code that has
-/// to stay true after someone adds a feature.</para>
+/// <para><b>Read-mostly, with one sanctioned automation.</b> Nothing in this
+/// app scrapes these sites on a timer or navigates them speculatively — and
+/// <c>SiteTabComplianceTests</c> still pins that a script reaches a site tab
+/// only as an extractor step (the runes button, the visible auto-import
+/// extract, or the worker fetch). The single sanctioned AUTOMATED
+/// navigation is the automatic item import's worker fetch, and ONLY to the
+/// two known build-page URL shapes the app's own deep-link builders produce
+/// (<see cref="SiteDeepLink"/>), triggered by champ-select context or the
+/// user's own browsing — never the visible tab, never a focus steal. That
+/// is the reason <see cref="SiteTabView"/> has no
+/// <c>ExecuteScriptAsync</c> call while the companion host does (it reads
+/// its OWN page's version meta tag). A test pins that asymmetry, because
+/// "we only render it" is a claim about code that has to stay true after
+/// someone adds a feature.</para>
 /// </summary>
 public sealed record SiteDefinition(
     CompanionTab Tab,

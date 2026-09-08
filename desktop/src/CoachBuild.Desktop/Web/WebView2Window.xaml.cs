@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
+using CoachBuild.Core;
 using CoachBuild.Desktop.Tray;
 using CoachBuild.Desktop.Updates;
 
@@ -16,21 +17,31 @@ namespace CoachBuild.Desktop.Web;
 /// <para>The hosted CoachBuild page is the only surface with the persistent
 /// session token and the only surface whose document is inspected
 /// unprompted: the version meta tag is read solely to support the existing
-/// web-freshness check. Site tabs are rendering-only with EXACTLY ONE
-/// user-initiated exception: the import button walks the active site tab,
-/// once per click, and only while a champion build page is showing and the
-/// League client is connected (<see cref="SiteImportExtractors"/> for the
-/// scripts, <c>RunSiteImportAsync</c> below for the single call site). u.gg
-/// is one read-only script; Coachless is a stepped select-and-recompute
-/// walk (inspect, click each slot's top row in DOM order awaiting settle,
-/// final read of the selected rows) because its tables recompute
-/// conditioned on the picks so far.
+/// web-freshness check. The site tabs are read-mostly, with TWO sanctioned
+/// exceptions. (1) The gold <c>Import runes</c> button reads the VISIBLE u.gg
+/// build page once per click - runes only, never items - while the client is
+/// connected (<see cref="SiteImportExtractors"/> for the scripts,
+/// <c>RunRunesImportAsync</c> below for the single call site). It is hidden
+/// on Coachless, which has no rune page. (2) The automatic item import
+/// (<see cref="SiteAutoImportService"/>) fetches both sites' item sets in the
+/// background on champ-select lock (and re-fetches the visible build page
+/// when its URL changes): u.gg is one read-only script; Coachless is a
+/// stepped select-and-recompute walk (inspect, click each ITEM slot's top row
+/// from 1st Item in DOM order awaiting settle, final read of selected else
+/// conditioned top rows) because its tables recompute conditioned on the
+/// picks so far. Background fetches reuse a background site tab or a hidden
+/// worker webview - never the visible tab, never a change of the selected
+/// tab, never a focus steal - and a worker is navigated ONLY to the exact
+/// deep-link URL the app's own builders produce for the locked
+/// champion+role
+/// (<see cref="AutoImportCoordinator.IsAllowedAutoImportTarget"/>).
 /// <c>SiteTabComplianceTests</c> pins that scope: site-tab script execution
-/// is reachable only from the import click handler (plus this file's
-/// Companion version read), the champ-select offer path cannot navigate,
-/// and no timer or event may scrape.</para>
+/// is extractor steps from the runes click, the visible-extract path, or the
+/// worker-fetch path (plus this file's Companion version read); automated
+/// navigation call sites are enumerated and the worker one asserts the
+/// allowlist; and no timer of the window's own may scrape.</para>
 /// </summary>
-public partial class WebView2Window : Window
+public partial class WebView2Window : Window, ISiteAutoImportExecutor
 {
     private sealed class BrowserTabState
     {
@@ -54,6 +65,14 @@ public partial class WebView2Window : Window
         public string? Error { get; set; }
 
         public Task<bool>? Initialization { get; set; }
+
+        /// <summary>
+        /// The shared environment this tab was created from. The auto-import
+        /// hidden workers reuse a site tab's environment so they share its
+        /// profile (cookies, Cloudflare clearance) instead of minting a
+        /// second one for the same folder, which WebView2 refuses.
+        /// </summary>
+        public CoreWebView2Environment? Environment { get; set; }
     }
 
     private readonly WebView2EnvironmentService _environmentService;
@@ -68,6 +87,16 @@ public partial class WebView2Window : Window
     private readonly ISiteImportHost? _siteImport;
     private bool _lcuConnected;
     private bool _importRunning;
+    /// <summary>
+    /// The automatic item import: constructed by
+    /// <see cref="AttachAutoImport"/> (the window is the executor — the only
+    /// place that may touch a WebView) and driven by
+    /// <see cref="NotifySnapshotForAutoImport"/> on the snapshot tick. Null
+    /// until attached; the runes button works without it.
+    /// </summary>
+    private SiteAutoImportService? _autoImport;
+    /// <summary>Hidden worker webviews for the auto-import, one per site at most. Never shown, never selected.</summary>
+    private readonly Dictionary<CompanionTab, BrowserTabState> _workers = new();
     private string? _activeUpdateHint;
     private string? _paintedUpdateHint;
     private ReopenTarget _lastTarget = new(ReopenDestination.Home);
@@ -475,6 +504,10 @@ public partial class WebView2Window : Window
             var environment = await _environmentService
                 .CreateAsync(CompanionTabs.ProfileFolder(_userDataFolder, state.Tab), cancellationToken)
                 .ConfigureAwait(true);
+            // Kept so the auto-import hidden workers can share this tab's
+            // environment (and therefore its profile) instead of opening the
+            // same folder twice.
+            state.Environment = environment;
             if (_disposed)
             {
                 RemoveFailedBrowser(state);
@@ -651,10 +684,11 @@ public partial class WebView2Window : Window
 
     private async Task ReadLoadedWebVersionAsync(BrowserTabState state)
     {
-        // One of exactly two ExecuteScriptAsync calls in the window (the
-        // compliance tests pin the count and the reachability): this one,
-        // Companion-guarded below, and the user-initiated site import in
-        // RunSiteImportAsync. The state guard makes it impossible for a
+        // One of the window's ExecuteScriptAsync call families (the
+        // compliance tests pin the sites and the reachability): this one,
+        // Companion-guarded below; the user-initiated runes import; the
+        // auto-import's visible extract and worker fetch; and the Coachless
+        // walk both auto paths share. The state guard makes it impossible for a
         // third-party tab to reach THIS one.
         if (state.Tab != CompanionTab.Companion) return;
         var version = await QueryLoadedWebVersionAsync(state).ConfigureAwait(true);
@@ -911,46 +945,39 @@ public partial class WebView2Window : Window
     private async void OnCoachlessOfferClick(object sender, RoutedEventArgs e) =>
         await OpenSiteOfferAsync(CompanionTab.Coachless).ConfigureAwait(true);
 
-    private async void OnImportBuildClick(object sender, RoutedEventArgs e) =>
-        await RunSiteImportAsync().ConfigureAwait(true);
+    private async void OnImportRunesClick(object sender, RoutedEventArgs e) =>
+        await RunRunesImportAsync().ConfigureAwait(true);
 
     /// <summary>
-    /// The user-initiated build import, reachable only from
-    /// <see cref="ImportBuildButton"/>, which is enabled only on a
-    /// build-page URL while the client is connected — and re-checked here,
-    /// because the client may have closed between the last snapshot tick
-    /// and the click. u.gg runs ONE read-only script, then
-    /// parse/validate/apply with no further page contact; Coachless runs
-    /// the stepped select-and-recompute walk in the helper below (small
-    /// per-step scripts from this same call site — the import click
-    /// handler — awaiting page settle between clicks). Never navigates,
-    /// never reloads; every outcome (including an unexpected exception)
-    /// lands on the status line and writes nothing partial.
+    /// The runes-button import, reachable only from
+    /// <see cref="ImportRunesButton"/>, which shows only on a u.gg
+    /// build-page URL and enables only while the client is connected — and
+    /// the connection is re-checked here, because the client may have closed
+    /// between the last snapshot tick and the click. u.gg runs ONE
+    /// read-only script, then the host validates and writes the rune page
+    /// alone: items never flow through this button (they arrive via the
+    /// automatic import). Never navigates, never reloads; every outcome
+    /// (including an unexpected exception) lands on the status line and
+    /// writes nothing partial.
     /// </summary>
-    private async Task RunSiteImportAsync()
+    private async Task RunRunesImportAsync()
     {
         if (_disposed || _importRunning) return;
-        var tab = ActiveTab;
-        var script = SiteImportExtractors.ScriptFor(tab);
-        var state = GetState(tab);
-        // Belt and braces behind the disabled button: without a host, a
-        // script, or a live site browser there is nothing to read.
-        if (script is null || state?.Core is null || _siteImport is null) return;
-
-        if (tab == CompanionTab.Coachless)
-        {
-            await RunCoachlessSelectAndRecomputeImportAsync(state).ConfigureAwait(true);
-            return;
-        }
+        // Belt and braces behind the hidden button: runes import reads the
+        // visible u.gg page only. Anything else has no rune page to read.
+        if (ActiveTab != CompanionTab.UGg) return;
+        var state = GetState(CompanionTab.UGg);
+        // Without a host or a live site browser there is nothing to read.
+        if (state?.Core is null || _siteImport is null) return;
 
         _importRunning = true;
         UpdateOfferBar();
-        SetStatus($"Importing build from {CompanionTabs.LabelFor(tab)}…");
+        SetStatus($"Importing runes from {CompanionTabs.LabelFor(CompanionTab.UGg)}…");
         try
         {
-            var raw = await state.Core.ExecuteScriptAsync(script).ConfigureAwait(true);
+            var raw = await state.Core.ExecuteScriptAsync(SiteImportExtractors.UGgScript).ConfigureAwait(true);
             if (_disposed) return;
-            var result = await _siteImport.ImportBuildAsync(raw, _shutdownToken).ConfigureAwait(true);
+            var result = await _siteImport.ImportRunesAsync(raw, _shutdownToken).ConfigureAwait(true);
             if (_disposed) return;
             SetStatus(result.Message);
         }
@@ -972,74 +999,61 @@ public partial class WebView2Window : Window
     private void OnZoomInClick(object sender, RoutedEventArgs e) => ZoomIn();
 
     /// <summary>
-    /// The Coachless half of the import click: the page's slot tables
-    /// recompute conditioned on the picks so far, so the import reproduces
-    /// what a user gets by clicking the top-WPA row of each slot section in
-    /// on-page order — Keystone, Starter, 1st Item, 2nd Item, Spell, Boots,
-    /// 3rd Item, 4th+ Item — then reading each item slot. The order AND the
-    /// clickable set come from the page (the opening inspect step), never
-    /// from a hardcoded list: only slots whose top row carries the site's
-    /// <c>selectable</c> class are clicked (the site grants selections to a
-    /// capped depth; read-only slots are skipped outright, never clicked,
-    /// never waited on). Keystone/Spell are clicked for conditioning but
-    /// not imported.
+    /// The Coachless select-and-recompute walk as extractor-shaped JSON: the
+    /// page's slot tables recompute conditioned on the picks so far, so the
+    /// fetch reproduces what a user gets by clicking the top-WPA row of each
+    /// ITEM slot from 1st Item in DOM order, then reading each item slot
+    /// (selected row else conditioned top row). The order AND the clickable
+    /// set come from the page (the opening inspect step), never from a
+    /// hardcoded list: only item slots whose top row carries the site's
+    /// <c>selectable</c> class are clicked (Keystone, Starter and Spell
+    /// never; read-only slots are skipped outright, never clicked, never
+    /// waited on).
     ///
-    /// <para>Called from exactly one place (the import click handler above),
-    /// awaited inside that one click: no timers, no background trigger —
-    /// the compliance tests pin the single caller. Each loop turn runs one
-    /// small step script; after a click the driver polls until the tables
-    /// settle AND the clicked slot shows a selection (~250ms apart, ~5s
-    /// wait per slot). A clicked slot that never selects does NOT fail the
-    /// import — the walk notes it into the payload meta and moves on, and
-    /// the final read takes the SELECTED row where one exists, else the TOP
-    /// row of the by-now conditioned table. The final read's payload flows
-    /// into the same host every import uses, so validation and the
-    /// no-partial-write contract are unchanged (a runes-null payload now
-    /// applies the item set on its own).</para>
+    /// <para>Runs on ANY site CoreWebView2 -- the visible Coachless tab or a
+    /// hidden worker -- because the caller (never this method) decides which
+    /// core is safe to touch. Returns the final payload JSON, or an
+    /// <c>error</c> payload on failure so the service's normal typed-failure
+    /// path reports it. Each loop turn runs one small step script; after a
+    /// click the driver polls until the tables settle AND the clicked slot
+    /// shows a selection (~250ms apart, ~5s wait per slot -- plain awaits,
+    /// not a timer). A clicked slot that never selects does NOT fail the
+    /// fetch -- the walk notes it into the payload meta and moves on.
+    /// Compliance calls this a script SITE (not a call count): it is
+    /// reachable only from the two auto-import fetch paths below.</para>
     /// </summary>
-    private async Task RunCoachlessSelectAndRecomputeImportAsync(BrowserTabState state)
+    private async Task<string> RunCoachlessWalkAsync(CoreWebView2 core, CancellationToken cancellationToken)
     {
-        if (_disposed || _importRunning) return;
-        if (state.Core is null || _siteImport is null) return;
-
-        _importRunning = true;
-        UpdateOfferBar();
-        SetStatus($"Importing build from {CompanionTabs.LabelFor(CompanionTab.Coachless)}…");
+        ArgumentNullException.ThrowIfNull(core);
         try
         {
             var sequence = SiteImportSequencer.Initial();
             while (true)
             {
-                if (_disposed) return;
+                if (_disposed) return WalkFailure("the window closed during the import");
+                cancellationToken.ThrowIfCancellationRequested();
                 switch (SiteImportSequencer.CommandFor(sequence))
                 {
                     case FailCommand fail:
-                        SetStatus($"{fail.Reason} -- nothing was imported");
-                        return;
+                        return WalkFailure(fail.Reason);
                     case SucceedCommand done:
-                    {
-                        var result = await _siteImport
-                            .ImportBuildAsync(done.PayloadJson, _shutdownToken)
-                            .ConfigureAwait(true);
-                        if (!_disposed) SetStatus(result.Message);
-                        return;
-                    }
+                        return done.PayloadJson;
                     case ClickSlotCommand click:
                     {
-                        var raw = await state.Core.ExecuteScriptAsync(
+                        var raw = await core.ExecuteScriptAsync(
                             SiteImportExtractors.CoachlessStepScript(
                                 SiteImportSteps.Click(click.Title))).ConfigureAwait(true);
-                        if (_disposed) return;
+                        if (_disposed) return WalkFailure("the window closed during the import");
                         sequence = SiteImportSequencer.Transition(
                             sequence, CoachlessStepResponse.Parse(raw));
                         break;
                     }
                     case ReadFinalCommand:
                     {
-                        var raw = await state.Core.ExecuteScriptAsync(
+                        var raw = await core.ExecuteScriptAsync(
                             SiteImportExtractors.CoachlessStepScript(
                                 SiteImportSteps.Read())).ConfigureAwait(true);
-                        if (_disposed) return;
+                        if (_disposed) return WalkFailure("the window closed during the import");
                         sequence = SiteImportSequencer.Transition(
                             sequence, CoachlessStepResponse.Parse(raw));
                         break;
@@ -1047,16 +1061,16 @@ public partial class WebView2Window : Window
                     default:
                     {
                         // InspectCommand: discovery, or one settle poll. The
-                        // pause lives only here, before settle polls — a
-                        // plain await inside the click handler, not a timer.
+                        // pause lives only here, before settle polls -- a
+                        // plain await, not a timer.
                         if (sequence.Phase == SequencerPhase.Settle)
                             await Task.Delay(
                                 SiteImportSequencer.SettlePollDelayMs,
-                                _shutdownToken).ConfigureAwait(true);
-                        if (_disposed) return;
-                        var raw = await state.Core.ExecuteScriptAsync(
+                                cancellationToken).ConfigureAwait(true);
+                        if (_disposed) return WalkFailure("the window closed during the import");
+                        var raw = await core.ExecuteScriptAsync(
                             SiteImportExtractors.CoachlessInspectScript).ConfigureAwait(true);
-                        if (_disposed) return;
+                        if (_disposed) return WalkFailure("the window closed during the import");
                         sequence = SiteImportSequencer.Transition(
                             sequence, CoachlessStepResponse.Parse(raw));
                         break;
@@ -1066,14 +1080,369 @@ public partial class WebView2Window : Window
         }
         catch (Exception error)
         {
-            // The script surface carries no secrets (no token, no
-            // credentials), so naming the failure is safe and debuggable.
-            if (!_disposed) SetStatus($"Import failed ({error.Message}) -- nothing was imported");
+            return WalkFailure(error.Message);
+        }
+    }
+
+    /// <summary>
+    /// Shapes a walk failure as the extractor's own <c>error</c> envelope so
+    /// the service reports it through the normal typed-failure path (quiet
+    /// log plus status-line note, never a dialog).
+    /// </summary>
+    private static string WalkFailure(string reason) =>
+        System.Text.Json.JsonSerializer.Serialize(
+            new { error = string.IsNullOrWhiteSpace(reason) ? "the import failed" : reason.Trim() });
+
+    /// <summary>
+    /// Attaches the automatic item import to this window. The window is the
+    /// executor (the only place that may touch a WebView);
+    /// <paramref name="items"/> is the bridge's item-set service (items-only
+    /// writes, so the runes button's rune pages are never in reach) and
+    /// <paramref name="logInfo"/> is the tray log sink. Null until attached;
+    /// the runes button works without it. Call on the dispatcher.
+    /// </summary>
+    public void AttachAutoImport(
+        ItemSetApplyService items,
+        IChampionDirectory champions,
+        Action<string> logInfo)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(champions);
+        ArgumentNullException.ThrowIfNull(logInfo);
+        if (_disposed) return;
+        _autoImport = new SiteAutoImportService(
+            this, items, champions, new WindowAutoImportSink(this, logInfo));
+    }
+
+    /// <summary>
+    /// Receives the champ-select projection plus the LCU connection on the
+    /// existing snapshot tick and offers them to the auto-import. Like the
+    /// champ-select context above this only STARTS background work -- it
+    /// never navigates a visible tab itself (worker navigation happens
+    /// inside the service flight, through the allowlisted worker path
+    /// below), never changes the selected tab, and never blocks the tick:
+    /// the service single-flights and never throws.
+    /// </summary>
+    public void NotifySnapshotForAutoImport(ChampSelectContext? context, bool lcuConnected)
+    {
+        var auto = _autoImport;
+        if (auto is null || _disposed) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(
+                new Action(() => NotifySnapshotForAutoImport(context, lcuConnected)),
+                System.Windows.Threading.DispatcherPriority.Background);
+            return;
+        }
+
+        var input = AutoImportInput.FromContext(context, ActiveTab, CurrentUrl, lcuConnected);
+        // Fire-and-forget by construction (see the service contract).
+        _ = auto.OnSnapshotAsync(input, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// The auto-import's sink: log lines go to the tray log, notes to the
+    /// status line. Every hop is exception-proof -- background reporting
+    /// must not take down a browser tab. Never a dialog.
+    /// </summary>
+    private sealed class WindowAutoImportSink(WebView2Window window, Action<string> logInfo) : ISiteAutoImportSink
+    {
+        public void LogInfo(string line)
+        {
+            try
+            {
+                logInfo(line);
+            }
+            catch
+            {
+            }
+        }
+
+        public void StatusNote(string message)
+        {
+            try
+            {
+                var dispatcher = window.Dispatcher;
+                if (dispatcher.CheckAccess())
+                {
+                    if (!window._disposed) window.SetStatus(message);
+                    return;
+                }
+                dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (!window._disposed) window.SetStatus(message);
+                }));
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// The executor's visible read (<see cref="ISiteAutoImportExecutor"/>):
+    /// extracts off the visible tab WITHOUT navigating it. Null when the
+    /// tab was never initialized -- the service records the miss as a quiet
+    /// failure and the debounce moves on. Marshals to the dispatcher: the
+    /// service calls from a background flight, and WebView2 is
+    /// thread-affine.
+    /// </summary>
+    public Task<string?> ExtractVisibleAsync(CompanionTab site, CancellationToken cancellationToken = default)
+    {
+        if (site is not (CompanionTab.UGg or CompanionTab.Coachless))
+            return Task.FromResult<string?>(null);
+        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.BeginInvoke(new Func<Task>(async () =>
+        {
+            try
+            {
+                completion.TrySetResult(await ExtractVisibleOnUiAsync(site, cancellationToken).ConfigureAwait(true));
+            }
+            catch (Exception error)
+            {
+                completion.TrySetException(error);
+            }
+        }));
+        return completion.Task;
+    }
+
+    private async Task<string?> ExtractVisibleOnUiAsync(CompanionTab site, CancellationToken cancellationToken)
+    {
+        if (_disposed) return null;
+        var core = GetState(site)?.Core;
+        if (core is null) return null;
+        if (site == CompanionTab.Coachless)
+            return await RunCoachlessWalkAsync(core, cancellationToken).ConfigureAwait(true);
+        return await core.ExecuteScriptAsync(SiteImportExtractors.UGgScript).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// The executor's worker fetch (<see cref="ISiteAutoImportExecutor"/>):
+    /// navigates a BACKGROUND site tab or a HIDDEN worker webview to the
+    /// deep link and extracts -- never the visible tab, never a change of
+    /// the selected tab, never a focus steal. Refuses any URL outside
+    /// <see cref="AutoImportCoordinator.IsAllowedAutoImportTarget"/> before
+    /// navigating anything. Marshals to the dispatcher like the visible
+    /// read above.
+    /// </summary>
+    public Task<string?> FetchViaWorkerAsync(
+        CompanionTab site,
+        Uri url,
+        string? championKey,
+        int? roleId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        if (site is not (CompanionTab.UGg or CompanionTab.Coachless))
+            return Task.FromResult<string?>(null);
+        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.BeginInvoke(new Func<Task>(async () =>
+        {
+            try
+            {
+                completion.TrySetResult(
+                    await FetchViaWorkerOnUiAsync(site, url, championKey, roleId, cancellationToken)
+                        .ConfigureAwait(true));
+            }
+            catch (Exception error)
+            {
+                completion.TrySetException(error);
+            }
+        }));
+        return completion.Task;
+    }
+
+    private async Task<string?> FetchViaWorkerOnUiAsync(
+        CompanionTab site,
+        Uri url,
+        string? championKey,
+        int? roleId,
+        CancellationToken cancellationToken)
+    {
+        if (_disposed) return null;
+        if (!AutoImportCoordinator.IsAllowedAutoImportTarget(site, url, championKey, roleId))
+        {
+            SetStatus($"Auto-import refused an unexpected page for {CompanionTabs.LabelFor(site)} -- nothing was imported");
+            return null;
+        }
+
+        var core = await GetFetchCoreAsync(site, cancellationToken).ConfigureAwait(true);
+        if (core is null || _disposed) return null;
+        if (!await NavigateWorkerAndWaitAsync(core, site, url, championKey, roleId, cancellationToken)
+            .ConfigureAwait(true))
+            return null;
+        if (_disposed) return null;
+        if (site == CompanionTab.Coachless)
+            return await RunCoachlessWalkAsync(core, cancellationToken).ConfigureAwait(true);
+        return await core.ExecuteScriptAsync(SiteImportExtractors.UGgScript).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// The core a worker fetch may navigate: the site's own tab when it is
+    /// initialized and NOT the one the user is viewing (reusing its profile
+    /// without moving the user's page), else a hidden worker webview (which
+    /// shares the site tab's environment when one exists). Null when there
+    /// is no safe core -- the fetch becomes a quiet miss. Caller is on the
+    /// dispatcher.
+    /// </summary>
+    private async Task<CoreWebView2?> GetFetchCoreAsync(CompanionTab site, CancellationToken cancellationToken)
+    {
+        var state = GetState(site);
+        if (state?.Initialized == true && state.Core is not null)
+        {
+            if (!IsActiveTab(state)) return state.Core;
+        }
+        else if (ActiveTab != site)
+        {
+            // Lazily created in the background for the fetch; it stays
+            // hidden because it is not the active tab, and it carries the
+            // real site profile from the first byte.
+            var created = await EnsureTabAsync(site, cancellationToken).ConfigureAwait(true);
+            if (created is not null && created.Core is not null && !IsActiveTab(created))
+                return created.Core;
+        }
+        return await EnsureWorkerCoreAsync(site, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// The hidden worker core for a site, in the zero-area
+    /// <c>AutoImportHost</c> grid: never visible, never selected, never
+    /// focused. Shares the site tab's environment (hence its profile --
+    /// cookies and Cloudflare clearance) when the tab has initialized, else
+    /// a dedicated auto-import profile folder. Null when the runtime is gone
+    /// -- the fetch becomes a quiet miss. Caller is on the dispatcher.
+    /// </summary>
+    private async Task<CoreWebView2?> EnsureWorkerCoreAsync(CompanionTab site, CancellationToken cancellationToken)
+    {
+        if (_disposed) return null;
+        if (_workers.TryGetValue(site, out var existing) && existing.Core is not null)
+            return existing.Core;
+
+        var environment = GetState(site)?.Environment;
+        if (environment is null)
+        {
+            // Last resort only (the visible-tab fallback always has an
+            // environment): an isolated profile rather than no fetch.
+            try
+            {
+                environment = await _environmentService.CreateAsync(
+                    Path.Combine(_userDataFolder, "auto-" + CompanionTabs.KeyFor(site)),
+                    cancellationToken).ConfigureAwait(true);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        if (_disposed || environment is null) return null;
+
+        var browser = new WebView2
+        {
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            VerticalAlignment = System.Windows.VerticalAlignment.Top,
+            Width = 0,
+            Height = 0,
+            Visibility = Visibility.Collapsed,
+            Focusable = false,
+            AllowExternalDrop = false,
+            IsHitTestVisible = false,
+        };
+        AutoImportHost.Children.Add(browser);
+        var worker = new BrowserTabState(site) { Browser = browser, Environment = environment };
+        try
+        {
+            await browser.EnsureCoreWebView2Async(environment).ConfigureAwait(true);
+        }
+        catch
+        {
+            AutoImportHost.Children.Remove(browser);
+            try
+            {
+                browser.Dispose();
+            }
+            catch
+            {
+            }
+            return null;
+        }
+        if (_disposed || browser.CoreWebView2 is null)
+        {
+            AutoImportHost.Children.Remove(browser);
+            try
+            {
+                browser.Dispose();
+            }
+            catch
+            {
+            }
+            return null;
+        }
+        worker.Core = browser.CoreWebView2;
+        worker.Initialized = true;
+        // Hygiene, not policy: a background fetch opens no popups, launches
+        // no external schemes, takes no permissions, and follows https only
+        // (the deep-link allowlist already pins the first navigation).
+        worker.Core.NewWindowRequested += (_, args) => args.Handled = true;
+        worker.Core.LaunchingExternalUriScheme += (_, args) => args.Cancel = true;
+        worker.Core.PermissionRequested += (_, args) => args.State = CoreWebView2PermissionState.Deny;
+        worker.Core.NavigationStarting += (_, args) =>
+        {
+            if (!SiteNavigationPolicy.IsAllowed(args.Uri)) args.Cancel = true;
+        };
+        _workers[site] = worker;
+        return worker.Core;
+    }
+
+    /// <summary>
+    /// How long a worker fetch waits for its deep link to load before the
+    /// run becomes a quiet miss. Background work must not pile up across
+    /// snapshot ticks; the service single-flight already bounds overlap.
+    /// </summary>
+    private static readonly TimeSpan AutoImportNavigationTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Navigates a WORKER core (hidden worker, or a background site tab the
+    /// user is not viewing) to a deep link and waits for the load. THE
+    /// automated-navigation call site: the allowlist assert below is the
+    /// compliance pin -- automated navigation reaches no other Navigate in
+    /// this file. Returns false on refusal, timeout, cancellation, or load
+    /// failure; the fetch then becomes a quiet miss.
+    /// </summary>
+    private async Task<bool> NavigateWorkerAndWaitAsync(
+        CoreWebView2 core,
+        CompanionTab site,
+        Uri url,
+        string? championKey,
+        int? roleId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(core);
+        ArgumentNullException.ThrowIfNull(url);
+        if (!AutoImportCoordinator.IsAllowedAutoImportTarget(site, url, championKey, roleId))
+            return false;
+        var loaded = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? sender, CoreWebView2NavigationCompletedEventArgs args)
+        {
+            core.NavigationCompleted -= Handler;
+            loaded.TrySetResult(args.IsSuccess);
+        }
+        core.NavigationCompleted += Handler;
+        try
+        {
+            core.Navigate(url.ToString());
+            var completed = await Task.WhenAny(
+                loaded.Task,
+                Task.Delay(AutoImportNavigationTimeout, cancellationToken)).ConfigureAwait(true);
+            if (!ReferenceEquals(completed, loaded.Task)) return false;
+            return await loaded.Task.ConfigureAwait(true);
+        }
+        catch
+        {
+            return false;
         }
         finally
         {
-            _importRunning = false;
-            if (!_disposed) UpdateOfferBar();
+            core.NavigationCompleted -= Handler;
         }
     }
 
@@ -1230,11 +1599,12 @@ public partial class WebView2Window : Window
         if (!Dispatcher.CheckAccess()) return;
         var context = _champSelectContext;
         var showOffer = ShouldShowOfferBar(ActiveTab, context);
-        // The import works outside champ select too (rune pages and item
-        // sets persist), so the bar also shows for a bare build page — with
-        // the chips hidden and only the import button working.
-        var importUrl = ShouldShowImport(ActiveTab, GetState(ActiveTab)?.Core?.Source);
-        OfferBar.Visibility = showOffer || importUrl ? Visibility.Visible : Visibility.Collapsed;
+        // The runes button works outside champ select too (a rune page
+        // persists), so the bar also shows for a bare u.gg build page --
+        // with the chips hidden and only the runes button working. Item
+        // sets arrive via the automatic import, never this button.
+        var runesUrl = ShouldShowRunesImport(ActiveTab, GetState(ActiveTab)?.Core?.Source);
+        OfferBar.Visibility = showOffer || runesUrl ? Visibility.Visible : Visibility.Collapsed;
         if (OfferBar.Visibility != Visibility.Visible) return;
 
         ChampChipsPanel.Visibility = showOffer && context is not null
@@ -1262,36 +1632,58 @@ public partial class WebView2Window : Window
         }
         else
         {
-            OfferHintText.Text = "Import reads this build page";
+            OfferHintText.Text = "Import reads this page's runes";
         }
 
-        var ready = _siteImport is not null && !_importRunning && importUrl && _lcuConnected;
-        ImportBuildButton.IsEnabled = ready;
-        ImportBuildButton.ToolTip = ImportTooltip(importUrl);
+        var button = RunesButtonFor(
+            ActiveTab,
+            GetState(ActiveTab)?.Core?.Source,
+            _siteImport is not null,
+            _importRunning,
+            _lcuConnected);
+        ImportRunesButton.Visibility = button.Visible ? Visibility.Visible : Visibility.Collapsed;
+        ImportRunesButton.IsEnabled = button.Enabled;
+        ImportRunesButton.ToolTip = button.Tooltip;
         OfferCaptionText.Text = showOffer ? "Click a site to open" : "Import writes to the client";
     }
 
+    /// <summary>The runes button's chrome state: visibility, enablement, and the reason in the tooltip.</summary>
+    internal sealed record RunesButtonState(bool Visible, bool Enabled, string Tooltip);
+
     /// <summary>
-    /// The disabled reason, in the tooltip: the button must always say WHY it
-    /// will not run, not merely refuse.
+    /// Pure runes-button state. Visible only on a u.gg build page (hidden on
+    /// Coachless -- no rune page there -- and on Companion, which is never
+    /// scraped); enabled only while the client is connected. The tooltip
+    /// always says WHY the button will not run, not merely refuse.
     /// </summary>
-    private string ImportTooltip(bool importUrl)
+    internal static RunesButtonState RunesButtonFor(
+        CompanionTab activeTab,
+        string? currentUrl,
+        bool hasHost,
+        bool importRunning,
+        bool lcuConnected)
     {
-        if (_siteImport is null) return "Import is unavailable in this window.";
-        if (_importRunning) return "Import already running…";
-        if (!importUrl) return "Open a champion build page to import its runes and item set.";
-        if (!_lcuConnected) return "Open the League client to import this build.";
-        return "Read this page's runes and item set into the League client.";
+        if (!ShouldShowRunesImport(activeTab, currentUrl))
+            return new(false, false, "Open a u.gg champion build page to import its runes.");
+        if (!hasHost)
+            return new(true, false, "Import is unavailable in this window.");
+        if (importRunning)
+            return new(true, false, "Import already running…");
+        if (!lcuConnected)
+            return new(true, false, "Open the League client to import these runes.");
+        return new(true, true, "Read this page's rune build into the League client.");
     }
 
     /// <summary>
-    /// The import half of the offer bar's visibility: a site tab showing that
-    /// site's build-page shape. Pure, so the button state and the extractor
-    /// share one definition of "a build page" through
-    /// <see cref="SiteImportExtractors.CanImportFromUrl"/>.
+    /// The runes button's visibility: the u.gg tab on a build-page URL. Pure,
+    /// so the button state and the extractor share one definition of "a
+    /// build page" through
+    /// <see cref="SiteImportExtractors.CanImportFromUrl"/>. Hidden on
+    /// Coachless (that site renders no rune page -- a button there would be
+    /// a dead click) and on Companion (never scraped).
     /// </summary>
-    internal static bool ShouldShowImport(CompanionTab activeTab, string? currentUrl) =>
-        activeTab != CompanionTab.Companion
+    internal static bool ShouldShowRunesImport(CompanionTab activeTab, string? currentUrl) =>
+        activeTab == CompanionTab.UGg
         && SiteImportExtractors.CanImportFromUrl(activeTab, currentUrl);
 
     /// <summary>
@@ -1473,5 +1865,27 @@ public partial class WebView2Window : Window
 
         _tabs.Clear();
         BrowserHost.Children.Clear();
+
+        // The auto-import's hidden workers die with the window: their pages
+        // hold no user state worth keeping (the site tabs own the profiles).
+        foreach (var worker in _workers.Values)
+        {
+            if (worker.Browser is not { } browser) continue;
+            try
+            {
+                browser.Dispose();
+            }
+            catch
+            {
+            }
+            worker.Browser = null;
+            worker.Core = null;
+            worker.Initialized = false;
+            worker.HasNavigated = false;
+            worker.IsLoading = false;
+        }
+
+        _workers.Clear();
+        AutoImportHost.Children.Clear();
     }
 }

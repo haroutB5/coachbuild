@@ -210,11 +210,16 @@ public sealed record FailCommand(string Reason) : SequencerCommand;
 ///
 /// <para>SELECTABLE-GATING (live-verified 2026-09-08): the site grants the
 /// <c>selectable</c> class only to a capped depth — clicking a read-only
-/// slot's top row never activates anything, so the walk never clicks one:
-/// discovery positions past read-only slots, <see cref="Advance"/> skips
-/// them mid-walk, and a <c>read-only</c> click answer (the top row lost its
-/// class between inspect and click) advances with no settle wait and no
-/// note. A clicked slot that never shows <c>active</c> within the settle
+/// slot's top row never activates anything, so the walk never clicks one.
+/// ITEM-SLOTS-ONLY (live-verified 2026-09-08): the walk starts at
+/// <c>1st Item</c> and clicks subsequent selectable item slots in DOM
+/// order — Keystone, Starter and Spell are never clicked (see
+/// <see cref="SiteImportExtractors.IsWalkClickableSlot"/>), so discovery
+/// positions past them and <see cref="Advance"/> skips them mid-walk,
+/// exactly like read-only slots. Starter's conditioned top row is still
+/// read, never clicked. A <c>read-only</c> click answer (the top row lost
+/// its class between inspect and click) advances with no settle wait and
+/// no note. A clicked slot that never shows <c>active</c> within the settle
 /// budget does NOT fail the import: the walk notes it into the payload's
 /// <c>meta.notes</c> and moves on, and the final read takes the top row of
 /// any slot left unselected. The only absolute backstop is
@@ -225,8 +230,8 @@ public static class SiteImportSequencer
     /// <summary>
     /// Absolute bound on executed steps: defends against a page that keeps
     /// adding slot sections. Real walks cost 1 discover + 1 click + ~2
-    /// polls per CLICKABLE slot + 1 read (about 15 for the Jhin ADC shape —
-    /// 4 clicks plus the read-only tail skipped outright), so this is
+    /// polls per CLICKABLE slot + 1 read (about 8 for the Jhin ADC shape:
+    /// 1st + 2nd Item clicked, everything else skipped outright), so this is
     /// headroom, not a budget a healthy page can hit.
     /// </summary>
     public const int MaxSteps = 128;
@@ -304,12 +309,15 @@ public static class SiteImportSequencer
             .Select(slot => new CoachlessSlotPlan(slot.Title, slot.TopSelectable))
             .ToList();
         if (plans.Count == 0) return Fail(state, SiteImportFailures.NoBuild);
-        // Position past the read-only head: a slot whose top row was not
-        // selectable at discovery is never clicked and never waited on. When
-        // nothing is clickable at all, go straight to the conditioned
+        // Position at the first clickable item slot: a slot whose top row
+        // was not selectable at discovery is never clicked and never waited
+        // on, and neither are Keystone, Starter or Spell under any
+        // selectability — the walk starts at 1st Item (see
+        // SiteImportExtractors.IsWalkClickableSlot). When nothing is
+        // clickable at all, go straight to the conditioned
         // top-row read rather than failing — the read still yields the page's
         // own recommendations.
-        var first = FirstSelectable(plans, 0);
+        var first = FirstClickable(plans, 0);
         return first >= plans.Count
             ? state with { Phase = SequencerPhase.Read, Slots = plans }
             : state with { Phase = SequencerPhase.Click, Slots = plans, Position = first };
@@ -382,16 +390,25 @@ public static class SiteImportSequencer
 
     private static SequencerState Advance(SequencerState state)
     {
-        var next = FirstSelectable(state.Slots, state.Position + 1);
+        var next = FirstClickable(state.Slots, state.Position + 1);
         return next >= state.Slots.Count
             ? state with { Phase = SequencerPhase.Read, LastHash = null, StablePolls = 0, SettlePolls = 0 }
             : state with { Phase = SequencerPhase.Click, Position = next };
     }
 
-    private static int FirstSelectable(IReadOnlyList<CoachlessSlotPlan> plans, int start)
+    /// <summary>
+    /// Index of the next slot the walk may click at or after
+    /// <paramref name="start"/>: selectable AND an item slot at/after 1st
+    /// Item. Keystone, Starter and Spell never qualify (the walk starts at
+    /// 1st Item — live-verified 2026-09-08), and neither does a slot whose
+    /// top row lacks <c>selectable</c>.
+    /// </summary>
+    private static int FirstClickable(IReadOnlyList<CoachlessSlotPlan> plans, int start)
     {
         var index = start;
-        while (index < plans.Count && !plans[index].Selectable) index++;
+        while (index < plans.Count &&
+            (!plans[index].Selectable || !SiteImportExtractors.IsWalkClickableSlot(plans[index].Title)))
+            index++;
         return index;
     }
 

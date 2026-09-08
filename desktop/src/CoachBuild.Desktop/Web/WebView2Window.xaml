@@ -294,11 +294,11 @@
                 <StackPanel Grid.Column="1"
                             Orientation="Horizontal"
                             VerticalAlignment="Center">
-                    <Button x:Name="ImportBuildButton"
+                    <Button x:Name="ImportRunesButton"
                             Style="{StaticResource PrimaryOfferButton}"
-                            Content="Import build"
-                            ToolTip="Read this page's runes and item set into the League client."
-                            Click="OnImportBuildClick" />
+                            Content="Import runes"
+                            ToolTip="Read this page's rune build into the League client."
+                            Click="OnImportRunesClick" />
                     <StackPanel x:Name="ChampChipsPanel"
                                 Orientation="Horizontal"
                                 VerticalAlignment="Center">
@@ -326,6 +326,17 @@
               Grid.Row="3"
               Background="{StaticResource SiteCanvasBrush}">
             <Grid x:Name="BrowserHost" />
+
+            <!-- Zero-area host for the auto-import's hidden worker webviews.
+                 Collapsed would withhold the HWND a WebView2 needs to run, so
+                 this stays Visible at 0x0: it paints nothing, hits nothing,
+                 and its pages still navigate and script. -->
+            <Grid x:Name="AutoImportHost"
+                  Width="0"
+                  Height="0"
+                  HorizontalAlignment="Left"
+                  VerticalAlignment="Top"
+                  IsHitTestVisible="False" />
 
             <Grid x:Name="LandingState"
                   Background="#081A2A"

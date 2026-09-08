@@ -143,12 +143,17 @@ public sealed class SiteImportExtractorTests
 
     [Theory]
     [InlineData(CompanionTab.UGg, "https://u.gg/lol/champions/jhin/build/adc", true)]
+    [InlineData(CompanionTab.UGg, "https://u.gg/lol/champions/jhin/build", true)]
     [InlineData(CompanionTab.UGg, "https://u.gg/", false)]
-    [InlineData(CompanionTab.Coachless, "https://coachless.gg/builds/jhin?role=adc", true)]
+    // The runes button is u.gg-only: Coachless has no rune page, so even a
+    // perfect Coachless build page must not show it -- a button there would
+    // be a dead click. (Items arrive via the automatic import.)
+    [InlineData(CompanionTab.Coachless, "https://coachless.gg/builds/jhin?role=adc", false)]
+    [InlineData(CompanionTab.Coachless, "https://u.gg/lol/champions/jhin/build/adc", false)]
     [InlineData(CompanionTab.Companion, "https://u.gg/lol/champions/jhin/build/adc", false)]
-    public void The_offer_bar_import_visibility_follows_the_url_shape(
+    public void The_offer_bar_runes_visibility_follows_the_u_gg_url_shape(
         CompanionTab tab, string? url, bool expected)
     {
-        Assert.Equal(expected, WebView2Window.ShouldShowImport(tab, url));
+        Assert.Equal(expected, WebView2Window.ShouldShowRunesImport(tab, url));
     }
 }

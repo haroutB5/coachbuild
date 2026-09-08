@@ -31,14 +31,22 @@ PowerShell companion while the staged native rollout proves parity.
   (1.2.0). The Companion tab navigates between `/draft` and canonical Builds
   URLs and is same-origin only; it is the only tab carrying the session token
   and the only one whose document is ever scripted unprompted (the version meta
-  tag). Site tabs are **rendering only** — no scraping, no DOM reads, no
-  automated navigation — with exactly one user-initiated exception: the gold
-  **Import build** button in the offer bar reads the rune build and item set
-  off the build page you are viewing (u.gg) or its per-slot top picks
-  (Coachless overview), validates them against the local perk/shard catalogs,
-  and writes a rune page + item set via the existing LCU services — once per
-  click, only on a build-page URL while the client is connected. Site tabs are
-  restricted to https. Each tab's WebView2 is created on
+  tag). Site tabs are **read-mostly** with two sanctioned exceptions: the gold
+  **Import runes** button in the offer bar reads the rune build off the u.gg
+  build page you are viewing (u.gg only — Coachless renders no rune page, so
+  the button is hidden there), validates it against the local perk/shard
+  catalogs, and writes a rune page via the existing LCU service — once per
+  click, only on a build-page URL while the client is connected; and the
+  **automatic item import** (1.3.0) fetches both sites' item sets in the
+  background on champ-select lock (once per champion+role, plus a re-fetch
+  when the visible build page's URL changes) and writes them in one merged
+  call under per-site `CoachBuild import: {Champ} {Role} (u.gg)` /
+  `(Coachless)` titles so both sets coexist. Background fetches reuse a
+  background site tab or a hidden worker webview — never the visible tab,
+  never a tab switch, never a focus steal — and navigate only to the exact
+  deep-link URLs the app builds for the locked champion+role. Runes never
+  flow through the automatic path, items never flow through the button.
+  Site tabs are restricted to https. Each tab's WebView2 is created on
   first visit and gets its own profile directory under `WebView2/`, so cookies
   and site preferences persist without sharing storage with the hosted app.
   A native host remains hidden until its browser is ready, and callbacks arriving

@@ -164,6 +164,54 @@ public sealed class SiteImportHostTests
             call => call.Path.StartsWith("/lol-perks/", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task Runes_button_path_writes_the_rune_page_only()
+    {
+        // The offer-bar button: runes out of the u.gg payload, items never
+        // flowing -- the item-set endpoints see zero calls even though the
+        // payload carries an item build.
+        var api = new StubLcuApi();
+        EnqueueRuneCreate(api);
+        var result = await ConnectedHost(api).ImportRunesAsync(JhinUggJson);
+
+        var success = Assert.IsType<SiteImportSuccess>(result);
+        Assert.Equal("Imported runes for Jhin (ADC) from u.gg", success.Message);
+        Assert.Contains(api.Calls, call => call.Path == "/lol-perks/v1/pages");
+        Assert.DoesNotContain(api.Calls,
+            call => call.Path.Contains("item-sets", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Runes_button_with_items_only_reports_no_runes_and_writes_nothing()
+    {
+        const string itemsOnly = """
+            {"source":"coachless","championSlug":"jhin","role":"adc","runes":null,
+             "itemBlocks":[{"title":"Starter","itemIds":[1120]}]}
+            """;
+        var api = new StubLcuApi();
+        var result = await ConnectedHost(api).ImportRunesAsync(itemsOnly);
+
+        var failure = Assert.IsType<SiteImportFailure>(result);
+        Assert.Equal("bad-runes", failure.Reason);
+        Assert.Contains("nothing was imported", failure.Message, StringComparison.Ordinal);
+        Assert.Empty(api.Calls);
+    }
+
+    [Fact]
+    public async Task Runes_button_disconnected_reports_no_client_before_any_lcu_call()
+    {
+        var api = new StubLcuApi();
+        var host = new SiteImportHost(
+            new RuneApplyService(api), new ItemSetApplyService(api),
+            new FakeChampionDirectory(JhinRoster), new CompanionState());
+
+        var result = await host.ImportRunesAsync(JhinUggJson);
+
+        var failure = Assert.IsType<SiteImportFailure>(result);
+        Assert.Equal("no-client", failure.Reason);
+        Assert.Empty(api.Calls);
+    }
+
     private static LcuResponse Ok(string raw)
     {
         using var document = JsonDocument.Parse(raw);

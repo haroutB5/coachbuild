@@ -564,5 +564,208 @@ public sealed class SiteImportTests
         Assert.Equal("Imported runes + 19-item set for Jhin (ADC) from u.gg", success.Message);
     }
 
+    // -- Runes-only imports (the offer-bar "Import runes" button) ----------
+
+    [Fact]
+    public async Task Runes_only_writes_the_rune_page_and_no_item_set()
+    {
+        // Items never flow through the button even when the payload carries
+        // them: the rune service is called, the item-set endpoints are not.
+        var api = new MockLcuApi();
+        var title = "CoachBuild import: Jhin ADC (u.gg)";
+        EnqueueRuneCreate(api, title);
+
+        var result = await SiteImportApplier.ApplyRunesOnlyAsync(
+            JhinUgg(), "Jhin", 202, new RuneApplyService(api));
+
+        var success = Assert.IsType<SiteImportSuccess>(result);
+        Assert.Equal("Imported runes for Jhin (ADC) from u.gg", success.Message);
+        Assert.Contains(api.Calls, call => call.Path == "/lol-perks/v1/pages");
+        Assert.DoesNotContain(api.Calls,
+            call => call.Path.Contains("item-sets", StringComparison.Ordinal));
+        var runePost = api.Calls.Single(call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages");
+        Assert.Equal(title, runePost.Body!.Value.GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task Runes_only_with_no_rune_build_fails_without_touching_the_lcu()
+    {
+        // The Coachless items-only shape through the runes path: a typed
+        // failure, zero calls -- the button is hidden on Coachless for
+        // exactly this reason.
+        Assert.True(
+            SiteImportPayload.TryParse(JhinCoachlessItemsOnlyJson, out var payload, out _));
+        Assert.Null(payload!.Runes);
+
+        var api = new MockLcuApi();
+        var result = await SiteImportApplier.ApplyRunesOnlyAsync(
+            payload, "Jhin", 202, new RuneApplyService(api));
+
+        var failure = Assert.IsType<SiteImportFailure>(result);
+        Assert.Equal("bad-runes", failure.Reason);
+        Assert.Contains("nothing was imported", failure.Message, StringComparison.Ordinal);
+        Assert.Empty(api.Calls);
+    }
+
+    [Fact]
+    public async Task Runes_only_with_bad_runes_writes_nothing()
+    {
+        var bad = JhinUgg() with
+        {
+            Runes = JhinUgg().Runes with { PerkIds = [8021, 9104, 9111, 8014, 8233, 8237] },
+        };
+        Assert.Contains("one per row", SiteImportValidator.ValidateRunes(bad.Runes), StringComparison.Ordinal);
+
+        var api = new MockLcuApi();
+        var result = await SiteImportApplier.ApplyRunesOnlyAsync(
+            bad, "Jhin", 202, new RuneApplyService(api));
+
+        Assert.IsType<SiteImportFailure>(result);
+        Assert.Empty(api.Calls);
+    }
+
+    // -- Batched items-only imports (the automatic import) -----------------
+
+    private static SiteImportPayload JhinCoachlessItemsOnly()
+    {
+        Assert.True(
+            SiteImportPayload.TryParse(JhinCoachlessItemsOnlyJson, out var payload, out var failure),
+            failure);
+        return payload!;
+    }
+
+    [Fact]
+    public async Task Batch_writes_both_sites_sets_in_one_put_and_never_touches_runes()
+    {
+        // The coexistence contract: one read-modify-write carrying both
+        // per-site titles. Two sequential single-set writes would NOT
+        // coexist (the merge drops every CoachBuild* set it reads), so the
+        // batch is what keeps u.gg and Coachless on the client together.
+        // The u.gg payload carries a rune page; the batch must ignore it --
+        // this path cannot reach the rune service (it does not even take
+        // one), proved by zero perk calls.
+        var api = new MockLcuApi();
+        EnqueueItemWrite(api);
+
+        var results = await SiteImportApplier.ApplyItemsBatchAsync(
+            [
+                new SiteImportItemsContribution(JhinUgg(), "Jhin", 202),
+                new SiteImportItemsContribution(JhinCoachlessItemsOnly(), "Jhin", 202),
+            ],
+            new ItemSetApplyService(api));
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal(
+            "Auto-imported 3-item set for Jhin (ADC) from u.gg",
+            Assert.IsType<SiteImportSuccess>(results[0]).Message);
+        Assert.Equal(
+            "Auto-imported 6-item set for Jhin (ADC) from Coachless",
+            Assert.IsType<SiteImportSuccess>(results[1]).Message);
+        Assert.DoesNotContain(api.Calls,
+            call => call.Path.StartsWith("/lol-perks/", StringComparison.Ordinal));
+        var put = Assert.Single(api.Calls, call =>
+            call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal));
+        var sets = put.Body!.Value.GetProperty("itemSets");
+        Assert.Equal(2, sets.GetArrayLength());
+        Assert.Equal("CoachBuild import: Jhin ADC (u.gg)", sets[0].GetProperty("title").GetString());
+        Assert.Equal("CoachBuild import: Jhin ADC (Coachless)", sets[1].GetProperty("title").GetString());
+    }
+
+    [Fact]
+    public async Task Batch_writes_the_valid_contribution_and_fails_the_bad_one_in_place()
+    {
+        var empty = JhinCoachlessItemsOnly() with { ItemBlocks = Array.Empty<SiteImportItemBlock>() };
+        var api = new MockLcuApi();
+        EnqueueItemWrite(api);
+
+        var results = await SiteImportApplier.ApplyItemsBatchAsync(
+            [
+                new SiteImportItemsContribution(empty, "Jhin", 202),
+                new SiteImportItemsContribution(JhinUgg(), "Jhin", 202),
+            ],
+            new ItemSetApplyService(api));
+
+        Assert.Equal(2, results.Count);
+        var failure = Assert.IsType<SiteImportFailure>(results[0]);
+        Assert.Equal("bad-items", failure.Reason);
+        Assert.IsType<SiteImportSuccess>(results[1]);
+        var put = Assert.Single(api.Calls, call =>
+            call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal));
+        Assert.Equal(1, put.Body!.Value.GetProperty("itemSets").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Batch_with_nothing_valid_touches_no_lcu()
+    {
+        var empty = JhinCoachlessItemsOnly() with { ItemBlocks = Array.Empty<SiteImportItemBlock>() };
+        var api = new MockLcuApi();
+
+        var results = await SiteImportApplier.ApplyItemsBatchAsync(
+            [new SiteImportItemsContribution(empty, "Jhin", 202)],
+            new ItemSetApplyService(api));
+
+        var failure = Assert.Single(results);
+        Assert.IsType<SiteImportFailure>(failure);
+        Assert.Empty(api.Calls);
+    }
+
+    [Fact]
+    public async Task Empty_batch_writes_nothing()
+    {
+        var api = new MockLcuApi();
+        var results = await SiteImportApplier.ApplyItemsBatchAsync(
+            [], new ItemSetApplyService(api));
+
+        Assert.Empty(results);
+        Assert.Empty(api.Calls);
+    }
+
+    [Fact]
+    public async Task Batch_write_refusal_fails_every_contribution_with_nothing_landed()
+    {
+        // Unlike the both-halves path there is no landed half to report:
+        // the single PUT either wrote every set or none.
+        var api = new MockLcuApi();
+        api.Enqueue(HttpMethod.Get, "/lol-summoner/v1/current-summoner", Ok("{\"summonerId\":77}"));
+        api.Enqueue(HttpMethod.Get, "/lol-item-sets/v1/item-sets/77/sets", Ok("{\"accountId\":77,\"itemSets\":[]}"));
+        api.Enqueue(HttpMethod.Put, "/lol-item-sets/v1/item-sets/77/sets", new LcuResponse(false, 413));
+
+        var results = await SiteImportApplier.ApplyItemsBatchAsync(
+            [
+                new SiteImportItemsContribution(JhinUgg(), "Jhin", 202),
+                new SiteImportItemsContribution(JhinCoachlessItemsOnly(), "Jhin", 202),
+            ],
+            new ItemSetApplyService(api));
+
+        Assert.Equal(2, results.Count);
+        foreach (var result in results)
+        {
+            var failure = Assert.IsType<SiteImportFailure>(result);
+            Assert.Contains("nothing was imported", failure.Message, StringComparison.Ordinal);
+        }
+        Assert.DoesNotContain(api.Calls,
+            call => call.Path.StartsWith("/lol-perks/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_batch_element_matches_the_single_request_shape()
+    {
+        // The batch must build byte-identical sets to the long-standing
+        // single-write path: same uid, title, champion association, blocks.
+        var payload = JhinUgg();
+        var title = SiteImportValidator.PageTitle("Jhin", payload.Role, payload.Source);
+        var element = SiteImportValidator.BuildItemSetElement(
+            202, title, payload.ChampionSlug, payload.Role, payload.ItemBlocks);
+        var request = SiteImportValidator.BuildItemSetRequest(
+            202, title, payload.ChampionSlug, payload.Role, payload.ItemBlocks);
+
+        Assert.Equal(
+            request.Sets![0].GetRawText(),
+            element.GetRawText());
+        Assert.Equal($"coachbuild-import-jhin-adc", element.GetProperty("uid").GetString());
+        Assert.Equal(202, element.GetProperty("associatedChampions")[0].GetInt32());
+    }
+
     private static LcuResponse Ok(string raw) => new(true, 200, MockLcuApi.Json(raw), raw);
 }

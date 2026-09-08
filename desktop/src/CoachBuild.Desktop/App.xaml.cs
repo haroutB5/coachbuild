@@ -560,6 +560,12 @@ public partial class App : WpfApplication
         // The import button's LCU half, on the same tick. Like the context
         // above this only redraws chrome; it never touches a page.
         _webView?.UpdateSiteImportAvailability(snapshot.LcuConnected);
+        // The automatic item import's trigger, on the same tick. This only
+        // OFFERS the snapshot to the window's auto-import service (which
+        // debounces, single-flights, and fetches through background/hidden
+        // webviews without moving the user's tab); the 750 ms cadence is the
+        // existing poll, not a new timer.
+        _webView?.NotifySnapshotForAutoImport(snapshot.ChampSelect, snapshot.LcuConnected);
 
         // AFTER SetUpdateBusy, never before. Closing the window clears the
         // restart-is-disruptive gate and kicks a staged-apply retry, and the
@@ -1175,6 +1181,17 @@ public partial class App : WpfApplication
                     preferenceStore?.Read(),
                     preferenceStore is null ? null : preferenceStore.Save,
                     (_services as CoreDesktopHostServices)?.CreateSiteImportHost());
+                if (_services is CoreDesktopHostServices coreServices)
+                {
+                    // The automatic item import rides the window (the only
+                    // place that may touch a WebView) and the bridge's
+                    // item-set service. Attached, never constructed here, so
+                    // a window without host services still opens.
+                    createdWindow.AttachAutoImport(
+                        coreServices.AutoImportItemSets,
+                        coreServices.ChampionDirectory,
+                        line => _log?.Info(line));
+                }
                 _webView = createdWindow;
                 createdWindow.Closed += OnWebViewClosed;
                 createdWindow.WebVersionObserved += OnWebVersionObserved;
@@ -1643,6 +1660,20 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     /// </summary>
     public ISiteImportHost CreateSiteImportHost() =>
         new SiteImportHost(_bridge.RuneApplyService, _bridge.ItemSetApplyService, _champions, _state);
+
+    /// <summary>
+    /// The bridge's item-set service for the window's automatic import. The
+    /// auto path writes ITEM SETS ONLY (the runes button owns rune pages),
+    /// so this is the one LCU writer it ever receives.
+    /// </summary>
+    public ItemSetApplyService AutoImportItemSets => _bridge.ItemSetApplyService;
+
+    /// <summary>
+    /// The roster the auto-import resolves payload slugs through (by id, so
+    /// site URL aliases like coachless's <c>wukong</c> redirect still meet
+    /// the <c>MonkeyKing</c> context).
+    /// </summary>
+    public IChampionDirectory ChampionDirectory => _champions;
 
     public WindowDecisionService WindowDecisions => _windowDecisions;
 

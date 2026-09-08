@@ -1,5 +1,38 @@
 # Changelog
 
+## Desktop 1.3.0 — auto item import from both sites + runes-only button (2026-09-08)
+
+Item sets now import themselves; the offer-bar button keeps only the runes:
+
+- **Coachless walk starts at 1st Item.** No Keystone/Starter clicks — the
+  keystone conditioning flipped the build to Hubris. The walk clicks item
+  slots only, from 1st Item in DOM order, then reads selected else
+  conditioned top rows (Starter/1st/2nd/Boots/3rd/4th+). Live-verified
+  shape for the headline WPA chain: 1st (Stormrazor) then 2nd (Phantom
+  Dancer), 3rd capped read-only, conditioned tops after (Doran's Blade,
+  Gluttonous Greaves, Lord Dominik's, Infinity Edge).
+- **Automatic both-site item import.** On champ-select lock (once per
+  champion+role) and when the visible build page's URL changes for that
+  champion (e.g. rank filter), the app fetches each site's item set in the
+  background and writes both in ONE merged item-set call, so the per-site
+  `CoachBuild import: {Champ} {Role} (u.gg)` / `(Coachless)` titles coexist
+  in the client. Fetches reuse a background site tab or a hidden worker
+  webview — never the visible tab, never a tab switch, never a focus steal —
+  and a worker navigates ONLY to the exact deep-link URL the app's own
+  builders produce for the locked champion+role. LCU absent skips quietly
+  (log once); extraction failure is a quiet log plus a status-line note,
+  never a dialog. Runes never flow through this path.
+- **Offer-bar button is "Import runes" (u.gg only).** It writes the visible
+  u.gg rune page alone (`Imported runes for {Champ} ({Role}) from u.gg`) and
+  is hidden on Coachless, which has no rune page. Champ-select offer chips
+  unchanged.
+- **Compliance rework.** Automated navigation is now sanctioned but ONLY to
+  the two known build-page URL shapes for this auto-import; the invariant
+  enumerates navigation call sites and asserts the worker's deep-link
+  allowlist, replacing the blanket no-automated-navigation pin. Scripts
+  remain extractor-steps-only (version read, runes click, visible/worker
+  fetch, shared Coachless walk).
+
 ## Desktop 1.2.2 — Coachless import walks the page's own selections (2026-09-08)
 
 Importing from Coachless read the unconditioned default tables, so every item

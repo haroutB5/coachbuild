@@ -534,6 +534,21 @@ public static class SiteImportValidator
         string pageTitle,
         string championSlug,
         string? role,
+        IReadOnlyList<SiteImportItemBlock> blocks) =>
+        new(championId, [BuildItemSetElement(championId, pageTitle, championSlug, role, blocks)]);
+
+    /// <summary>
+    /// One set's element for an <see cref="ApplyItemSetsRequest"/>. Split out
+    /// so the automatic import can batch both sites' sets into a single
+    /// request: the merge drops every <c>CoachBuild*</c> set it reads, so two
+    /// sequential single-set writes would NOT coexist (the second would wipe
+    /// the first) — one request with both sets is what keeps them coexisting.
+    /// </summary>
+    public static JsonElement BuildItemSetElement(
+        int championId,
+        string pageTitle,
+        string championSlug,
+        string? role,
         IReadOnlyList<SiteImportItemBlock> blocks)
     {
         var slug = ChampionNameKey.Normalize(championSlug);
@@ -560,7 +575,7 @@ public static class SiteImportValidator
                 }).ToArray(),
             },
             JsonOptions.Wire));
-        return new ApplyItemSetsRequest(championId, [document.RootElement.Clone()]);
+        return document.RootElement.Clone();
     }
 }
 
@@ -570,6 +585,19 @@ public abstract record SiteImportResult(bool Ok, string Message);
 public sealed record SiteImportSuccess(string Message) : SiteImportResult(true, Message);
 
 public sealed record SiteImportFailure(string Reason, string Message) : SiteImportResult(false, Message);
+
+/// <summary>
+/// One site's items-only contribution to an automatic import batch: an
+/// already-parsed payload plus the resolved champion it belongs to. The
+/// coordinator guarantees every contribution in one batch addresses the
+/// same champion (its own context champion); each set still carries its
+/// own per-site title, which is what keeps the two sites coexisting in
+/// the client after the single merged write.
+/// </summary>
+public sealed record SiteImportItemsContribution(
+    SiteImportPayload Payload,
+    string ChampionName,
+    int ChampionId);
 
 /// <summary>
 /// Runs a validated scrape against the two LCU apply services. Contract:
@@ -637,6 +665,124 @@ public static class SiteImportApplier
         var roleLabel = SiteImportValidator.RoleLabel(payload.Role);
         return new SiteImportSuccess(
             $"Imported runes + {totalItems}-item set for {championName} ({roleLabel}) from {SiteImportValidator.Label(payload.Source)}");
+    }
+
+    /// <summary>
+    /// The runes-only path for the offer-bar "Import runes" button: validate
+    /// and write the rune page alone. The item-set service is never touched
+    /// (items flow through the automatic import now, never the button), so a
+    /// rune write cannot disturb the item sets. A runes-null payload (the
+    /// Coachless shape) stays a typed failure here — the button is hidden on
+    /// Coachless for exactly that reason.
+    /// </summary>
+    public static async Task<SiteImportResult> ApplyRunesOnlyAsync(
+        SiteImportPayload payload,
+        string championName,
+        int championId,
+        RuneApplyService runes,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(runes);
+        if (championId <= 0 || string.IsNullOrWhiteSpace(championName))
+            return new SiteImportFailure(
+                "unknown-champion",
+                $"could not match \"{payload.ChampionSlug}\" to a champion -- nothing was imported");
+
+        var title = SiteImportValidator.PageTitle(championName, payload.Role, payload.Source);
+        if (SiteImportValidator.ValidateRunes(payload.Runes) is { } runeError)
+            return new SiteImportFailure("bad-runes", $"{runeError} -- nothing was imported");
+
+        var runeRequest = SiteImportValidator.BuildRuneRequest(title, payload.Runes);
+        if (!ApplyPayloadValidation.TryValidateRunes(runeRequest, out var runeGate))
+            return new SiteImportFailure(runeGate.Reason, $"{runeGate.Hint} -- nothing was imported");
+
+        var runeResult = await runes.ApplyAsync(runeRequest, cancellationToken).ConfigureAwait(false);
+        if (runeResult is ApplyRunesFailure runeFailure)
+            return new SiteImportFailure(
+                runeFailure.Reason,
+                $"runes not applied ({runeFailure.Hint ?? runeFailure.Reason}) -- nothing was imported");
+
+        var roleLabel = SiteImportValidator.RoleLabel(payload.Role);
+        return new SiteImportSuccess(
+            $"Imported runes for {championName} ({roleLabel}) from {SiteImportValidator.Label(payload.Source)}");
+    }
+
+    /// <summary>
+    /// The automatic import's write: every contribution's item set in ONE
+    /// <see cref="ItemSetApplyService"/> call, so the read-modify-write the
+    /// merge performs sees both sites at once. Validation runs entirely
+    /// before the first LCU call — an invalid contribution fails in place
+    /// while the valid ones still land; when NOTHING is valid the LCU is
+    /// never touched. The rune service is not taken and cannot be reached:
+    /// this path is items-only by construction, not by discipline.
+    /// </summary>
+    public static async Task<IReadOnlyList<SiteImportResult>> ApplyItemsBatchAsync(
+        IReadOnlyList<SiteImportItemsContribution> contributions,
+        ItemSetApplyService items,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(contributions);
+        ArgumentNullException.ThrowIfNull(items);
+        var results = new List<SiteImportResult>();
+        if (contributions.Count == 0) return results;
+
+        var valid = new List<(SiteImportItemsContribution Contribution, string Title)>();
+        foreach (var contribution in contributions)
+        {
+            var payload = contribution?.Payload;
+            if (payload is null || contribution!.ChampionId <= 0 ||
+                string.IsNullOrWhiteSpace(contribution.ChampionName))
+            {
+                results.Add(new SiteImportFailure(
+                    "unknown-champion",
+                    $"could not match \"{payload?.ChampionSlug}\" to a champion -- nothing was imported"));
+                continue;
+            }
+            if (SiteImportValidator.ValidateItems(payload.ItemBlocks) is { } itemError)
+            {
+                results.Add(new SiteImportFailure("bad-items", $"{itemError} -- nothing was imported"));
+                continue;
+            }
+            valid.Add((contribution, SiteImportValidator.PageTitle(
+                contribution.ChampionName, payload.Role, payload.Source)));
+        }
+        if (valid.Count == 0) return results;
+
+        var championId = valid[0].Contribution.ChampionId;
+        var elements = valid.Select(entry => SiteImportValidator.BuildItemSetElement(
+                entry.Contribution.ChampionId,
+                entry.Title,
+                entry.Contribution.Payload.ChampionSlug,
+                entry.Contribution.Payload.Role,
+                entry.Contribution.Payload.ItemBlocks))
+            .ToList();
+        var request = new ApplyItemSetsRequest(championId, elements);
+        if (!ApplyPayloadValidation.TryValidateItemSets(request, out var itemGate))
+        {
+            foreach (var _ in valid)
+                results.Add(new SiteImportFailure(itemGate.Reason, $"{itemGate.Hint} -- nothing was imported"));
+            return results;
+        }
+
+        var itemResult = await items.ApplyAsync(request, cancellationToken).ConfigureAwait(false);
+        if (itemResult is ApplyItemSetsFailure itemFailure)
+        {
+            foreach (var _ in valid)
+                results.Add(new SiteImportFailure(
+                    itemFailure.Reason,
+                    $"item set rejected ({itemFailure.Hint ?? itemFailure.Reason}) -- nothing was imported"));
+            return results;
+        }
+
+        foreach (var (contribution, _) in valid)
+        {
+            var totalItems = contribution.Payload.ItemBlocks.Sum(block => block.ItemIds.Count);
+            var roleLabel = SiteImportValidator.RoleLabel(contribution.Payload.Role);
+            results.Add(new SiteImportSuccess(
+                $"Auto-imported {totalItems}-item set for {contribution.ChampionName} ({roleLabel}) from {SiteImportValidator.Label(contribution.Payload.Source)}"));
+        }
+        return results;
     }
 
     /// <summary>

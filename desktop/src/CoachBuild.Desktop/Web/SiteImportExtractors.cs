@@ -296,15 +296,17 @@ public static class SiteImportExtractors
     /// <c>read-only</c>, no click dispatched). <c>read</c> returns the final
     /// payload — the SELECTED (<c>tr.data-row.active</c>) row of each item
     /// slot (Starter, 1st, 2nd, 3rd, 4th+, Boots) where one exists, else the
-    /// TOP row of the by-now conditioned table (read-only slots collapse to
+    /// TOP row of the by-now conditioned table (read-only slots, and Starter
+    /// which is read but never clicked, collapse to
     /// conditioned recommendations that are never granted <c>selectable</c>,
     /// and the top row IS the recommendation) — one single-item block per
     /// slot titled with the page's own header text, each carrying
     /// <c>selected</c> provenance — or a typed error naming the slot with
     /// no rows at all.</para>
     ///
-    /// <para>RUNES ARE NOT ON THIS PAGE. Keystone and Spell slots are
-    /// clicked for conditioning but never imported: the overview renders
+    /// <para>RUNES ARE NOT ON THIS PAGE. The walk clicks item slots only,
+    /// starting at 1st Item (Keystone, Starter and Spell are never clicked),
+    /// and no keystone is ever imported: the overview renders
     /// keystone options and zero minor runes or shards, so no complete rune
     /// page can be read here. The final payload carries <c>runes: null</c>
     /// and C# applies the item set on its own, reporting the missing half
@@ -489,6 +491,37 @@ public static class SiteImportExtractors
 
     /// <summary>The Coachless walk's first step: list the slot sections in DOM order.</summary>
     public static string CoachlessInspectScript => BuiltCoachlessInspectScript;
+
+    /// <summary>
+    /// The Coachless builds-overview section titles that hold ITEMS (the
+    /// same six the step script's <c>read</c> action reports). Keystone and
+    /// Spell sections exist on the page but hold no items and are never part
+    /// of the import — neither clicked nor read.
+    /// </summary>
+    public static readonly IReadOnlySet<string> CoachlessItemSlotTitles =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Starter", "1st Item", "2nd Item", "3rd Item", "4th+ Item", "Boots",
+        };
+
+    /// <summary>
+    /// Whether the select-and-recompute walk may click this slot section.
+    ///
+    /// <para>Live-verified 2026-09-08: the walk must start at <b>1st
+    /// Item</b> — no Keystone/Starter clicks. The keystone conditioning is
+    /// what flipped the build to Hubris; the headline WPA chain (1st →
+    /// 2nd → conditioned tops) is the payload. So the clickable set is item
+    /// slots only, minus Starter: Starter's CONDITIONED top row is still
+    /// read (it is the honest Doran's-Blade-style opener once 1st/2nd are
+    /// picked) but never clicked. Keystone, Starter and Spell are never
+    /// clicked under any selectability: the walk positions past them at
+    /// discovery and skips them mid-walk, exactly like read-only slots.
+    /// </para>
+    /// </summary>
+    public static bool IsWalkClickableSlot(string? title) =>
+        !string.IsNullOrEmpty(title)
+        && CoachlessItemSlotTitles.Contains(title)
+        && !string.Equals(title, "Starter", StringComparison.Ordinal);
 
     /// <summary>
     /// The extractor for a site tab, or null for the hosted tab (which is

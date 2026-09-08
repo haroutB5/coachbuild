@@ -18,6 +18,17 @@ public sealed class SiteImportSequencerTests
         "Spell", "Boots", "3rd Item", "4th+ Item",
     ];
 
+    /// <summary>
+    /// The walk's click set: item slots only, starting at 1st Item, in DOM
+    /// order. Keystone, Starter and Spell are never clicked (the keystone
+    /// conditioning flipped the build to Hubris — live-verified 2026-09-08);
+    /// Starter's conditioned top row is read, never clicked.
+    /// </summary>
+    private static readonly string[] ClickableSlots =
+    [
+        "1st Item", "2nd Item", "Boots", "3rd Item", "4th+ Item",
+    ];
+
     private static readonly string[] ReadOnlyTail =
     [
         "Spell", "Boots", "3rd Item", "4th+ Item",
@@ -100,13 +111,25 @@ public sealed class SiteImportSequencerTests
     }
 
     [Fact]
-    public void Happy_path_clicks_every_slot_in_dom_order_then_reads()
+    public void The_walk_gate_clicks_item_slots_from_1st_only()
+    {
+        foreach (var title in new[] { "1st Item", "2nd Item", "3rd Item", "4th+ Item", "Boots" })
+            Assert.True(SiteImportExtractors.IsWalkClickableSlot(title), title);
+        // Keystone/Starter/Spell never qualify, and the match is exact and
+        // ordinal — a near-miss title must fall back to the top-row read,
+        // never to a click on the wrong section.
+        foreach (var title in new[] { "Keystone", "Starter", "Spell", null, string.Empty, "1st item", "Boots " })
+            Assert.False(SiteImportExtractors.IsWalkClickableSlot(title), title ?? "null");
+    }
+
+    [Fact]
+    public void Happy_path_clicks_item_slots_from_1st_in_dom_order_then_reads()
     {
         var state = SiteImportSequencer.Initial();
         var clicked = new List<string>();
 
         state = Turn(state, new InspectCommand(), DiscoverResponse());
-        foreach (var slot in WalkSlots)
+        foreach (var slot in ClickableSlots)
         {
             state = Turn(state, new ClickSlotCommand(slot), ClickedResponse(slot));
             clicked.Add(slot);
@@ -119,20 +142,21 @@ public sealed class SiteImportSequencerTests
 
         var done = Assert.IsType<SucceedCommand>(SiteImportSequencer.CommandFor(state));
         Assert.Equal("""{"source":"coachless"}""", done.PayloadJson);
-        Assert.Equal(WalkSlots, clicked);
+        Assert.Equal(ClickableSlots, clicked);
     }
 
     [Fact]
-    public void Jhin_shape_clicks_only_selectable_slots_then_reads_mixed()
+    public void Jhin_shape_clicks_1st_and_2nd_then_reads_mixed()
     {
-        // The live-verified shape: Keystone/Starter/1st/2nd grant selections;
-        // Spell/Boots/3rd/4th+ collapse to conditioned top rows that are never
-        // selectable. The walk must click the four, skip the tail outright
-        // (no click, no wait), and read selected rows mixed with top rows.
+        // The live-verified shape: 1st/2nd grant selections; everything else
+        // (Keystone/Starter/Spell unclickable by rule, Boots/3rd/4th+ capped
+        // read-only) collapses to conditioned top rows that are never
+        // clicked. The walk clicks the two, skips the rest outright
+        // (no click, no wait), and reads selected rows mixed with top rows.
         var state = Turn(SiteImportSequencer.Initial(), new InspectCommand(), JhinDiscoverResponse());
         var clicked = new List<string>();
 
-        foreach (var slot in new[] { "Keystone", "Starter", "1st Item", "2nd Item" })
+        foreach (var slot in new[] { "1st Item", "2nd Item" })
         {
             state = Turn(state, new ClickSlotCommand(slot), ClickedResponse(slot));
             clicked.Add(slot);
@@ -141,36 +165,61 @@ public sealed class SiteImportSequencerTests
         }
         Assert.Equal(new ReadFinalCommand(), SiteImportSequencer.CommandFor(state));
 
-        const string mixed = """{"source":"coachless","championSlug":"jhin","role":"adc","runes":null,"itemBlocks":[{"title":"Starter","itemIds":[1120],"selected":true},{"title":"1st Item","itemIds":[6697],"selected":true},{"title":"2nd Item","itemIds":[3046],"selected":true},{"title":"3rd Item","itemIds":[3031],"selected":false},{"title":"4th+ Item","itemIds":[3033],"selected":false},{"title":"Boots","itemIds":[3006],"selected":false}]}""";
+        const string mixed = """{"source":"coachless","championSlug":"jhin","role":"adc","runes":null,"itemBlocks":[{"title":"Starter","itemIds":[1120],"selected":false},{"title":"1st Item","itemIds":[6697],"selected":true},{"title":"2nd Item","itemIds":[3046],"selected":true},{"title":"3rd Item","itemIds":[3031],"selected":false},{"title":"4th+ Item","itemIds":[3033],"selected":false},{"title":"Boots","itemIds":[3006],"selected":false}]}""";
         state = Turn(state, new ReadFinalCommand(), DoneResponse(mixed));
 
         // No degradations on this walk, so the mixed payload passes through
         // byte-identical — selected flags and all.
         var done = Assert.IsType<SucceedCommand>(SiteImportSequencer.CommandFor(state));
         Assert.Equal(mixed, done.PayloadJson);
-        Assert.Equal(new[] { "Keystone", "Starter", "1st Item", "2nd Item" }, clicked);
+        Assert.Equal(new[] { "1st Item", "2nd Item" }, clicked);
     }
 
     [Fact]
-    public void Read_only_discovery_slots_are_never_clicked_or_waited_on()
+    public void Keystone_starter_and_spell_alone_go_straight_to_read()
     {
-        // A leading read-only slot is skipped at discovery; trailing ones
-        // fall off after the last click with no settle polls between.
+        // Selectable but never clickable: with no item slot at/after 1st
+        // Item the walk skips clicking entirely rather than failing.
         var state = Turn(
             SiteImportSequencer.Initial(),
             new InspectCommand(),
             StateResponse(
                 new[]
                 {
-                    Slot("Keystone", topSelectable: false),
+                    Slot("Keystone"),
                     Slot("Starter"),
-                    Slot("1st Item", topSelectable: false),
+                    Slot("Spell"),
                 },
                 "h0"));
 
-        state = Turn(state, new ClickSlotCommand("Starter"), ClickedResponse("Starter"));
-        state = Turn(state, new InspectCommand(), PollResponse("s", "Starter"));
-        state = Turn(state, new InspectCommand(), PollResponse("s", "Starter"));
+        Assert.Equal(new ReadFinalCommand(), SiteImportSequencer.CommandFor(state));
+    }
+
+    [Fact]
+    public void Read_only_discovery_slots_are_never_clicked_or_waited_on()
+    {
+        // A read-only 1st Item is skipped at discovery (the walk opens on
+        // 2nd); a read-only 3rd falls off after the last click with no
+        // settle polls between. Keystone/Starter/Spell are skipped by rule,
+        // not by selectability.
+        var state = Turn(
+            SiteImportSequencer.Initial(),
+            new InspectCommand(),
+            StateResponse(
+                new[]
+                {
+                    Slot("Keystone"),
+                    Slot("Starter"),
+                    Slot("1st Item", topSelectable: false),
+                    Slot("2nd Item"),
+                    Slot("Spell"),
+                    Slot("3rd Item", topSelectable: false),
+                },
+                "h0"));
+
+        state = Turn(state, new ClickSlotCommand("2nd Item"), ClickedResponse("2nd Item"));
+        state = Turn(state, new InspectCommand(), PollResponse("s", "2nd Item"));
+        state = Turn(state, new InspectCommand(), PollResponse("s", "2nd Item"));
         Assert.Equal(new ReadFinalCommand(), SiteImportSequencer.CommandFor(state));
     }
 
@@ -193,12 +242,12 @@ public sealed class SiteImportSequencerTests
         // no settle polls and no note.
         var state = Turn(SiteImportSequencer.Initial(), new InspectCommand(), DiscoverResponse());
         var parsed = CoachlessStepResponse.Parse(
-            """{"stage":"read-only","clickedSlot":"Keystone","settled":true}""");
+            """{"stage":"read-only","clickedSlot":"1st Item","settled":true}""");
         Assert.Equal("read-only", parsed.Stage);
 
-        state = Turn(state, new ClickSlotCommand("Keystone"), ReadOnlyResponse("Keystone"));
+        state = Turn(state, new ClickSlotCommand("1st Item"), ReadOnlyResponse("1st Item"));
         Assert.Equal(
-            new ClickSlotCommand("Starter"),
+            new ClickSlotCommand("2nd Item"),
             SiteImportSequencer.CommandFor(state));
     }
 
@@ -206,7 +255,7 @@ public sealed class SiteImportSequencerTests
     public void Settle_poll_resets_on_a_changed_fingerprint()
     {
         var state = Turn(SiteImportSequencer.Initial(), new InspectCommand(), DiscoverResponse());
-        state = Turn(state, new ClickSlotCommand("Keystone"), ClickedResponse("Keystone"));
+        state = Turn(state, new ClickSlotCommand("1st Item"), ClickedResponse("1st Item"));
 
         // One poll each of two hashes, neither showing a selection: still
         // unsettled, still polling.
@@ -215,9 +264,9 @@ public sealed class SiteImportSequencerTests
         Assert.IsType<InspectCommand>(SiteImportSequencer.CommandFor(state));
 
         // A second agreeing poll WITH the selection advances to the next slot.
-        state = Turn(state, new InspectCommand(), PollResponse("h2", "Keystone"));
+        state = Turn(state, new InspectCommand(), PollResponse("h2", "1st Item"));
         Assert.Equal(
-            new ClickSlotCommand("Starter"),
+            new ClickSlotCommand("2nd Item"),
             SiteImportSequencer.CommandFor(state));
     }
 
@@ -230,10 +279,10 @@ public sealed class SiteImportSequencerTests
         // straight to the next click with no inspect between.
         state = Turn(
             state,
-            new ClickSlotCommand("Keystone"),
-            AlreadySelectedResponse("Keystone"));
+            new ClickSlotCommand("1st Item"),
+            AlreadySelectedResponse("1st Item"));
         Assert.Equal(
-            new ClickSlotCommand("Starter"),
+            new ClickSlotCommand("2nd Item"),
             SiteImportSequencer.CommandFor(state));
     }
 
@@ -244,7 +293,7 @@ public sealed class SiteImportSequencerTests
         // the walk moves on (not fails) and notes the slot into the payload
         // meta; the final read falls back to that slot's top row.
         var state = Turn(SiteImportSequencer.Initial(), new InspectCommand(), JhinDiscoverResponse());
-        state = Turn(state, new ClickSlotCommand("Keystone"), ClickedResponse("Keystone"));
+        state = Turn(state, new ClickSlotCommand("1st Item"), ClickedResponse("1st Item"));
 
         for (var poll = 0; poll < SiteImportSequencer.SettlePollCap; poll++)
         {
@@ -253,12 +302,12 @@ public sealed class SiteImportSequencerTests
         }
 
         Assert.Equal(
-            new ClickSlotCommand("Starter"),
+            new ClickSlotCommand("2nd Item"),
             SiteImportSequencer.CommandFor(state));
         var done = FinishWalk(state);
         var notes = PayloadNotes(done.PayloadJson);
         var note = Assert.Single(notes);
-        Assert.Contains("Keystone", note, StringComparison.Ordinal);
+        Assert.Contains("1st Item", note, StringComparison.Ordinal);
         Assert.Contains("top row", note, StringComparison.Ordinal);
     }
 
@@ -269,7 +318,7 @@ public sealed class SiteImportSequencerTests
         // outcome as a settled-but-unselected slot — move on with a note —
         // but the note names the cause precisely.
         var state = Turn(SiteImportSequencer.Initial(), new InspectCommand(), JhinDiscoverResponse());
-        state = Turn(state, new ClickSlotCommand("Keystone"), ClickedResponse("Keystone"));
+        state = Turn(state, new ClickSlotCommand("1st Item"), ClickedResponse("1st Item"));
 
         var hash = "flip";
         for (var poll = 0; poll < SiteImportSequencer.SettlePollCap; poll++)
@@ -280,11 +329,11 @@ public sealed class SiteImportSequencerTests
         }
 
         Assert.Equal(
-            new ClickSlotCommand("Starter"),
+            new ClickSlotCommand("2nd Item"),
             SiteImportSequencer.CommandFor(state));
         var done = FinishWalk(state);
         var note = Assert.Single(PayloadNotes(done.PayloadJson));
-        Assert.Contains("Keystone", note, StringComparison.Ordinal);
+        Assert.Contains("1st Item", note, StringComparison.Ordinal);
         Assert.Contains("never settled", note, StringComparison.Ordinal);
     }
 
@@ -315,7 +364,7 @@ public sealed class SiteImportSequencerTests
         // rows at all has nothing to read — that stays a typed failure.
         var state = SiteImportSequencer.Initial();
         state = Turn(state, new InspectCommand(), DiscoverResponse());
-        foreach (var slot in WalkSlots)
+        foreach (var slot in ClickableSlots)
         {
             state = Turn(state, new ClickSlotCommand(slot), ClickedResponse(slot));
             state = Turn(state, new InspectCommand(), PollResponse("s1", slot));
@@ -333,10 +382,12 @@ public sealed class SiteImportSequencerTests
     [Fact]
     public void A_page_that_keeps_adding_slots_hits_the_total_step_cap()
     {
-        // 45 discovered slots at ~3 steps each (click + 2 polls) overshoots
-        // the absolute cap long before the walk converges. The cap is the
-        // remaining backstop now that settle exhaustion degrades.
-        var many = Enumerable.Range(0, 45).Select(index => $"Slot {index}").ToArray();
+        // 45 clickable item slots at ~3 steps each (click + 2 polls)
+        // overshoot the absolute cap long before the walk converges. The cap
+        // is the remaining backstop now that settle exhaustion degrades.
+        // Titles cycle the five walk slots: the sequencer keys clicks by
+        // title, so repeats are just more breadth to spend steps on.
+        var many = Enumerable.Range(0, 45).Select(index => ClickableSlots[index % ClickableSlots.Length]).ToArray();
         var state = SiteImportSequencer.Transition(
             SiteImportSequencer.Initial(),
             StateResponse(many.Select(title => Slot(title)), "h0"));
@@ -406,7 +457,7 @@ public sealed class SiteImportSequencerTests
     {
         var state = SiteImportSequencer.Initial();
         state = Turn(state, new InspectCommand(), DiscoverResponse());
-        foreach (var slot in WalkSlots)
+        foreach (var slot in ClickableSlots)
         {
             state = Turn(state, new ClickSlotCommand(slot), AlreadySelectedResponse(slot));
         }
