@@ -62,6 +62,7 @@ internal static class Program
                     options.ReadyFile,
                     options.CaptureDirectory,
                     options.ErrorTab,
+                    options.NavigateUrls,
                     app.Dispatcher);
                 if (options.DurationSeconds > 0)
                 {
@@ -217,6 +218,7 @@ internal static class Program
         string? readyFile,
         string? captureDirectory,
         CompanionTab? errorTab,
+        IReadOnlyDictionary<CompanionTab, Uri> navigateUrls,
         Dispatcher dispatcher)
     {
         try
@@ -238,6 +240,15 @@ internal static class Program
                 }).Task.Unwrap().ConfigureAwait(true);
                 await dispatcher.InvokeAsync(
                     () => WaitForTabNavigationAsync(window, tab)).Task.Unwrap().ConfigureAwait(true);
+                if (navigateUrls.TryGetValue(tab, out var qaUrl))
+                {
+                    // QA-only deep navigation (same isolated pattern as
+                    // NavigateToQaErrorAsync): lets a capture land on a
+                    // specific page, e.g. a champion build page, without
+                    // touching production navigation paths.
+                    await dispatcher.InvokeAsync(
+                        () => NavigateToUrlAsync(window, tab, qaUrl)).Task.Unwrap().ConfigureAwait(true);
+                }
                 WriteTabMarker(readyFile, tab, window);
                 if (captureDirectory is not null)
                 {
@@ -306,6 +317,31 @@ internal static class Program
             await completed.Task.WaitAsync(TimeSpan.FromSeconds(60)).ConfigureAwait(true);
             // Let the first paint settle before the native CapturePreview call.
             await Task.Delay(500).ConfigureAwait(true);
+        }
+        finally
+        {
+            core.NavigationCompleted -= OnNavigationCompleted;
+        }
+    }
+
+    private static async Task NavigateToUrlAsync(WebView2Window window, CompanionTab tab, Uri url)
+    {
+        var browser = window.ActiveBrowser
+            ?? throw new InvalidOperationException($"The {tab} tab has no active WebView2 control.");
+        var core = browser.CoreWebView2
+            ?? throw new InvalidOperationException($"The {tab} tab has no initialized CoreWebView2 controller.");
+        var completed = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args) =>
+            completed.TrySetResult(args.IsSuccess);
+
+        core.NavigationCompleted += OnNavigationCompleted;
+        try
+        {
+            core.Navigate(url.AbsoluteUri);
+            await completed.Task.WaitAsync(TimeSpan.FromSeconds(45)).ConfigureAwait(true);
+            await Task.Delay(250).ConfigureAwait(true);
         }
         finally
         {
@@ -593,7 +629,8 @@ internal sealed record PreviewOptions(
     int IntervalMilliseconds,
     int DurationSeconds,
     string? CaptureDirectory,
-    CompanionTab? ErrorTab)
+    CompanionTab? ErrorTab,
+    IReadOnlyDictionary<CompanionTab, Uri> NavigateUrls)
 {
     public static PreviewOptions Parse(string[] args)
     {
@@ -606,6 +643,7 @@ internal sealed record PreviewOptions(
         var duration = 0;
         string? captureDirectory = null;
         CompanionTab? errorTab = null;
+        var navigateUrls = new Dictionary<CompanionTab, Uri>();
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -658,6 +696,18 @@ internal sealed record PreviewOptions(
                 errorTab = CompanionTabs.ParseKey(value);
                 index++;
             }
+            else if (argument.Equals("--navigate", StringComparison.OrdinalIgnoreCase) && value is not null)
+            {
+                // --navigate ugg=https://u.gg/lol/champions/jhin/build/adc
+                var separator = value.IndexOf('=');
+                if (separator <= 0)
+                    throw new ArgumentException($"--navigate expects <tab>=<https-url>, got: {value}");
+                var target = new Uri(value[(separator + 1)..], UriKind.Absolute);
+                if (target.Scheme != Uri.UriSchemeHttps)
+                    throw new ArgumentException($"--navigate only accepts https urls, got: {target}");
+                navigateUrls[CompanionTabs.ParseKey(value[..separator])] = target;
+                index++;
+            }
         }
 
         return new PreviewOptions(
@@ -667,6 +717,7 @@ internal sealed record PreviewOptions(
             intervalMilliseconds,
             duration,
             captureDirectory,
-            errorTab);
+            errorTab,
+            navigateUrls);
     }
 }
