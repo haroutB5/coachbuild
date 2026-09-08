@@ -559,6 +559,30 @@ public static class SiteImportExtractors
             for (var i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
             return ('0000000' + hash.toString(16)).slice(-8);
           }
+          // What the WHOLE PAGE carried, whether or not any slot table was
+          // recognized. Discovery's only failure mode is "zero titled slot
+          // tables", and until 2.1.1 that reported the bare words "no build on
+          // page" -- field log 2026-09-08 22:37:54, a worker fetch, with no
+          // way to tell a consent/challenge shell (no tables at all) from a
+          // rendered page whose <th class="entry-name title"> shape moved
+          // (tables present, none titled) from a page still hydrating (tables
+          // and titles present, no rows). Same degrade-with-a-census shape the
+          // slot reads and the runes rows already use.
+          function pageCensus() {
+            var all = document.getElementsByTagName('table');
+            var titled = slotTables();
+            var rows = 0, selectable = 0;
+            for (var t = 0; t < titled.length; t++) {
+              var listed = dataRows(titled[t].table);
+              rows += listed.length;
+              if (listed.length > 0 && isSelectable(listed[0])) selectable++;
+            }
+            var titles = [];
+            for (var n = 0; n < titled.length && n < 8; n++) titles.push(titled[n].title);
+            return all.length + ' tables on the page, ' + titled.length +
+              ' with a slot title' + (titles.length ? ' [' + titles.join(', ') + ']' : '') +
+              ', ' + rows + ' data rows, ' + selectable + ' with a selectable top row';
+          }
           if (action === 'inspect') {
             var found = slotTables();
             var states = [];
@@ -572,7 +596,10 @@ public static class SiteImportExtractors
                 rows: listed.length
               });
             }
-            return JSON.stringify({ stage: 'state', settled: true, hash: fingerprint(found), slots: states });
+            return JSON.stringify({
+              stage: 'state', settled: true, hash: fingerprint(found),
+              slots: states, census: pageCensus()
+            });
           }
           if (action === 'click') {
             var want = STEP && STEP.slot;

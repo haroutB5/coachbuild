@@ -429,6 +429,48 @@ public sealed class SiteImportSequencerTests
         Assert.Equal("no build on page", fail.Reason);
     }
 
+    /// <summary>
+    /// 2.1.1: an empty discovery carries the page's CENSUS. Field log
+    /// 2026-09-08 22:37:54 reported the bare words "no build on page" for a
+    /// worker fetch, which cannot distinguish a consent/challenge shell (no
+    /// tables at all) from a rendered page whose title shape moved (tables
+    /// present, none titled) from one still hydrating (titles present, no
+    /// rows). The verdict does not change — nothing is written either way.
+    /// </summary>
+    [Fact]
+    public void An_empty_discovery_carries_the_page_census()
+    {
+        const string census = "0 tables on the page, 0 with a slot title, 0 data rows, 0 with a selectable top row";
+        var response = StateResponse([], "h0") with { Census = census };
+
+        var state = SiteImportSequencer.Transition(SiteImportSequencer.Initial(), response);
+
+        var fail = Assert.IsType<FailCommand>(SiteImportSequencer.CommandFor(state));
+        Assert.StartsWith("no build on page", fail.Reason, StringComparison.Ordinal);
+        Assert.Contains(census, fail.Reason, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The census reaches the response off the inspect step's own JSON, and a
+    /// step that reports none still fails with the bare reason rather than an
+    /// empty parenthesis.
+    /// </summary>
+    [Fact]
+    public void The_census_is_parsed_off_the_inspect_response()
+    {
+        var parsed = CoachlessStepResponse.Parse(
+            """{"stage":"state","settled":true,"hash":"h0","slots":[],"census":"7 tables on the page, 0 with a slot title, 0 data rows, 0 with a selectable top row"}""");
+        Assert.Equal(
+            "7 tables on the page, 0 with a slot title, 0 data rows, 0 with a selectable top row",
+            parsed.Census);
+
+        var censusless = CoachlessStepResponse.Parse(
+            """{"stage":"state","settled":true,"hash":"h0","slots":[]}""");
+        Assert.Null(censusless.Census);
+        var state = SiteImportSequencer.Transition(SiteImportSequencer.Initial(), censusless);
+        Assert.Equal("no build on page", Assert.IsType<FailCommand>(SiteImportSequencer.CommandFor(state)).Reason);
+    }
+
     [Fact]
     public void Clicking_the_wrong_slot_fails_loudly()
     {

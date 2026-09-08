@@ -958,19 +958,185 @@ public sealed class SiteAutoImportTests
         Assert.Contains("rune", state.Tooltip, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// 2.1.1: the button also shows on Coachless, on either page that can aim
+    /// a runes import — the builds overview and the runes page itself. It was
+    /// u.gg-only because Coachless had no rune source when the button was
+    /// built; the per-slot WPA runes page landed in 2.1.0 round 2.
+    /// </summary>
     [Theory]
-    // Hidden on Coachless (no rune page -- never a dead button) and on
-    // Companion (never scraped), whatever the URL.
-    [InlineData(CompanionTab.Coachless, "https://coachless.gg/builds/jhin?role=adc")]
-    [InlineData(CompanionTab.Coachless, "https://u.gg/lol/champions/jhin/build/adc")]
+    [InlineData("https://coachless.gg/builds/jhin?role=adc")]
+    [InlineData("https://coachless.gg/builds/jhin")]
+    [InlineData("https://coachless.gg/runes/tree/jhin/precision/domination?role=adc")]
+    [InlineData("https://www.coachless.gg/runes/tree/nasus/precision/resolve?role=top")]
+    public void Runes_button_enables_on_a_coachless_page_with_client(string url)
+    {
+        var state = WebView2Window.RunesButtonFor(CompanionTab.Coachless, url, true, false, true);
+        Assert.True(state.Visible);
+        Assert.True(state.Enabled);
+    }
+
+    /// <summary>
+    /// A visible button always has a target: visibility and the click's URL
+    /// come from the SAME call, so these two can never disagree.
+    /// </summary>
+    [Theory]
+    [InlineData("https://coachless.gg/builds/jhin?role=adc")]
+    [InlineData("https://coachless.gg/runes/tree/jhin/precision/domination?role=adc")]
+    [InlineData("https://coachless.gg/builds/creator")]
+    [InlineData("https://coachless.gg/")]
+    [InlineData("https://u.gg/lol/champions/jhin/build/adc")]
+    public void The_coachless_runes_button_is_visible_exactly_when_it_has_a_target(string url)
+    {
+        var hasTarget = SiteDeepLink.CoachlessRunesUrlForPage(url) is not null;
+        var state = WebView2Window.RunesButtonFor(CompanionTab.Coachless, url, true, false, true);
+        Assert.Equal(hasTarget, state.Visible);
+    }
+
+    [Theory]
+    // Companion is never scraped, whatever the URL; and neither site's button
+    // shows on a page of the OTHER site or on a non-champion page.
     [InlineData(CompanionTab.Companion, "https://u.gg/lol/champions/jhin/build/adc")]
+    [InlineData(CompanionTab.Companion, "https://coachless.gg/builds/jhin?role=adc")]
+    [InlineData(CompanionTab.Coachless, "https://u.gg/lol/champions/jhin/build/adc")]
+    [InlineData(CompanionTab.Coachless, "https://coachless.gg/")]
+    [InlineData(CompanionTab.Coachless, "https://coachless.gg/builds/creator")]
+    [InlineData(CompanionTab.Coachless, null)]
+    [InlineData(CompanionTab.UGg, "https://coachless.gg/builds/jhin?role=adc")]
     [InlineData(CompanionTab.UGg, "https://u.gg/")]
     [InlineData(CompanionTab.UGg, null)]
-    public void Runes_button_hides_off_the_u_gg_build_shape(CompanionTab tab, string? url)
+    public void Runes_button_hides_off_an_importable_page(CompanionTab tab, string? url)
     {
         var state = WebView2Window.RunesButtonFor(tab, url, true, false, true);
         Assert.False(state.Visible);
         Assert.False(state.Enabled);
+    }
+
+    // -- The Coachless runes deep link the button imports from ------------------
+
+    /// <summary>
+    /// The target is REBUILT from slug+role, never carried from the page: the
+    /// import's allowlist compares against exactly what
+    /// <see cref="SiteDeepLink.CoachlessRunesUrl"/> produces, and the tree pair
+    /// in a rendered runes URL is the site's own snap of a probe pair.
+    /// </summary>
+    [Theory]
+    [InlineData("https://coachless.gg/builds/jhin?role=adc", "jhin", 3)]
+    [InlineData("https://coachless.gg/builds/nasus?role=top", "nasus", 0)]
+    [InlineData("https://coachless.gg/runes/tree/nasus/precision/resolve?role=top", "nasus", 0)]
+    [InlineData("https://coachless.gg/runes/tree/leesin/precision/resolve?role=jungle", "leesin", 1)]
+    public void The_coachless_runes_target_is_rebuilt_from_the_page(
+        string pageUrl, string slug, int roleId)
+    {
+        var built = SiteDeepLink.CoachlessRunesUrlForPage(pageUrl);
+        Assert.NotNull(built);
+        Assert.Equal(SiteDeepLink.CoachlessRunesUrl(slug, roleId), built);
+        // The rebuilt link is what the import allowlist accepts. A URL carried
+        // straight off the page would be refused.
+        Assert.True(AutoImportCoordinator.IsAllowedRunesTarget(built, slug, roleId));
+        Assert.Contains(SiteDeepLink.RunesProbeSecondary, built!.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A page with no role yields a ROLELESS link rather than a guessed role —
+    /// the site then answers with the champion's main role, and the import
+    /// reports without one.
+    /// </summary>
+    [Fact]
+    public void A_roleless_coachless_page_builds_a_roleless_target()
+    {
+        var built = SiteDeepLink.CoachlessRunesUrlForPage("https://coachless.gg/builds/jhin");
+        Assert.NotNull(built);
+        Assert.DoesNotContain("role=", built!.ToString(), StringComparison.Ordinal);
+        Assert.Equal(SiteDeepLink.CoachlessRunesUrl("jhin", null), built);
+    }
+
+    [Theory]
+    [InlineData("top", 0)]
+    [InlineData("jungle", 1)]
+    [InlineData("mid", 2)]
+    [InlineData("adc", 3)]
+    [InlineData("support", 4)]
+    public void Role_tokens_round_trip(string token, int roleId)
+    {
+        Assert.Equal(roleId, SiteDeepLink.RoleIdFromToken(token));
+        Assert.Equal(token, SiteDeepLink.RoleToken(roleId));
+    }
+
+    [Theory]
+    [InlineData("bottom")]
+    [InlineData("utility")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void An_unknown_role_token_is_dropped_not_guessed(string? token)
+    {
+        Assert.Null(SiteDeepLink.RoleIdFromToken(token));
+    }
+
+    // -- The u.gg SPA fallback (2.1.1) ------------------------------------------
+
+    private static SiteImportPayload UggPayload(string stage, int blocks) =>
+        new(SiteImportSource.UGg, "jhin", "adc", null!,
+            blocks == 0
+                ? []
+                : [new SiteImportItemBlock("Core Items", [3006])])
+        { Stage = stage };
+
+    private static AutoImportSiteTarget UggTarget(bool inPlace) =>
+        new(CompanionTab.UGg, new Uri("https://u.gg/lol/champions/jhin/build/adc"),
+            inPlace, "jhin", 3);
+
+    /// <summary>
+    /// The live 2026-09-08 22:37:36 shape: an in-place read of the visible tab
+    /// that found no embedded build blob. That is the SPA signature, and a
+    /// direct load recovers it.
+    /// </summary>
+    [Fact]
+    public void An_in_place_read_that_found_no_build_blob_retries_via_the_worker()
+    {
+        Assert.True(AutoImportCoordinator.ShouldRetryViaWorker(
+            UggTarget(inPlace: true), UggPayload(SiteImportPayload.StageUrlRecognized, blocks: 0)));
+    }
+
+    /// <summary>
+    /// The retry is a WORKER target, so a worker read that also yields nothing
+    /// is the final answer — one retry per target, by construction, with no
+    /// counter to get wrong.
+    /// </summary>
+    [Fact]
+    public void The_retry_target_is_a_direct_load_and_never_retries_again()
+    {
+        var retry = AutoImportCoordinator.AsWorkerTarget(UggTarget(inPlace: true));
+        Assert.False(retry.ExtractInPlace);
+        Assert.Equal(UggTarget(inPlace: true).Url, retry.Url);
+        Assert.Equal("jhin", retry.ChampionKey);
+        Assert.Equal(3, retry.RoleId);
+        Assert.False(AutoImportCoordinator.ShouldRetryViaWorker(
+            retry, UggPayload(SiteImportPayload.StageUrlRecognized, blocks: 0)));
+    }
+
+    /// <summary>
+    /// The signal is the STAGE, not the emptiness. A page that DID find a blob
+    /// and still has no build for this rank/role is u.gg answering honestly —
+    /// retrying that would re-load the page every tick, forever.
+    /// </summary>
+    [Theory]
+    [InlineData("json-found")]
+    [InlineData("keys-found")]
+    [InlineData("blocks-built")]
+    [InlineData("")]
+    public void An_empty_yield_at_a_later_stage_is_the_final_answer(string stage)
+    {
+        Assert.False(AutoImportCoordinator.ShouldRetryViaWorker(
+            UggTarget(inPlace: true), UggPayload(stage, blocks: 0)));
+    }
+
+    /// <summary>A read that produced a build is never re-fetched.</summary>
+    [Fact]
+    public void A_successful_in_place_read_is_never_retried()
+    {
+        Assert.False(AutoImportCoordinator.ShouldRetryViaWorker(
+            UggTarget(inPlace: true), UggPayload(SiteImportPayload.StageUrlRecognized, blocks: 1)));
     }
 
     [Theory]

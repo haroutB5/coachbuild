@@ -153,7 +153,8 @@
             <RowDefinition Height="35" />
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0"
+        <Border x:Name="ChromeRow"
+                Grid.Row="0"
                 Background="{StaticResource ChromeBrush}"
                 BorderBrush="{StaticResource LineBrush}"
                 BorderThickness="0,0,0,1">
@@ -382,7 +383,8 @@
             </Grid>
         </Grid>
 
-        <Border Grid.Row="3"
+        <Border x:Name="StatusRow"
+                Grid.Row="3"
                 Background="#07111D"
                 BorderBrush="#1C354C"
                 BorderThickness="0,1,0,0">

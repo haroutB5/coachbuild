@@ -320,9 +320,28 @@ public sealed class SiteTabLifecycleTests
     {
         var ugg = SiteImportExtractors.UGgScript;
 
-        foreach (var alias in ShardIconMap.CoachlessAliases.Keys)
-            Assert.DoesNotContain($"\"{alias}\":", ugg, StringComparison.Ordinal);
+        // An alias the shared table never had must be absent entirely. An
+        // alias that SHADOWS a shared key (2.1.1: "healthscaling", where
+        // Riot's icon FILENAME and Coachless's word for it denote different
+        // shards) must still carry the SHARED id here, never Coachless's --
+        // this is the assertion that would have caught the alias table leaking
+        // Coachless's meaning into u.gg's reads.
+        foreach (var (alias, coachlessId) in ShardIconMap.CoachlessAliases)
+        {
+            if (ShardIconMap.ByName.TryGetValue(alias, out var sharedId))
+            {
+                Assert.Contains($"\"{alias}\":{sharedId}", ugg, StringComparison.Ordinal);
+                Assert.DoesNotContain($"\"{alias}\":{coachlessId}", ugg, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.DoesNotContain($"\"{alias}\":", ugg, StringComparison.Ordinal);
+            }
+        }
         // Control: it does carry the shared table.
         Assert.Contains("\"adaptiveforce\":5008", ugg, StringComparison.Ordinal);
+        // Control that the shadow branch above is exercised at all, rather
+        // than the loop quietly taking only the absent-key path.
+        Assert.Contains("\"healthscaling\":5011", ugg, StringComparison.Ordinal);
     }
 }

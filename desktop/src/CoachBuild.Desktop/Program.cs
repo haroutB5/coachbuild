@@ -25,10 +25,26 @@ public static class Program
             return service.RepairAsync().GetAwaiter().GetResult() ? 0 : 1;
         }
 
+        // BEFORE the first Window exists, and before App is constructed: WPF
+        // pins the process render mode when it brings up its media context, so
+        // this is only honoured if it is set first — the same "set it early or
+        // not at all" rule the DPI awareness above is subject to. See
+        // ChromeRenderPolicy for the blank-white-chrome fault this answers.
+        ApplyChromeRenderMode(options);
+
         var app = new App();
         app.ConfigureOptions(options);
         app.InitializeComponent();
         return app.Run();
+    }
+
+    private static void ApplyChromeRenderMode(CommandLineOptions options)
+    {
+        var mode = ChromeRenderPolicy.Decide(options.GpuRender);
+        System.Windows.Media.RenderOptions.ProcessRenderMode =
+            mode == ChromeRenderMode.SoftwareOnly
+                ? System.Windows.Interop.RenderMode.SoftwareOnly
+                : System.Windows.Interop.RenderMode.Default;
     }
 
     /// <summary>

@@ -119,6 +119,68 @@ public sealed class SiteImportTests
         Assert.Equal(expected, failure);
     }
 
+    // ── meta.stage (the SPA-fallback signal, 2.1.1) ──────────────────────────
+
+    /// <summary>
+    /// <c>meta.stage</c> reaches the payload. It is the one signal that
+    /// separates "u.gg has no build for this" from "this document never
+    /// embedded one" — the SPA case a hidden-worker direct load recovers.
+    /// </summary>
+    [Fact]
+    public void The_extractor_stage_reaches_the_payload()
+    {
+        const string raw = """
+            {"source":"u.gg","championSlug":"jhin","role":"adc","runes":null,
+             "itemBlocks":[{"title":"Core Items","itemIds":[3006]}],
+             "meta":{"stage":"url-recognized","notes":["u.gg items: no script on the page embeds a build blob"]}}
+            """;
+
+        Assert.True(SiteImportPayload.TryParse(raw, out var payload, out _));
+        Assert.Equal(SiteImportPayload.StageUrlRecognized, payload!.Stage);
+        Assert.Equal("url-recognized", SiteImportPayload.StageUrlRecognized);
+        Assert.Single(payload.Notes);
+    }
+
+    /// <summary>
+    /// A payload with no stage reports an EMPTY one, never null and never a
+    /// guess — the Coachless walk emits no stage and must not be mistaken for
+    /// a u.gg page that failed to embed a blob.
+    /// </summary>
+    [Fact]
+    public void A_payload_without_a_stage_reports_an_empty_one()
+    {
+        const string raw = """
+            {"source":"coachless","championSlug":"jhin","role":"adc","runes":null,
+             "itemBlocks":[{"title":"Boots","itemIds":[3006]}]}
+            """;
+
+        Assert.True(SiteImportPayload.TryParse(raw, out var payload, out _));
+        Assert.Equal(string.Empty, payload!.Stage);
+    }
+
+    /// <summary>
+    /// The stage is COMPARED AGAINST, not merely logged, so a page-derived
+    /// string may not masquerade as one. Anything outside a short lowercase
+    /// token is dropped to empty rather than carried.
+    /// </summary>
+    [Theory]
+    [InlineData("\"Blocks-Built\"")]
+    [InlineData("\"blocks built\"")]
+    [InlineData("\"blocks_built\"")]
+    [InlineData("\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"")]
+    [InlineData("42")]
+    [InlineData("null")]
+    public void A_stage_that_is_not_a_plain_token_is_dropped(string stageJson)
+    {
+        var raw =
+            "{\"source\":\"u.gg\",\"championSlug\":\"jhin\",\"role\":\"adc\",\"runes\":null," +
+            "\"itemBlocks\":[{\"title\":\"Boots\",\"itemIds\":[3006]}]," +
+            "\"meta\":{\"stage\":" + stageJson + "}}";
+
+        Assert.True(SiteImportPayload.TryParse(raw, out var payload, out _));
+        Assert.Equal(string.Empty, payload!.Stage);
+    }
+
     // ── Rune page validation (the ported 0.127.0 gate) ───────────────────────
 
     private static SiteImportRunes ElectrocuteSorcery() => new(
@@ -391,19 +453,74 @@ public sealed class SiteImportTests
         Assert.Equal(0, PerkTreeNames.Resolve(name));
     }
 
-    // Coachless serves its own short stat icons, so the shared ddragon table
-    // alone cannot read its shard rows. Each alias must land on an id the
-    // shard-row check already accepts for the row it appears in.
-    [Theory]
-    [InlineData("as", 5005, 0)]
-    [InlineData("ah", 5007, 0)]
-    [InlineData("ms", 5010, 1)]
-    [InlineData("health", 5001, 1)]
-    public void Coachless_shard_aliases_land_on_ids_valid_for_their_row(
-        string alias, int shardId, int row)
+    /// <summary>
+    /// Coachless serves its own short stat icons, so the shared ddragon table
+    /// alone cannot read its shard rows. The oracle is the WHOLE ROW: resolving
+    /// the nine cards the page actually renders, in the page's own DOM order,
+    /// must reproduce <see cref="PerkTreeCatalog.ShardRows"/> exactly.
+    ///
+    /// <para>THIS REPLACES A CHECK THAT COULD NOT FAIL (2.1.1). The previous
+    /// test asserted only that each alias landed on an id valid in SOME row,
+    /// which is why it stayed green over a real defect: <c>health</c> resolved
+    /// to 5001, and 5001 is legal in row 1 AND row 2, so a flat-health card
+    /// mapped to the scaling shard passed. Live consequence on 2026-09-08:
+    /// Jhin refused with "a scraped shard does not belong to its shard row"
+    /// (the Flex row's winner, <c>healthscaling</c>, resolved to 5011, which is
+    /// not a Flex shard), and — worse — a Defense row won by <c>health</c>
+    /// passed the row check on the WRONG id and silently wrote Health Scaling
+    /// where the page said Health. Membership in a row is not identity;
+    /// pinning the row as a sequence is.</para>
+    ///
+    /// <para>The card list is read off the six 2026-09-08 sweep runes captures
+    /// (jhin/ahri/leona/leesin/garen/ornn), which carry an IDENTICAL shard grid
+    /// — so the row layout is champion-independent and the fault was never
+    /// about "some tree layouts".</para>
+    /// </summary>
+    [Fact]
+    public void Coachless_shard_rows_resolve_to_exactly_the_client_shard_rows()
     {
-        Assert.Equal(shardId, ShardIconMap.CoachlessAliases[alias]);
-        Assert.Contains(shardId, PerkTreeCatalog.ShardRows[row]);
+        string[][] pageRows =
+        [
+            ["adaptiveforce", "as", "ah"],
+            ["adaptiveforce", "ms", "healthscaling"],
+            ["health", "tenacity", "healthscaling"],
+        ];
+        // The exact table the Coachless runes script is handed: shared entries
+        // first, aliases last, aliases winning — see ToCoachlessJson.
+        var merged = new Dictionary<string, int>(ShardIconMap.ByName, StringComparer.Ordinal);
+        foreach (var (name, id) in ShardIconMap.CoachlessAliases) merged[name] = id;
+
+        for (var row = 0; row < pageRows.Length; row++)
+        {
+            var resolved = pageRows[row].Select(card =>
+            {
+                Assert.True(merged.TryGetValue(card, out var id), $"row {row} card '{card}' resolved to nothing");
+                return id;
+            }).ToArray();
+            Assert.Equal(PerkTreeCatalog.ShardRows[row], resolved);
+        }
+    }
+
+    /// <summary>
+    /// The mutant that proves the row oracle above bites: the pre-2.1.1
+    /// mapping (<c>health</c>→5001, <c>healthscaling</c>→5011) must NOT
+    /// reproduce the client's rows. Without this, a future edit that reverts
+    /// the alias table would only be caught by a live champ select.
+    /// </summary>
+    [Fact]
+    public void The_pre_2_1_1_health_mapping_does_not_reproduce_the_client_rows()
+    {
+        var broken = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["adaptiveforce"] = 5008, ["as"] = 5005, ["ah"] = 5007,
+            ["ms"] = 5010, ["tenacity"] = 5013,
+            ["health"] = 5001, ["healthscaling"] = 5011,
+        };
+        // The Flex row is where it shows: the page's third Flex card is
+        // healthscaling, and 5011 is not a Flex shard.
+        int[] flex = [broken["adaptiveforce"], broken["ms"], broken["healthscaling"]];
+        Assert.NotEqual(PerkTreeCatalog.ShardRows[1], flex);
+        Assert.DoesNotContain(broken["healthscaling"], PerkTreeCatalog.ShardRows[1]);
     }
 
     [Fact]
@@ -412,17 +529,37 @@ public sealed class SiteImportTests
         var merged = ShardIconMap.ToCoachlessJson();
         var shared = ShardIconMap.ToJson();
 
-        // Every shared entry survives...
+        // Every shared entry survives, EXCEPT the ones an alias deliberately
+        // shadows. Since 2.1.1 "healthscaling" is such a key: Riot's filename
+        // and Coachless's word for it denote different shards, so the merged
+        // table must carry Coachless's meaning while u.gg's keeps Riot's.
         foreach (var (name, id) in ShardIconMap.ByName)
+        {
+            if (ShardIconMap.CoachlessAliases.ContainsKey(name)) continue;
             Assert.Contains($"\"{name}\":{id}", merged, StringComparison.Ordinal);
-        // ...every alias is added...
+        }
+        // Every alias wins in the merged table...
+        foreach (var (name, id) in ShardIconMap.CoachlessAliases)
+            Assert.Contains($"\"{name}\":{id}", merged, StringComparison.Ordinal);
+
+        // ...and NOTHING an alias did leaked into u.gg's table, which must stay
+        // byte-identical to what it was before Coachless needed aliases. A key
+        // the shared table never had must still be absent; a key it did have
+        // must still hold the SHARED value, not the alias's.
         foreach (var (name, id) in ShardIconMap.CoachlessAliases)
         {
-            Assert.Contains($"\"{name}\":{id}", merged, StringComparison.Ordinal);
-            // ...and none of them leaked into u.gg's table, which must stay
-            // byte-identical to what it was before Coachless needed aliases.
-            Assert.DoesNotContain($"\"{name}\":", shared, StringComparison.Ordinal);
+            if (ShardIconMap.ByName.TryGetValue(name, out var sharedId))
+                Assert.Contains($"\"{name}\":{sharedId}", shared, StringComparison.Ordinal);
+            else
+                Assert.DoesNotContain($"\"{name}\":", shared, StringComparison.Ordinal);
+            _ = id;
         }
+        // The control that keeps the loop above from being vacuous: at least
+        // one alias must actually be a shadow, and at least one must be new.
+        Assert.Contains(ShardIconMap.CoachlessAliases, pair => ShardIconMap.ByName.ContainsKey(pair.Key));
+        Assert.Contains(ShardIconMap.CoachlessAliases, pair => !ShardIconMap.ByName.ContainsKey(pair.Key));
+        Assert.Equal(5011, ShardIconMap.ByName["healthscaling"]);
+        Assert.Equal(5001, ShardIconMap.CoachlessAliases["healthscaling"]);
     }
 
     /// <summary>
@@ -732,10 +869,18 @@ public sealed class SiteImportTests
     [InlineData("StatModsMovementSpeedIcon.webp", 5010)]
     [InlineData("StatModsTenacityIcon.webp", 5013)]
     [InlineData("StatModsHealthPlusIcon.webp", 5001)]
-    // The treacherous one: the SCALING-named icon is the FLAT-health shard.
-    // Pinned because every reader's first instinct is to "fix" it — the
-    // 2026-09-08 u.gg fixture proves it (embedded active_shards [5008,5008,
-    // 5011] against a Defense row showing this icon active).
+    // The treacherous pair: Riot's icon FILENAMES are crossed against the
+    // shards' DISPLAY NAMES, so the SCALING-named file is the FLAT-health
+    // shard. Pinned because every reader's first instinct is to "fix" it.
+    // Ground truth is Riot's own patch data, embedded verbatim in the
+    // 2026-09-08 u.gg fixture as stat-shards-v2.json (patch 14.2):
+    //   {"id":5011,"img":"StatModsHealthScalingIcon.png","name":"Health",
+    //    "tooltip_desc":"+65 Health"}
+    //   {"id":5001,"img":"StatModsHealthPlusIcon.png","name":"Health Scaling",
+    //    "tooltip_desc":"+10-180 Health (based on level)"}
+    // This table is keyed by FILENAME, so it is correct as written and must
+    // NOT be aligned to the display names. Coachless keys by MEANING instead,
+    // which is why ShardIconMap.CoachlessAliases overrides both.
     [InlineData("StatModsHealthScalingIcon.webp", 5011)]
     [InlineData("https://static.bigbrain.gg/assets/lol/riot_static/14.2.1/img/perk-images/StatMods/StatModsAdaptiveForceIcon.webp", 5008)]
     public void Shard_icon_filenames_resolve_to_their_shard_id(string alias, int expected)

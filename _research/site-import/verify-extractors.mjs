@@ -695,5 +695,126 @@ const strangeWall = runExtractor(consentJs,
 check('an unrecognized wall is left alone',
   strangeWall.dismissed === false && strangeWall.reason === 'none', JSON.stringify(strangeWall));
 
+// ---- the multi-champion sweep (2.1.1) --------------------------------------
+// Six champions x three page kinds, captured 2026-09-08 into sweep/. The
+// single-champion fixtures above are the ones the extractors were WRITTEN
+// against, so on their own they only prove the code reproduces its own
+// authoring examples. This block is the held-out set: the same extractors, the
+// same injected tables, against pages nobody tuned them on.
+//
+// It is what caught the shard-row defect. Under the pre-2.1.1 alias table,
+// jhin and garen were REFUSED by the shard-row check (their Flex row's top-WPA
+// card is `healthscaling`, which resolved to 5011, not a Flex shard) while
+// ahri, leesin and leona passed the check on the WRONG id and would have
+// written Health Scaling where the page said Health. Only ornn was unaffected.
+// A single-fixture gate could not see any of it.
+import { readdirSync } from 'node:fs';
+
+// PerkTreeCatalog.ShardRows, read from the C# so the two cannot drift.
+function coreShardRows() {
+  const file = readFileSync(join(dir, '..', '..', 'desktop', 'src', 'CoachBuild.Core', 'SiteImport.cs'), 'utf8');
+  const at = file.indexOf('ShardRows =');
+  const body = file.slice(at, file.indexOf('];', at));
+  return [...body.matchAll(/\[\s*(\d+),\s*(\d+),\s*(\d+)\s*\]/g)].map(m => [+m[1], +m[2], +m[3]]);
+}
+const SHARD_ROWS = coreShardRows();
+check('shard rows read out of the C# catalog', SHARD_ROWS.length === 3, JSON.stringify(SHARD_ROWS));
+
+const sweepDir = join(dir, 'sweep');
+const sweep = readdirSync(sweepDir);
+const ROLES = { jhin: 'adc', ahri: 'middle', leona: 'support', leesin: 'jungle', garen: 'top', ornn: 'top' };
+// The role token the SITES use in a URL, which is not always the token the
+// capture filename uses (`middle` in the sweep name, `mid` on the sites).
+const URL_ROLE = { middle: 'mid', adc: 'adc', support: 'support', jungle: 'jungle', top: 'top' };
+const champs = Object.keys(ROLES);
+check('sweep holds all six champions x three page kinds',
+  sweep.length === 18 && champs.every(c =>
+    sweep.includes(`ugg-${c}-${ROLES[c]}.html`) &&
+    sweep.includes(`coachless-${c}-${ROLES[c]}.html`) &&
+    sweep.includes(`coachless-runes-${c}-${ROLES[c]}.html`)),
+  sweep.length + ' files');
+
+// -- Coachless runes on every sweep page --
+// A valid page or a TYPED failure, never a silent empty. Every one of the six
+// must be valid: these are ordinary champion runes pages.
+for (const champ of champs) {
+  const role = URL_ROLE[ROLES[champ]];
+  const html = readFileSync(join(sweepDir, `coachless-runes-${champ}-${ROLES[champ]}.html`), 'utf8');
+  const url = `https://coachless.gg/runes/tree/${champ}/precision/domination?role=${role}`;
+  const out = runExtractor(runesJs, html, url);
+  if (out.error) { check(`sweep runes ${champ} yields a page`, false, out.error); continue; }
+  const r = out.runes;
+  const shapeOk = out.source === 'coachless' && out.championSlug === champ &&
+    r && r.primaryStyleId > 0 && r.subStyleId > 0 && r.primaryStyleId !== r.subStyleId &&
+    Array.isArray(r.perkIds) && r.perkIds.length === 6 && r.perkIds.every(id => id > 0) &&
+    Array.isArray(r.shardIds) && r.shardIds.length === 3;
+  check(`sweep runes ${champ} is a complete page`, shapeOk, JSON.stringify(out).slice(0, 300));
+  if (!shapeOk) continue;
+  // THE ROW CHECK, the same one PerkTreeCatalog.ValidatePage applies before a
+  // write. This is the assertion the pre-2.1.1 shard aliases failed.
+  const bad = r.shardIds
+    .map((id, i) => (SHARD_ROWS[i].includes(id) ? null : `row ${i + 1} got ${id}, expects one of ${SHARD_ROWS[i]}`))
+    .filter(Boolean);
+  check(`sweep runes ${champ} shards belong to their rows`, bad.length === 0,
+    bad.join('; ') + ' :: ' + JSON.stringify(r.shardIds));
+}
+
+// -- The Coachless walk's final read on every sweep builds page --
+const clReadJs = buildCoachlessStep({ action: 'read' });
+for (const champ of champs) {
+  const role = URL_ROLE[ROLES[champ]];
+  const html = readFileSync(join(sweepDir, `coachless-${champ}-${ROLES[champ]}.html`), 'utf8');
+  const out = runExtractor(clReadJs, html, `https://coachless.gg/builds/${champ}?role=${role}`);
+  if (out.error) {
+    // A typed failure is acceptable, but it must CARRY ITS DETAIL -- the
+    // generic "no build on page" is the one phrase this branch must never
+    // collapse to, because it is the one that told us nothing in the field.
+    check(`sweep coachless ${champ} failure is diagnosable`,
+      out.error.length > 24 && !/^no build on page$/.test(out.error), out.error);
+    continue;
+  }
+  const blocks = (out.payload && out.payload.itemBlocks) || [];
+  check(`sweep coachless ${champ} yields item blocks`,
+    out.stage === 'done' && blocks.length > 0 && blocks.every(b => b.itemIds.length > 0),
+    JSON.stringify(blocks).slice(0, 240));
+}
+
+// -- u.gg on every sweep page --
+// HONEST SCOPE. Five of the six u.gg captures are Cloudflare "Just a moment..."
+// interstitials, not u.gg pages (28 KB each against jhin's 1.9 MB) -- the
+// capture run was challenged mid-sweep. Asserting an extraction on those would
+// be a check that cannot pass; quietly skipping them would be a check that
+// cannot fail. So each file must be EITHER a real page the extractor reads OR
+// a recognized challenge shell, and the counts of each are reported. Re-capture
+// those five and this gate strengthens on its own.
+let uggReal = 0, uggChallenged = 0;
+for (const champ of champs) {
+  const role = URL_ROLE[ROLES[champ]];
+  const html = readFileSync(join(sweepDir, `ugg-${champ}-${ROLES[champ]}.html`), 'utf8');
+  if (html.includes('<title>Just a moment...</title>') && html.includes('challenges.cloudflare.com')) {
+    uggChallenged++;
+    continue;
+  }
+  uggReal++;
+  const out = runExtractor(buildScript('UGgTemplate'), html,
+    `https://u.gg/lol/champions/${champ}/build/${role}`);
+  if (out.error) { check(`sweep ugg ${champ} yields a build`, false, out.error); continue; }
+  check(`sweep ugg ${champ} is the right champion`, out.championSlug === champ, out.championSlug);
+  // A real u.gg document embeds its build blob, so the read must reach
+  // blocks-built -- the stage whose ABSENCE is the SPA signature C# now
+  // recovers from with a direct load.
+  check(`sweep ugg ${champ} reaches blocks-built`,
+    out.meta && out.meta.stage === 'blocks-built' && out.itemBlocks.length > 0,
+    JSON.stringify(out.meta && out.meta.stage) + ' / ' + out.itemBlocks.length + ' blocks');
+  if (out.runes) {
+    const bad = out.runes.shardIds
+      .map((id, i) => (SHARD_ROWS[i].includes(id) ? null : `row ${i + 1} got ${id}`))
+      .filter(Boolean);
+    check(`sweep ugg ${champ} shards belong to their rows`, bad.length === 0, bad.join('; '));
+  }
+}
+console.log(`sweep u.gg: ${uggReal} real page(s) extracted, ${uggChallenged} Cloudflare challenge shell(s) skipped`);
+check('at least one real u.gg sweep page was exercised', uggReal >= 1, String(uggReal));
+
 if (failures) { console.log(failures + ' FAILURES'); process.exit(1); }
 console.log('all extractor checks passed');

@@ -39,6 +39,17 @@ public sealed record CoachlessStepResponse(
     string? PayloadJson,
     string? Error)
 {
+    /// <summary>
+    /// The <c>inspect</c> step's whole-page census, carried verbatim so the
+    /// discovery failure can name what the page DID hold.
+    ///
+    /// <para>Deliberately NOT positional: it is diagnostics, not identity, so
+    /// every existing construction site (and every test that builds a response
+    /// by hand) keeps its arity — the same reasoning
+    /// <see cref="SiteImportPayload.Notes"/> is held to.</para>
+    /// </summary>
+    public string? Census { get; init; }
+
     public static CoachlessStepResponse Parse(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -105,7 +116,10 @@ public sealed record CoachlessStepResponse(
             ReadString(root, "hash")?.Trim(),
             slots,
             payloadJson,
-            null);
+            null)
+        {
+            Census = ReadString(root, "census")?.Trim() is { Length: > 0 } census ? census : null,
+        };
     }
 
     private static CoachlessStepResponse Unrecognized() =>
@@ -308,7 +322,16 @@ public static class SiteImportSequencer
         var plans = response.Slots
             .Select(slot => new CoachlessSlotPlan(slot.Title, slot.TopSelectable))
             .ToList();
-        if (plans.Count == 0) return Fail(state, SiteImportFailures.NoBuild);
+        // Zero titled slot tables is the ONLY way discovery fails, and until
+        // 2.1.1 it said only "no build on page" -- field log 2026-09-08
+        // 22:37:54. The inspect step's census turns that bare absence into a
+        // diagnosable one (a shell with no tables at all reads very
+        // differently from a rendered page whose title shape moved), without
+        // changing the verdict: nothing is written either way.
+        if (plans.Count == 0)
+            return Fail(state, string.IsNullOrEmpty(response.Census)
+                ? SiteImportFailures.NoBuild
+                : $"{SiteImportFailures.NoBuild} ({response.Census})");
         // Position at the first clickable item slot: a slot whose top row
         // was not selectable at discovery is never clicked and never waited
         // on, and neither are Keystone, Starter or Spell under any

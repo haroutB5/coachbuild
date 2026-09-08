@@ -336,6 +336,54 @@ public static class AutoImportCoordinator
         _ => CompanionTab.UGg,
     };
 
+    /// <summary>
+    /// Whether an EXTRACT-IN-PLACE read that yielded no item build should be
+    /// retried as a hidden-worker DIRECT LOAD of the same URL, before the run
+    /// gives up on that site.
+    ///
+    /// <para>WHY (field log 2026-09-08 22:37:36, a real champ select, Jhin):
+    /// <c>u.gg items: no script on the page embeds a build blob</c> /
+    /// <c>stage url-recognized (rank "emerald_plus", role "adc" via
+    /// active-role-tab, embedded ranks [], 0 blocks)</c>. The read was correct
+    /// about the DOM in front of it: u.gg is a single-page app, and it embeds
+    /// the per-champion build blob only in the document it SERVES. Navigate
+    /// within the site (a client-side route change — the user clicking through
+    /// to a champion, which is exactly what the visible tab is for) and the
+    /// rendered build comes from a client fetch while the document's scripts
+    /// still belong to whatever page was loaded first. So the page shows a
+    /// build the extractor genuinely cannot see. Every fixture we hold was
+    /// captured by a direct load, which is why no fixture reproduces it and
+    /// why this decision is pinned by tests rather than by a capture.</para>
+    ///
+    /// <para>THE SIGNAL IS THE STAGE, NOT THE EMPTINESS. Retrying on "no
+    /// blocks" alone would re-load the page for a champion u.gg simply has no
+    /// build for, on every 750 ms tick, forever. <c>url-recognized</c> is the
+    /// extractor's own word for "I never found a build blob at all", which is
+    /// the SPA signature and not the no-data signature (a page with data for a
+    /// different rank/role reaches <c>json-found</c> or <c>keys-found</c> and
+    /// says so). A worker load is only worth spending on the first.</para>
+    ///
+    /// <para>Retried AT MOST ONCE per target, by construction: the retry is a
+    /// worker target (<c>ExtractInPlace: false</c>), and this returns false for
+    /// those — so a worker load that also yields nothing is the final answer.</para>
+    /// </summary>
+    public static bool ShouldRetryViaWorker(AutoImportSiteTarget target, SiteImportPayload payload)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(payload);
+        if (!target.ExtractInPlace) return false;
+        if (payload.ItemBlocks.Count > 0) return false;
+        return string.Equals(
+            payload.Stage, SiteImportPayload.StageUrlRecognized, StringComparison.Ordinal);
+    }
+
+    /// <summary>The same target as a hidden-worker direct load of its URL.</summary>
+    public static AutoImportSiteTarget AsWorkerTarget(AutoImportSiteTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return target with { ExtractInPlace = false };
+    }
+
     private static bool IsDoneUrl(AutoImportState state, CompanionTab site, string? url) =>
         !string.IsNullOrWhiteSpace(url) &&
         state.DoneUrls.TryGetValue(site, out var seen) &&
@@ -553,9 +601,32 @@ public sealed class SiteAutoImportService
 
         var outcomes = new List<AutoImportOutcome>();
         var fresh = new List<SiteImportPayload>();
-        foreach (var target in fetch)
+        foreach (var planned in fetch)
         {
+            var target = planned;
             var raw = await FetchTargetAsync(target, cancellationToken).ConfigureAwait(false);
+            // SPA FALLBACK (2.1.1). An in-place read of the user's own visible
+            // tab can be correct about the DOM and still see no build, because
+            // u.gg embeds its build blob only in a directly-served document.
+            // Re-load the SAME url in a hidden worker before giving up. See
+            // AutoImportCoordinator.ShouldRetryViaWorker for why the stage --
+            // not the emptiness -- is what licenses the second fetch.
+            if (SiteImportPayload.TryParse(raw, out var firstPass, out _) &&
+                firstPass is not null &&
+                AutoImportCoordinator.ShouldRetryViaWorker(target, firstPass))
+            {
+                var label = CompanionTabs.LabelFor(target.Site);
+                _sink.LogInfo(
+                    $"auto-import: {label} the visible tab embeds no build blob " +
+                    "(client-side navigation) -- retrying as a direct load");
+                target = AutoImportCoordinator.AsWorkerTarget(target);
+                var retried = await FetchTargetAsync(target, cancellationToken).ConfigureAwait(false);
+                // Keep the first read only if the retry produced nothing
+                // parseable at all: a worker answer, even an empty one, is the
+                // better-informed one, but a worker that fails outright must
+                // not erase what the visible tab did manage to say.
+                if (!string.IsNullOrWhiteSpace(retried)) raw = retried;
+            }
             if (!SiteImportPayload.TryParse(raw, out var payload, out var failure) || payload is null)
             {
                 var label = CompanionTabs.LabelFor(target.Site);

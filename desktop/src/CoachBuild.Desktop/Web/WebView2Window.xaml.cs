@@ -161,6 +161,33 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         UpdateChrome();
     }
 
+    /// <summary>
+    /// Re-render the chrome once the first frame has been presented.
+    ///
+    /// <para>Belt and braces behind <see cref="ChromeRenderPolicy"/>. When the
+    /// blank-chrome fault struck in 2.1.0, the regions that came out CORRECT
+    /// were exactly the ones something had invalidated after first paint (the
+    /// offer bar appearing, the status text changing, the tab buttons
+    /// restyling) — so a forced re-render is the operation observed to repair
+    /// the surface. Software rendering is the actual fix and makes this a
+    /// no-op; this exists for <c>--gpu-render</c>, where the hardware present
+    /// path is back and nothing else would repaint a window the user never
+    /// touches.</para>
+    ///
+    /// <para>Costs one extra render pass of two Borders and a collapsed row,
+    /// once, at window open.</para>
+    /// </summary>
+    protected override void OnContentRendered(EventArgs e)
+    {
+        base.OnContentRendered(e);
+        if (_disposed) return;
+        InvalidateVisual();
+        foreach (var element in new UIElement[] { ChromeRow, OfferBar, ContentHost, StatusRow })
+        {
+            element.InvalidateVisual();
+        }
+    }
+
     public HostedPagePolicy Policy => _policy;
 
     /// <summary>The tab currently shown in the content area.</summary>
@@ -1088,19 +1115,39 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     private async Task RunRunesImportAsync()
     {
         if (_disposed || _importRunning) return;
-        // Belt and braces behind the hidden button: runes import reads the
-        // visible u.gg page only. Anything else has no rune page to read.
-        if (ActiveTab != CompanionTab.UGg) return;
-        var state = GetState(CompanionTab.UGg);
+        var site = ActiveTab;
+        // Belt and braces behind the hidden button: only the two sites that
+        // have a rune page to read. Anything else has nothing to import.
+        if (site is not (CompanionTab.UGg or CompanionTab.Coachless)) return;
+        var state = GetState(site);
         // Without a host or a live site browser there is nothing to read.
         if (state?.Core is null || _siteImport is null) return;
+        // The SAME predicate the button's visibility uses, re-evaluated here
+        // because the tab may have navigated between the paint and the click.
+        var coachlessRunes = site == CompanionTab.Coachless
+            ? SiteDeepLink.CoachlessRunesUrlForPage(state.Core.Source)
+            : null;
+        if (site == CompanionTab.Coachless && coachlessRunes is null) return;
 
         _importRunning = true;
         UpdateOfferBar();
-        SetStatus($"Importing runes from {CompanionTabs.LabelFor(CompanionTab.UGg)}…");
+        SetStatus($"Importing runes from {CompanionTabs.LabelFor(site)}…");
         try
         {
-            var raw = await state.Core.ExecuteScriptAsync(SiteImportExtractors.UGgScript).ConfigureAwait(true);
+            // u.gg's rune panel is on the build page in front of the user, so
+            // it is read in place. Coachless keeps its per-slot WPA runes on a
+            // SEPARATE page, so this reuses the automatic import's own fetch --
+            // hidden worker, allowlisted target, settle probe and all -- rather
+            // than growing a second way to read that page. The visible tab is
+            // never navigated by this button on either site.
+            var raw = coachlessRunes is null
+                ? await state.Core.ExecuteScriptAsync(SiteImportExtractors.UGgScript).ConfigureAwait(true)
+                : await FetchCoachlessRunesAsync(
+                        coachlessRunes,
+                        SiteDeepLink.CoachlessSlugForPage(coachlessRunes),
+                        SiteDeepLink.RoleIdFromToken(SiteNavigationPolicy.RoleFromUri(coachlessRunes)),
+                        _shutdownToken)
+                    .ConfigureAwait(true);
             if (_disposed) return;
             var result = await _siteImport.ImportRunesAsync(raw, _shutdownToken).ConfigureAwait(true);
             if (_disposed) return;
@@ -2172,10 +2219,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     internal sealed record RunesButtonState(bool Visible, bool Enabled, string Tooltip);
 
     /// <summary>
-    /// Pure runes-button state. Visible only on a u.gg build page (hidden on
-    /// Coachless -- no rune page there -- and on Companion, which is never
-    /// scraped); enabled only while the client is connected. The tooltip
-    /// always says WHY the button will not run, not merely refuse.
+    /// Pure runes-button state. Visible on a u.gg build page and, since 2.1.1,
+    /// on a Coachless build or runes page (hidden on Companion, which is never
+    /// scraped); enabled only while the client is connected. The tooltip always
+    /// says WHY the button will not run, not merely refuse.
     /// </summary>
     internal static RunesButtonState RunesButtonFor(
         CompanionTab activeTab,
@@ -2185,7 +2232,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         bool lcuConnected)
     {
         if (!ShouldShowRunesImport(activeTab, currentUrl))
-            return new(false, false, "Open a u.gg champion build page to import its runes.");
+            return new(false, false, "Open a u.gg or Coachless champion page to import its runes.");
         if (!hasHost)
             return new(true, false, "Import is unavailable in this window.");
         if (importRunning)
@@ -2196,16 +2243,28 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     }
 
     /// <summary>
-    /// The runes button's visibility: the u.gg tab on a build-page URL. Pure,
-    /// so the button state and the extractor share one definition of "a
-    /// build page" through
-    /// <see cref="SiteImportExtractors.CanImportFromUrl"/>. Hidden on
-    /// Coachless (that site renders no rune page -- a button there would be
-    /// a dead click) and on Companion (never scraped).
+    /// The runes button's visibility: the u.gg tab on a build-page URL, or the
+    /// Coachless tab on a page a runes import can be aimed from. Pure, so the
+    /// button state and the import share ONE definition of "a page with runes
+    /// on it" — u.gg through
+    /// <see cref="SiteImportExtractors.CanImportFromUrl"/>, Coachless through
+    /// <see cref="SiteDeepLink.CoachlessRunesUrlForPage"/>, which is also the
+    /// call that produces the URL the click then imports. A visible button
+    /// therefore always has a target. Hidden on Companion (never scraped).
+    ///
+    /// <para>2.1.1 adds the Coachless arm. It was u.gg-only because when the
+    /// button was built Coachless had no rune source: the builds overview
+    /// ranks keystones and nothing else. The per-slot WPA runes page and the
+    /// settle probe that reads it landed in 2.1.0 round 2 and are live-proven
+    /// (<c>CoachBuild import: Nasus (Coachless)</c>), so the reason for the
+    /// asymmetry is gone and the button follows.</para>
     /// </summary>
-    internal static bool ShouldShowRunesImport(CompanionTab activeTab, string? currentUrl) =>
-        activeTab == CompanionTab.UGg
-        && SiteImportExtractors.CanImportFromUrl(activeTab, currentUrl);
+    internal static bool ShouldShowRunesImport(CompanionTab activeTab, string? currentUrl) => activeTab switch
+    {
+        CompanionTab.UGg => SiteImportExtractors.CanImportFromUrl(activeTab, currentUrl),
+        CompanionTab.Coachless => SiteDeepLink.CoachlessRunesUrlForPage(currentUrl) is not null,
+        _ => false,
+    };
 
     /// <summary>
     /// The champ-select row belongs to the research tabs. Keeping it collapsed

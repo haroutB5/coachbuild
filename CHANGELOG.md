@@ -1,5 +1,153 @@
 # Changelog
 
+## Desktop 2.1.1 — the Jhin champ select (2026-09-09)
+
+One real champ select on 2.1.0 (Jhin, ADC, 2026-09-08 22:37) failed all three
+auto-import legs, each for a different reason. Every fix below is pinned by the
+failure it answers.
+
+### The two health shards were crossed on Coachless
+
+`auto-import: a scraped shard does not belong to its shard row -- nothing was
+imported`.
+
+Riot's stat-shard icon **filenames are crossed against the shards' display
+names**, and `ShardIconMap.ByName` is keyed by filename because that is what
+u.gg serves. Ground truth is Riot's own patch data, embedded verbatim in the
+u.gg fixture as `stat-shards-v2.json` (patch 14.2):
+
+| icon file | id | display name |
+|---|---|---|
+| `StatModsHealthScalingIcon.png` | **5011** | Health (+65) |
+| `StatModsHealthPlusIcon.png` | **5001** | Health Scaling (+10-180 by level) |
+
+Coachless names its icons by **meaning** instead: its `healthscaling.png` is the
+scaling shard (5001) and its `health.png` is flat health (5011) — the opposite
+of what the same two words resolve to through the shared table. The merged table
+the Coachless runes script is handed therefore had both keys backwards.
+
+- `ShardIconMap.CoachlessAliases` now overrides **both** (`health` → 5011,
+  `healthscaling` → 5001). u.gg's injected map is untouched and still correct;
+  a test asserts the alias that shadows a shared key does not leak into it.
+- Two failure modes, not one. Jhin and Garen were **refused** (their Flex row's
+  top-WPA card is `healthscaling`, and 5011 is not a Flex shard). Ahri, Lee Sin
+  and Leona **passed the row check on the wrong id** and silently wrote Health
+  Scaling where the page said Health. Ornn was unaffected.
+- The test that should have caught it could not fail: it asserted each alias
+  landed on an id valid in *some* row, and 5001 is legal in two of the three
+  rows. It is replaced by a whole-row oracle — resolving the nine cards the page
+  renders, in the page's own DOM order, must reproduce
+  `PerkTreeCatalog.ShardRows` exactly — plus a mutant test pinning that the old
+  mapping does not.
+
+### u.gg reads a client-side navigation via a direct load
+
+`u.gg items: no script on the page embeds a build blob` /
+`stage url-recognized (rank "emerald_plus", role "adc" via active-role-tab,
+embedded ranks [], 0 blocks)`.
+
+The read was correct about the DOM in front of it. u.gg is a single-page app and
+embeds its per-champion build blob only in the document it **serves**; navigate
+within the site and the rendered build comes from a client fetch while the
+document's scripts still belong to the first page loaded. So the tab showed a
+build the extractor genuinely could not see.
+
+- An extract-in-place read that yields no build **at stage `url-recognized`**
+  now re-loads the same URL in a hidden worker before giving up, and says so in
+  the log. `meta.stage` is parsed into the payload for this.
+- The stage, not the emptiness, is what licenses the retry: a page that found a
+  blob and simply has no build for this rank/role reaches a later stage and is
+  the final answer. Retrying on emptiness alone would re-load the page every
+  750 ms forever.
+- Retried at most once per target by construction — the retry *is* the worker
+  target, and worker targets are not retried.
+- No fixture reproduces this (every capture is a direct load), so the decision
+  is pinned by tests rather than by a page.
+
+### A Coachless discovery failure now says what the page held
+
+`auto-import: Coachless extraction failed (no build on page)` — a worker fetch,
+and those five words were the whole report.
+
+The inspect step now returns a page census, and the discovery failure carries
+it: tables on the page, how many had a slot title (and which), data rows, and
+how many had a selectable top row. A consent or challenge shell (no tables at
+all) is now distinguishable from a page whose title shape moved (tables, none
+titled) and from one still hydrating (titles, no rows). The verdict is
+unchanged — nothing is written either way.
+
+### Import runes works on Coachless
+
+The offer bar's runes button was u.gg-only because Coachless had no rune source
+when the button was built. The per-slot WPA runes page landed in 2.1.0 round 2
+and is live-proven, so the button follows: it now shows on a Coachless builds
+page **or** runes page, and the click reuses the automatic import's own fetch —
+hidden worker, allowlisted target, settle probe — rather than a second way to
+read that page. Status reads `Imported runes for Jhin (ADC) from Coachless`,
+role omitted when the page carries none.
+
+Visibility and the click's URL come from the same call
+(`SiteDeepLink.CoachlessRunesUrlForPage`), so a visible button can never be a
+dead click. The target is rebuilt from slug+role rather than carried off the
+page: the import allowlist compares against exactly what the deep-link builder
+produces, and a rendered runes URL's tree pair is the site's own snap of a probe
+pair. No new script call site — the compliance test's allowlist is unchanged.
+
+### The white chrome is a lost present, not a layout bug
+
+The research window's WPF chrome painted blank white at 192 DPI while the
+WebView2 content and the Win32 title bar painted fine — the whole band in
+`_evidence/live-2.1.0-pass2/01-champselect.png`, a partial strip in
+`_research/site-import/user-evidence/white-strip-gaming-pc.jpg`.
+
+Four readings agree, and the two hypotheses that were not it are ruled out:
+
+- **The white is not in the XAML.** No row background is white; the nearest
+  light brush is `#F4F7FA`, behind the WebView2. There is no leftover
+  fixed-height row. A white pixel there is the window's uninitialized backing
+  surface. Now pinned: every Grid row must declare a Background, and every row
+  background must be dark bar the one documented exception.
+- **Only WPF-drawn pixels are affected**, which also rules out a WebView2
+  z-order overlap — the white sits above and below the WebView2's rect, never
+  over it.
+- **The regions that survived are the redrawn ones.** In the photo the parts
+  that painted are exactly the parts something had invalidated since first
+  paint: the offer bar had just appeared, the status text had just changed, the
+  tab buttons had just been restyled. The wordmark and the tab-state label,
+  which never change, stayed white. The earlier capture, taken before any of
+  those, is white across the whole band.
+- **Layout and hit-testing were fine** — the white chrome stayed
+  UIA-interactive, and RenderTargetBitmap captures of the same tree were always
+  correct. That rasterizes on the UI thread into its own target, bypassing the
+  window's present path.
+
+So: the visual tree is right and the first present is lost. The per-monitor-v2
+manifest added in 2.1.0 round 2 fixed what WPF *believes* the scale is, not
+whether the frame reaches the screen, which is why it did not cure this.
+
+- WPF now renders in **software** process-wide by default. The cost here is
+  close to nothing — WPF paints only a 56px chrome row, a thin offer bar and a
+  35px status bar, every page pixel belongs to the WebView2's own compositor,
+  and the overlay is already a layered (software) window. `--gpu-render`
+  restores the hardware path without a new build.
+- The window also forces one re-render of its chrome after the first frame,
+  which is the operation observed to repair the surface. Belt and braces for
+  the `--gpu-render` path.
+
+### The extractor gate now runs on six champions
+
+`verify-extractors.mjs` replays the extractors across the 18 sweep captures
+(u.gg / Coachless builds / Coachless runes × Jhin, Ahri, Leona, Lee Sin, Garen,
+Ornn), asserting a valid yield or a typed failure — never a silent empty. This
+is the held-out set that caught the shard defect; the single-champion fixtures
+the extractors were authored against could not, and did not.
+
+Five of the six u.gg captures are Cloudflare `Just a moment...` interstitials
+(the capture run was challenged mid-sweep), so the gate requires each u.gg file
+to be **either** a real page it extracts **or** a recognized challenge shell,
+and reports the count of each. Re-capturing those five strengthens the gate on
+its own. Checks: 96 → 120.
+
 ## Desktop 2.1.0 — field-test fixes (2026-09-08)
 
 Six defects found by playing real games on 2.0.1, not by reading the code.

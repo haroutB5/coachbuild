@@ -53,6 +53,28 @@ public sealed record SiteImportPayload(
     public IReadOnlyList<string> Notes { get; init; } = NoNotes;
 
     /// <summary>
+    /// The u.gg extractor's own <c>meta.stage</c> — how far the items read got
+    /// before it ran out of page: <c>url-recognized</c> (no embedded build blob
+    /// was found at all) → <c>json-found</c> → <c>keys-found</c> →
+    /// <c>blocks-built</c>. Empty for extractors that do not report one.
+    ///
+    /// <para>Parsed since 2.1.1 because it is the ONE signal that separates
+    /// "this page has no build" from "this page never embedded one".
+    /// u.gg embeds its per-champion build blob only on a DIRECT document load;
+    /// a client-side (SPA) route change leaves the previous document's scripts
+    /// in place, so an extract-in-place read of a tab the user navigated
+    /// within the site sees <c>url-recognized</c> with zero embedded ranks —
+    /// exactly the live 2026-09-08 22:37:36 Jhin failure. That is recoverable
+    /// by re-loading the same URL in a hidden worker, and
+    /// <c>AutoImportCoordinator.ShouldRetryViaWorker</c> is what decides it.
+    /// Diagnostics-shaped, so like <see cref="Notes"/> it is NOT positional.</para>
+    /// </summary>
+    public string Stage { get; init; } = string.Empty;
+
+    /// <summary>The stage the u.gg extractor reports when it found no embedded build blob at all.</summary>
+    public const string StageUrlRecognized = "url-recognized";
+
+    /// <summary>
     /// Parses the extractor's JSON. The raw value is what
     /// <c>ExecuteScriptAsync</c> resolves to: our extractors
     /// <c>JSON.stringify</c> their result, so the raw value is usually a
@@ -135,6 +157,7 @@ public sealed record SiteImportPayload(
             payload = new SiteImportPayload(source, slug, role, runes!, blocks)
             {
                 Notes = ReadNotes(root),
+                Stage = ReadStage(root),
             };
             failure = string.Empty;
             return true;
@@ -227,6 +250,26 @@ public sealed record SiteImportPayload(
                 : flat[..MaxExtractorErrorLength].TrimEnd() + "…");
         }
         return cleaned.Count == 0 ? NoNotes : cleaned;
+    }
+
+    /// <summary>
+    /// Reads <c>meta.stage</c>. Restricted to a short lowercase token so a
+    /// page-derived string can never masquerade as one: this value is COMPARED
+    /// AGAINST, not merely logged, so it is validated rather than sanitized.
+    /// </summary>
+    private static string ReadStage(JsonElement root)
+    {
+        if (!root.TryGetProperty("meta", out var meta) || meta.ValueKind != JsonValueKind.Object)
+            return string.Empty;
+        if (!meta.TryGetProperty("stage", out var stage) || stage.ValueKind != JsonValueKind.String)
+            return string.Empty;
+        var text = stage.GetString()?.Trim();
+        if (string.IsNullOrEmpty(text) || text.Length > 32) return string.Empty;
+        foreach (var c in text)
+        {
+            if (!char.IsAsciiLetterLower(c) && c != '-') return string.Empty;
+        }
+        return text;
     }
 
     private static bool TryReadSource(string? value, out SiteImportSource source)
@@ -537,19 +580,51 @@ public static class ShardIconMap
     ///
     /// <para>Coachless does NOT serve ddragon's StatMods filenames — it
     /// serves its own short stat icons (<c>cdn.coachless.gg/stat-icons/ah.png</c>).
-    /// Read off the 2026-09-08 <c>coachless-nasus-runes.html</c> fixture, whose
-    /// nine shard cards are, in the site's own DOM order,
+    /// Read off the 2026-09-08 <c>coachless-nasus-runes.html</c> fixture and
+    /// re-confirmed on all six 2026-09-08 sweep runes captures (jhin/ahri/
+    /// leona/leesin/garen/ornn), whose nine shard cards are, in the site's own
+    /// DOM order and IDENTICALLY on every one of the six,
     /// [adaptiveforce, as, ah] / [adaptiveforce, ms, healthscaling] /
     /// [health, tenacity, healthscaling] — which is exactly the client's
     /// Offense/Flex/Defense shard grid with <c>as</c>=attack speed,
-    /// <c>ah</c>=ability haste, <c>ms</c>=move speed and <c>health</c>=flat
-    /// health. Each alias therefore lands on the id
-    /// <see cref="PerkTreeCatalog.ShardRows"/> already accepts for that row,
-    /// and the row check still rejects anything that does not.</para>
+    /// <c>ah</c>=ability haste, <c>ms</c>=move speed.</para>
+    ///
+    /// <para>THE TWO HEALTH SHARDS ARE A NAME TRAP, and 2.1.1 walked into it.
+    /// Riot's own icon FILENAMES are crossed against the shards' DISPLAY
+    /// NAMES, and <see cref="ByName"/> is keyed by filename because that is
+    /// what u.gg serves. u.gg's embedded
+    /// <c>stat-shards-v2.json</c> (patch 14.2, read out of
+    /// <c>ugg-jhin-adc.html</c>) is the ground truth for that column:</para>
+    /// <list type="bullet">
+    ///   <item><c>StatModsHealthScalingIcon.png</c> → id <b>5011</b>, display
+    ///   name "Health", <c>+65 Health</c> — the FLAT health shard.</item>
+    ///   <item><c>StatModsHealthPlusIcon.png</c> → id <b>5001</b>, display name
+    ///   "Health Scaling", <c>+10-180 Health (based on level)</c>.</item>
+    /// </list>
+    ///
+    /// <para>Coachless names its icons by MEANING, not by Riot's filename: its
+    /// <c>healthscaling.png</c> is the scaling shard (5001) and its
+    /// <c>health.png</c> is flat health (5011) — the opposite of what the same
+    /// two words resolve to through <see cref="ByName"/>. Until 2.1.1 the
+    /// merged table therefore handed the Coachless script 5011 for
+    /// <c>healthscaling</c> and 5001 for <c>health</c>, which is why
+    /// <c>a scraped shard does not belong to its shard row</c> refused the live
+    /// Jhin import on 2026-09-08 22:38 (the Flex row's top-WPA card is
+    /// <c>healthscaling</c>, and 5011 is not a Flex shard) — and, worse, why a
+    /// Defense row won by <c>health</c> passed the row check on the wrong id
+    /// and silently wrote Health Scaling where the page said Health. Replaying
+    /// the six sweep fixtures: 2 refused (jhin, garen), 3 wrote the wrong
+    /// defense shard (ahri, leesin, leona), 1 was unaffected (ornn).</para>
+    ///
+    /// <para>So BOTH health keys are overridden here. <c>healthscaling</c>
+    /// deliberately shadows a <see cref="ByName"/> entry — that is the point of
+    /// the override seam, and <see cref="ToCoachlessJson"/> lets the alias
+    /// win.</para>
     ///
     /// <para>Kept SEPARATE from <see cref="ByName"/> on purpose: u.gg's
-    /// injected map must stay byte-identical, so only the Coachless runes
-    /// script is handed the merged table.</para>
+    /// injected map must stay byte-identical (it is correct for u.gg, per the
+    /// stat-shards-v2.json read above), so only the Coachless runes script is
+    /// handed the merged table.</para>
     /// </summary>
     public static readonly IReadOnlyDictionary<string, int> CoachlessAliases =
         new Dictionary<string, int>(StringComparer.Ordinal)
@@ -557,7 +632,9 @@ public static class ShardIconMap
             ["as"] = 5005,
             ["ah"] = 5007,
             ["ms"] = 5010,
-            ["health"] = 5001,
+            // Coachless's words, not Riot's filenames. See the name trap above.
+            ["health"] = 5011,
+            ["healthscaling"] = 5001,
         };
 
     public static string ToJson() =>

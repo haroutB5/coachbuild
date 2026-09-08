@@ -184,13 +184,19 @@ public sealed class SiteImportExtractorTests
     [InlineData(CompanionTab.UGg, "https://u.gg/lol/champions/jhin/build/adc", true)]
     [InlineData(CompanionTab.UGg, "https://u.gg/lol/champions/jhin/build", true)]
     [InlineData(CompanionTab.UGg, "https://u.gg/", false)]
-    // The runes button is u.gg-only: Coachless has no rune page, so even a
-    // perfect Coachless build page must not show it -- a button there would
-    // be a dead click. (Items arrive via the automatic import.)
-    [InlineData(CompanionTab.Coachless, "https://coachless.gg/builds/jhin?role=adc", false)]
+    // 2.1.1: Coachless shows it too, on either page that can aim a runes
+    // import. It was u.gg-only because Coachless had no rune source when the
+    // button was built; the per-slot WPA runes page landed in 2.1.0 round 2.
+    // Still never on a page that cannot aim one -- a button there would be a
+    // dead click. (Items arrive via the automatic import.)
+    [InlineData(CompanionTab.Coachless, "https://coachless.gg/builds/jhin?role=adc", true)]
+    [InlineData(CompanionTab.Coachless, "https://coachless.gg/runes/tree/jhin/precision/resolve?role=adc", true)]
+    [InlineData(CompanionTab.Coachless, "https://coachless.gg/builds/creator", false)]
+    [InlineData(CompanionTab.Coachless, "https://coachless.gg/", false)]
     [InlineData(CompanionTab.Coachless, "https://u.gg/lol/champions/jhin/build/adc", false)]
     [InlineData(CompanionTab.Companion, "https://u.gg/lol/champions/jhin/build/adc", false)]
-    public void The_offer_bar_runes_visibility_follows_the_u_gg_url_shape(
+    [InlineData(CompanionTab.Companion, "https://coachless.gg/builds/jhin?role=adc", false)]
+    public void The_offer_bar_runes_visibility_follows_the_site_url_shape(
         CompanionTab tab, string? url, bool expected)
     {
         Assert.Equal(expected, WebView2Window.ShouldShowRunesImport(tab, url));
