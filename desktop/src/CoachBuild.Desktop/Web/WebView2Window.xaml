@@ -256,8 +256,12 @@
                             Click="OnCoachlessTabClick" />
                     <Button x:Name="OpGgTabButton"
                             Style="{StaticResource TabButton}"
-                            Content="op.gg"
-                            Click="OnOpGgTabClick" />
+                            Click="OnOpGgTabClick">
+                        <TextBlock>
+                            <Run Text="MyStats" />
+                            <Run Text="op.gg" FontStyle="Italic" FontSize="10" BaselineAlignment="Subscript" />
+                        </TextBlock>
+                    </Button>
                 </StackPanel>
                 <TextBlock x:Name="TabStateText"
                            Text="Draft"

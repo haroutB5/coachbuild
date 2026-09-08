@@ -22,7 +22,7 @@ public sealed class CompanionTabsIntegrationTests
         Assert.Equal("Draft", CompanionTabs.LabelFor(CompanionTab.Companion));
         Assert.Equal("u.gg", CompanionTabs.LabelFor(CompanionTab.UGg));
         Assert.Equal("Coachless", CompanionTabs.LabelFor(CompanionTab.Coachless));
-        Assert.Equal("op.gg", CompanionTabs.LabelFor(CompanionTab.OpGg));
+        Assert.Equal("MyStats", CompanionTabs.LabelFor(CompanionTab.OpGg));
         Assert.Equal(3, CompanionTabs.Sites.Count);
         Assert.Equal([CompanionTabs.UGg, CompanionTabs.Coachless], CompanionTabs.BuildSites);
     }

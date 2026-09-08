@@ -63,7 +63,7 @@ public static class CompanionTabs
     public static readonly SiteDefinition OpGg = new(
         CompanionTab.OpGg,
         "opgg",
-        "op.gg",
+        "MyStats",
         new Uri("https://op.gg/", UriKind.Absolute));
 
     public static IReadOnlyList<SiteDefinition> Sites { get; } = [UGg, Coachless, OpGg];
