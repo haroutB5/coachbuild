@@ -29,14 +29,16 @@
     "target": "ES2017"
   },
   "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "lib/**/*.ts",
+    "desktop/ui/**/*.ts",
+    "desktop/ui/**/*.tsx",
+    "desktop/ui/app/**/*.jsx"
   ],
   "exclude": [
     "node_modules",
-    "_research"
+    "desktop/ui/out",
+    "desktop/ui/.next"
   ]
 }

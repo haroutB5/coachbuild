@@ -22,6 +22,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
     private readonly bool _ownsLcu;
     private readonly bool _ownsLive;
     private readonly bool _ownsSkillOrders;
+    private readonly HttpClient _draftHttp;
     private readonly ConcurrentDictionary<Task, byte> _handlers = new();
     private HttpListener? _listener;
     private CancellationTokenSource? _stop;
@@ -38,10 +39,16 @@ public sealed class CompanionHttpServer : IAsyncDisposable
         ISkillOrderProvider? skillOrders = null,
         LcuCredentialResolver? credentials = null,
         RedactedLog? log = null,
-        IEnumerable<int>? ports = null)
+        IEnumerable<int>? ports = null,
+        HttpMessageHandler? countersTransport = null)
     {
         if (string.IsNullOrWhiteSpace(sessionToken)) throw new ArgumentException("A session token is required", nameof(sessionToken));
         _sessionToken = sessionToken;
+        _draftHttp = new HttpClient(countersTransport ?? new HttpClientHandler { AllowAutoRedirect = false })
+        {
+            Timeout = TimeSpan.FromSeconds(15),
+            MaxResponseContentBufferSize = 4 * 1024 * 1024,
+        };
         _state = state ?? new CompanionState();
         _credentials = credentials;
         if (lcu is null)
@@ -153,6 +160,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
         await StopAsync().ConfigureAwait(false);
         if (_ownsLcu && _lcu is IDisposable lcu) lcu.Dispose();
         if (_ownsLive) _live.Dispose();
+        _draftHttp.Dispose();
         if (_ownsSkillOrders && _skillOrders is IDisposable skillOrders) skillOrders.Dispose();
     }
 
@@ -208,6 +216,63 @@ public sealed class CompanionHttpServer : IAsyncDisposable
             }
 
             var path = request.Url?.AbsolutePath ?? string.Empty;
+            if (path == "/draft/pool" && request.HttpMethod == "GET")
+            {
+                if (!EnsureCredentials())
+                {
+                    await HttpResponseWriter.WriteJsonAsync(response, 503, new CompanionError("no-client"), cancellationToken);
+                    return;
+                }
+                var mastery = await _lcu.SendAsync(HttpMethod.Get,
+                    "/lol-champion-mastery/v1/local-player/champion-mastery", cancellationToken: cancellationToken);
+                if (!mastery.Ok || mastery.Content is not { ValueKind: JsonValueKind.Array } rows)
+                {
+                    await HttpResponseWriter.WriteJsonAsync(response, 503, new CompanionError("pool-unavailable"), cancellationToken);
+                    return;
+                }
+                var pool = rows.EnumerateArray()
+                    .Where(row => ComplianceRules.PositiveInt(row, "championPoints") is > 0)
+                    .OrderByDescending(row => ComplianceRules.PositiveInt(row, "championPoints"))
+                    .Select(row => ComplianceRules.PositiveInt(row, "championId"))
+                    .OfType<int>().Distinct().Take(20).ToArray();
+                await HttpResponseWriter.WriteJsonAsync(response, 200, pool, cancellationToken);
+                return;
+            }
+            if (path == "/draft/counters-html" && request.HttpMethod == "GET")
+            {
+                var slug = request.QueryString["slug"] ?? "";
+                var lane = request.QueryString["lane"] ?? "";
+                var patch = request.QueryString["patch"] ?? "";
+                if (!System.Text.RegularExpressions.Regex.IsMatch(slug, "^[a-z0-9]{1,40}$") ||
+                    lane is not ("top" or "jungle" or "middle" or "bottom" or "support") ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(patch, "^[0-9]{1,3}\\.[0-9]{1,3}$"))
+                {
+                    await HttpResponseWriter.WriteJsonAsync(response, 400, new CompanionError("bad-counter-selection"), cancellationToken);
+                    return;
+                }
+                using var upstreamRequest = new HttpRequestMessage(HttpMethod.Get,
+                    $"https://lolalytics.com/lol/{slug}/counters/?lane={lane}&tier=emerald_plus&patch={patch}");
+                upstreamRequest.Headers.UserAgent.ParseAdd("coachbuild-counters/2.0");
+                upstreamRequest.Headers.Accept.ParseAdd("text/html");
+                try
+                {
+                    using var upstream = await _draftHttp.SendAsync(upstreamRequest, cancellationToken);
+                    if (!upstream.IsSuccessStatusCode)
+                    {
+                        await HttpResponseWriter.WriteJsonAsync(response, 502, new CompanionError("counters-unavailable"), cancellationToken);
+                        return;
+                    }
+                    var html = await upstream.Content.ReadAsByteArrayAsync(cancellationToken);
+                    // Transport as inert text; the client parser never executes upstream HTML.
+                    await HttpResponseWriter.WriteStreamAsync(response, 200, "text/plain; charset=utf-8",
+                        output => output.WriteAsync(html, cancellationToken).AsTask(), cancellationToken);
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+                {
+                    await HttpResponseWriter.WriteJsonAsync(response, 502, new CompanionError("counters-unavailable"), cancellationToken);
+                }
+                return;
+            }
             if (string.Equals(path, CompanionRoutes.Status, StringComparison.Ordinal) &&
                 string.Equals(request.HttpMethod, "GET", StringComparison.Ordinal))
             {

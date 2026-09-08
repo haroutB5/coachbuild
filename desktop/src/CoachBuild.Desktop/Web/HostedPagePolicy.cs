@@ -32,6 +32,16 @@ public sealed class HostedPagePolicy
 
     public Uri Origin => _origin;
 
+    /// <summary>
+    /// The document the packaged static export exposes at the mapped folder
+    /// root. Kept as a constant so the navigation and the packaging assertion
+    /// cannot drift apart.
+    /// </summary>
+    public const string LocalEntryPoint = "index.html";
+
+    /// <summary>The folder, next to the app binary, the origin maps to.</summary>
+    public const string LocalAssetFolder = "UI";
+
     public bool IsAllowed(Uri? target)
     {
         if (target is null || target.Scheme != Uri.UriSchemeHttps) return false;
@@ -60,13 +70,11 @@ public sealed class HostedPagePolicy
             throw new ArgumentException("A persistent session token is required.", nameof(sessionToken));
         }
 
-        var path = page switch
-        {
-            HostedPageKind.Draft => "/draft",
-            HostedPageKind.Builds => "/",
-            _ => "/live-setup",
-        };
-        var builder = new UriBuilder(new Uri(_origin, path));
+        // Every legacy reopen destination now opens the packaged draft page.
+        // The file name is explicit: the virtual-host mapping that backs this
+        // origin resolves a URL path to a file on disk and serves no default
+        // document, so a bare "/" would be a dead navigation.
+        var builder = new UriBuilder(new Uri(_origin, LocalEntryPoint));
         var query = new List<string>();
         // Match the existing DeepLinkService ordering and semantics: Draft
         // follows through /status and needs only the pairing session, while a

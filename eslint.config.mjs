@@ -1,8 +1,11 @@
 import { defineConfig } from "eslint/config";
 import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 
-export default defineConfig([{
-    extends: [...nextCoreWebVitals],
+export default defineConfig([
+  { ignores: ["desktop/ui/.next/**", "desktop/ui/out/**"] },
+  ...nextCoreWebVitals,
+  {
+    files: ["**/*.{js,jsx,mjs,ts,tsx,mts,cts}"],
     rules: {
         // React hooks v6 modernization (2026-08-06): both compiler-safety
         // rules are enforced. The 16 deliberate set-state-in-effect exceptions

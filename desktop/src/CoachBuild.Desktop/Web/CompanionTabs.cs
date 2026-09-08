@@ -46,7 +46,7 @@ public sealed record SiteDefinition(
 
 public static class CompanionTabs
 {
-    public const string CompanionLabel = "Companion";
+    public const string CompanionLabel = "Draft";
 
     public static readonly SiteDefinition UGg = new(
         CompanionTab.UGg,

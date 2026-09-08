@@ -19,4 +19,10 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
   </ItemGroup>
+  <!--
+    Same packaging path the app uses, so the packaged-draft-page assertion in
+    WebView2WindowTests measures the shipped mechanism and not a test fixture.
+    The referenced app project builds first and produces the export.
+  -->
+  <Import Project="..\..\build\DraftUi.targets" />
 </Project>

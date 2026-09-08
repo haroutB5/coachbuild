@@ -66,7 +66,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { fetchWithTimeout, DEFAULT_FETCH_TIMEOUT_MS } from "@/lib/fetchTimeout";
-import { normalizeChampName } from "@/lib/draft/lolalyticsCheck";
+import { normalizeChampName } from "./championName";
 import type { RoleId } from "@/lib/types";
 
 /** lolalytics rank-bracket slug for the counter-pick sample. Emerald+ (the

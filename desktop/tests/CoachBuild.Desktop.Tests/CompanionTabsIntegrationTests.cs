@@ -19,7 +19,7 @@ public sealed class CompanionTabsIntegrationTests
         Assert.Equal(
             [CompanionTab.Companion, CompanionTab.UGg, CompanionTab.Coachless, CompanionTab.OpGg],
             CompanionTabs.Order);
-        Assert.Equal("Companion", CompanionTabs.LabelFor(CompanionTab.Companion));
+        Assert.Equal("Draft", CompanionTabs.LabelFor(CompanionTab.Companion));
         Assert.Equal("u.gg", CompanionTabs.LabelFor(CompanionTab.UGg));
         Assert.Equal("Coachless", CompanionTabs.LabelFor(CompanionTab.Coachless));
         Assert.Equal("op.gg", CompanionTabs.LabelFor(CompanionTab.OpGg));

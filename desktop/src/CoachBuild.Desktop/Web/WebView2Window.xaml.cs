@@ -165,16 +165,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
 
     public CompanionTabsPreferences Preferences => _preferences;
 
-    /// <summary>
-    /// The web app version the hosted document reported, or null when it has no
-    /// coachbuild-version meta tag. This is never populated from a third-party
-    /// tab.
-    /// </summary>
-    public string? LoadedWebVersion { get; private set; }
-
-    /// <summary>Raised after every successful hosted-page navigation.</summary>
-    public event Action<string?>? WebVersionObserved;
-
     /// <summary>Raised after a tab or zoom preference changes.</summary>
     public event Action<CompanionTabsPreferences>? PreferencesChanged;
 
@@ -570,6 +560,18 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         var browser = state.Browser!;
         var webView = state.Core!;
 
+        if (state.Tab == CompanionTab.Companion)
+        {
+            // The draft page is a static export shipped in the package, mapped
+            // onto the app's own origin. DenyCors keeps the mapped folder from
+            // being read cross-origin; the page's own calls to the loopback
+            // bridge are governed by the bridge's Origin allowlist instead.
+            webView.SetVirtualHostNameToFolderMapping(
+                _policy.Origin.Host,
+                System.IO.Path.Combine(AppContext.BaseDirectory, HostedPagePolicy.LocalAssetFolder),
+                CoreWebView2HostResourceAccessKind.DenyCors);
+        }
+
         webView.Settings.AreDefaultContextMenusEnabled = true;
         webView.Settings.AreDevToolsEnabled = false;
         webView.Settings.IsStatusBarEnabled = false;
@@ -601,7 +603,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
                 ShowPageError(
                     state,
                     state.Tab == CompanionTab.Companion
-                        ? "That link leaves the hosted CoachBuild app and was blocked."
+                        ? "That link leaves the local CoachBuild app and was blocked."
                         : "That page is outside the secure public web, so CoachBuild blocked it.");
             return;
         }
@@ -653,8 +655,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
                 UpdateChrome();
             }
 
-            if (state.Tab == CompanionTab.Companion)
-                _ = ReadLoadedWebVersionAsync(state);
             return;
         }
 
@@ -683,48 +683,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         // itself being broken.
         var who = tab == CompanionTab.Companion ? "CoachBuild" : CompanionTabs.LabelFor(tab);
         return $"{who} could not load this page ({status}). Check your connection and try again.";
-    }
-
-    private async Task ReadLoadedWebVersionAsync(BrowserTabState state)
-    {
-        // One of the window's ExecuteScriptAsync call families (the
-        // compliance tests pin the sites and the reachability): this one,
-        // Companion-guarded below; the user-initiated runes import; the
-        // auto-import's visible extract and worker fetch; and the Coachless
-        // walk both auto paths share. The state guard makes it impossible for a
-        // third-party tab to reach THIS one.
-        if (state.Tab != CompanionTab.Companion) return;
-        var version = await QueryLoadedWebVersionAsync(state).ConfigureAwait(true);
-        if (_disposed || state.Tab != CompanionTab.Companion) return;
-        LoadedWebVersion = version;
-        WebVersionObserved?.Invoke(version);
-    }
-
-    private async Task<string?> QueryLoadedWebVersionAsync(BrowserTabState state)
-    {
-        for (var attempt = 0; attempt < 2; attempt++)
-        {
-            if (_disposed || state.Core is not { } webView) return null;
-            try
-            {
-                var raw = await webView
-                    .ExecuteScriptAsync(
-                        "(function(){var m=document.querySelector('meta[name=\"coachbuild-version\"]');" +
-                        "return m&&m.content?m.content:null;})()")
-                    .ConfigureAwait(true);
-                if (!string.IsNullOrWhiteSpace(raw) && raw != "null")
-                    return System.Text.Json.JsonSerializer.Deserialize<string>(raw);
-            }
-            catch
-            {
-                return null;
-            }
-
-            if (attempt == 0)
-                await Task.Delay(400).ConfigureAwait(true);
-        }
-
-        return null;
     }
 
     private void OnNewWindowRequested(

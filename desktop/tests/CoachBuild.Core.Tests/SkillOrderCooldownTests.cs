@@ -24,7 +24,7 @@ public sealed class SkillOrderCooldownTests
     {
         var clock = new FakeClock();
         var handler = new CountingHandler(HttpStatusCode.InternalServerError, "boom");
-        using var provider = new SkillOrderProvider(new HttpClient(handler), null, clock);
+        using var provider = new SkillOrderProvider(new HttpClient(handler), new Uri("https://fixtures.invalid/skill-order"), clock);
 
         var first = await provider.GetSkillOrderAsync(AhriId, "MID", CancellationToken.None);
         Assert.Equal(SkillOrderStatus.Error, first.Status);
@@ -44,7 +44,7 @@ public sealed class SkillOrderCooldownTests
     {
         var clock = new FakeClock();
         var handler = new CountingHandler(HttpStatusCode.InternalServerError, "boom");
-        using var provider = new SkillOrderProvider(new HttpClient(handler), null, clock);
+        using var provider = new SkillOrderProvider(new HttpClient(handler), new Uri("https://fixtures.invalid/skill-order"), clock);
 
         await provider.GetSkillOrderAsync(AhriId, "MID", CancellationToken.None);
         clock.Advance(TimeSpan.FromSeconds(20));
@@ -58,7 +58,7 @@ public sealed class SkillOrderCooldownTests
     {
         var clock = new FakeClock();
         var handler = new CountingHandler(HttpStatusCode.OK, "null");
-        using var provider = new SkillOrderProvider(new HttpClient(handler), null, clock);
+        using var provider = new SkillOrderProvider(new HttpClient(handler), new Uri("https://fixtures.invalid/skill-order"), clock);
 
         var first = await provider.GetSkillOrderAsync(AhriId, "MID", CancellationToken.None);
         Assert.Equal(SkillOrderStatus.NoData, first.Status);
@@ -79,7 +79,7 @@ public sealed class SkillOrderCooldownTests
         var handler = new CountingHandler(
             HttpStatusCode.OK,
             """{"order":["Q","W","E"],"completed":true,"sampleSize":10}""");
-        using var provider = new SkillOrderProvider(new HttpClient(handler), null, clock);
+        using var provider = new SkillOrderProvider(new HttpClient(handler), new Uri("https://fixtures.invalid/skill-order"), clock);
 
         await provider.GetSkillOrderAsync(AhriId, "MID", CancellationToken.None);
         clock.Advance(TimeSpan.FromHours(2));

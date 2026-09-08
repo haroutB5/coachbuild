@@ -16,7 +16,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const source = readFileSync(join(__dirname, "../../app/draft/page.tsx"), "utf8");
+const source = readFileSync(join(__dirname, "../../desktop/ui/DraftPage.tsx"), "utf8");
 
 function handlerBody(name: string): string {
   const start = source.indexOf(`function ${name}(`);
@@ -51,8 +51,8 @@ describe("lane-opponent selection never detaches /draft from live", () => {
   it("live enemy updates clear a lane-opponent tag whose champion left the list", () => {
     // Because the tag survives live sync now, the sync effect must apply the
     // same stale-tag guard handleRemoveEnemy applies to manual removal.
-    const effect = source.slice(source.indexOf("resolveDraftLiveTarget({"), source.indexOf("}, [companion.tick"));
-    expect(effect).toContain("setLaneOpponentId(null)");
+    const effect = source.slice(source.indexOf("resolveDraftLiveTarget({"), source.indexOf("}, [status, dirty])"));
+    expect(effect).toMatch(/setLaneOpponentId\(current =>.*\? current : null\)/);
     expect(effect).toMatch(/target\.enemies\.includes\(/);
   });
 });

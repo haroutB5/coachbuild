@@ -1,5 +1,140 @@
 # Changelog
 
+## Desktop 2.0.0 — local-first shell, hosted web app retired (2026-09-08)
+
+**The product is now one Windows application.** There is no website, no
+serverless function, no database, no cron and no scheduled task. This is a
+deliberate product decision, not a migration: the app's own item recommender is
+replaced by site imports, and the mobile web surfaces were dropped.
+
+### The Companion tab became the Draft tab, served locally
+
+- The first WebView2 tab no longer loads `coachbuild.vercel.app/live-setup`. It
+  loads a **static export shipped inside the package**: `desktop/ui/` is a
+  one-route Next.js app in `output: "export"` mode, built by the desktop build
+  itself (`desktop/build/DraftUi.targets`, imported by the app and test projects)
+  and copied to `UI/` beside the binary on both the build and publish paths.
+- `WebView2Window` maps that folder onto the app's own origin with
+  `SetVirtualHostNameToFolderMapping(host, {BaseDirectory}/UI, DenyCors)`. The
+  origin is now `https://coachbuild.local` (`CompanionWire.AppOrigin`) — a real
+  https origin with nothing behind it, which keeps `HostedPagePolicy`, the
+  bridge's exact-Origin CORS check and the navigation allowlist working unchanged
+  rather than needing a `file://` carve-out or a second local server.
+- **Navigation targets `index.html` explicitly.** A virtual-host mapping resolves
+  a URL path to a file and serves no default document, so a bare `/` would have
+  been a dead navigation that no build step could catch. Every legacy reopen
+  destination (Draft / Builds / Home) now collapses to that one page.
+- The page keeps the Nocturne styling, the draft controls, the lane-opponent
+  behaviour (including v0.128.0's rule that tagging a lane opponent must not latch
+  the manual-dirty flag), the counter-picks strip, and the live champ-select
+  follow. `/live-setup`'s content is now a status section at the bottom of the
+  same page.
+
+### The packaging defect this uncovered, because it left no symptom
+
+The first implementation declared the export as `<Content>` items **from inside an
+MSBuild target**. MSBuild paired the copy wrongly — destination names came from
+the Content items that already existed (`Assets\tray-icon.ico`, the WebView2
+loader), sources came from the export — so the output grew a `UI/` folder holding
+two files with the app's names and the export's bytes, and **no `index.html`**.
+The solution built, `next build` reported success, and 914 tests passed. The
+shipped app's first tab would have opened nothing.
+
+Fixed with explicit `Copy` / `ResolvedFileToPublish` targets using `->` transforms,
+which pair each source with its own destination by construction. Two independent
+gates now fail instead of staying green:
+`WebView2WindowTests.TheDraftPageIsPackagedNextToTheAppBinary` (asserts
+`UI/index.html` exists beside the binary, references `/_next/`, and has a script
+bundle — the test project imports the same targets file, so it exercises the
+shipping mechanism and not a fixture), and a publish-output check in
+`package.ps1` next to the existing tray-icon assertion.
+
+### And the same shape again in the styling
+
+Tailwind was being configured inline through `postcss.config.mjs`. That **silently
+does nothing under Turbopack** — the options object never reaches Tailwind, which
+then runs with an empty content list. `@tailwind base` still expands, so preflight
+lands and the stylesheet looks plausible at **6,287 bytes**, while not one utility
+class is emitted and the page ships unstyled. (Tailwind's PostCSS argument is
+`configOrPath`, not an options bag, so `{ config: {...} }` is also read as a config
+whose only key is `config`.) The correct arrangement — auto-discovery of
+`desktop/ui/tailwind.config.cjs`, with the build running from that directory so its
+relative content globs resolve — produces **20,182 bytes**. `npm run build` is now
+`cd desktop/ui && next build` and the csproj sets `WorkingDirectory` to match.
+
+The packaging test asserts `.mx-auto`, `.rounded-lg` and `.font-semibold` are in
+the packaged CSS. It resolves the stylesheets through `index.html`'s own `<link>`
+hrefs rather than globbing `*.css`, because the copy step leaves superseded hashes
+behind and a glob happily reads a stale good stylesheet — which is exactly how the
+first version of this assertion passed with a deliberately broken config.
+
+### Bridge: two endpoints so the draft page needs no server
+
+Both sit behind the existing exact-Origin and session-token gates.
+
+- `GET /draft/pool` — the local player's top 20 champions by mastery points from
+  the LCU. This closes a gap the v1 doc recorded as open: `resolveCounterPickPool`
+  had an LCU input that was permanently `null` because no wire field existed, so
+  the pool fell back to My Stats. It now has a real one, and the My Stats fallback
+  is gone with the rest of My Stats.
+- `GET /draft/counters-html?slug=&lane=&patch=` — fetches **one fixed upstream
+  URL** (`lolalytics.com/lol/{slug}/counters/` at `emerald_plus`) and returns the
+  bytes. The URL is constructed here from validated parts and is never a
+  parameter, so the endpoint cannot be turned into an open proxy;
+  `AllowAutoRedirect = false` stops a redirect walking the fetch to another host;
+  the response is capped at 4 MB with a 15 s timeout; and it answers
+  **`text/plain`, not `text/html`**, so the browser never executes upstream markup
+  — the client parses it as data.
+
+The counters parser itself (`lib/lolalytics/counters.ts`) is unchanged, including
+its direction proof and 500-game floor. Only the transport moved out of the
+deleted `/api/draft/counters` route. `desktop/ui/localCounters.ts` keeps the
+24-hour cache in-process, bounded at 30 entries.
+
+### The web-freshness check is deleted
+
+`WebAppVersionClient`, `LoadedWebVersion`, `WebVersionObserved`,
+`CheckWebFreshnessAsync`, `EnteredChampSelect`, the `coachbuild-version` meta read
+and the tray's `Web: …` line are all gone. The 1.0.15 defect they existed for — an
+open window running a web bundle that shipped eighteen minutes ago — cannot occur
+when the page ships with the app. `SiteTabComplianceTests` accordingly drops from
+five sanctioned script families to four and now asserts `coachbuild-version` is
+**absent** from the window source; the controls and the navigation pins are
+unchanged.
+
+### Retired
+
+Every `app/api/**` route; the Builds page and `lib/recommend.ts`; the consensus
+artifact and its bake/rebake pipeline; post-game, My Stats, Pro Players and Patch
+Movers; the Neon client and every ingest script; `rebuild-controller`; the
+service worker, web manifest and PWA icons; and every scheduled-task registration
+script.
+
+Two retirements are **inert seams rather than deletions**, so the services stay
+constructible and their contract tests stay meaningful: `RetiredHostedSink`
+implements `IRankSampleSink`/`IDiagnosticsSink` and answers `Rejected` without a
+network call, and `SkillOrderProvider`'s endpoint is now nullable — a null endpoint
+answers `NoData` without a request.
+
+**The overlay was reduced honestly rather than repointed.** It rendered skill
+orders from `/api/skill-order`; with no endpoint it draws live ability state from
+the Live Client Data API only. It does not invent an order and does not serve a
+stale one.
+
+### Docs
+
+`CLAUDE.md` is rewritten for v2. The v1 reference — six web surfaces, the API
+route table, the Neon schema, the ingest fleet, the consensus artifact and the
+measurements behind all of it — is preserved verbatim at
+`docs/archive/CLAUDE-v1-web.md`, because its LCU/item-set/rune and
+release-engineering sections still apply and several of its measurements are not
+reproducible from surviving code.
+
+### Gates
+
+`dotnet test desktop/CoachBuild.Desktop.sln -c Release` — 383 Core + 532 Desktop.
+`npm run typecheck && npm test` — 20 files / 427 tests.
+
 ## 0.130.0 -- lolalytics counter picks in Draft Assistant (2026-09-08)
 
 - `/draft` now shows a **Counter picks** strip as soon as an enemy pick or

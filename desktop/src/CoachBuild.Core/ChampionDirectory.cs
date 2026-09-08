@@ -161,7 +161,7 @@ public sealed class ChampionDirectory : IChampionDirectory, IDisposable
     public const int FailureRetryMilliseconds = 20_000;
 
     public static readonly Uri DefaultEndpoint = new(
-        "https://coachbuild.vercel.app/api/champions",
+        "https://ddragon.leagueoflegends.com/api/versions.json",
         UriKind.Absolute);
 
     private readonly HttpClient _client;
@@ -223,8 +223,19 @@ public sealed class ChampionDirectory : IChampionDirectory, IDisposable
         string? failure = null;
         try
         {
+            var endpoint = _endpoint;
+            if (endpoint == DefaultEndpoint)
+            {
+                using var versionsResponse = await _client.GetAsync(endpoint, cancellationToken).ConfigureAwait(false);
+                versionsResponse.EnsureSuccessStatusCode();
+                using var versions = JsonDocument.Parse(await versionsResponse.Content.ReadAsStringAsync(cancellationToken));
+                var version = versions.RootElement[0].GetString();
+                if (version is null || !System.Text.RegularExpressions.Regex.IsMatch(version, "^[0-9]+\\.[0-9]+\\.[0-9]+$"))
+                    throw new JsonException("Invalid DDragon version");
+                endpoint = new Uri($"https://ddragon.leagueoflegends.com/cdn/{version}/data/en_US/champion.json");
+            }
             using var response = await _client.GetAsync(
-                _endpoint,
+                endpoint,
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
@@ -237,7 +248,12 @@ public sealed class ChampionDirectory : IChampionDirectory, IDisposable
                     .ConfigureAwait(false);
                 using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
-                var champions = ChampionIdLookup.Parse(document.RootElement);
+                IReadOnlyList<ChampionRef> champions = document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("data", out var data)
+                    ? data.EnumerateObject().Select(entry => entry.Value)
+                        .Where(entry => int.TryParse(entry.GetProperty("key").GetString(), out var id) && id > 0)
+                        .Select(entry => new ChampionRef(int.Parse(entry.GetProperty("key").GetString()!, CultureInfo.InvariantCulture),
+                            entry.GetProperty("id").GetString()!, entry.GetProperty("name").GetString()!)).ToArray()
+                    : ChampionIdLookup.Parse(document.RootElement);
                 // An empty roster is a failure, not an answer. Caching it as a
                 // success would make every champion unresolvable for the whole
                 // process lifetime off one bad response.

@@ -1,29 +1,19 @@
 {
   "name": "coachbuild",
-  "version": "0.130.0",
+  "version": "2.0.0",
   "private": true,
   "engines": {
     "node": ">=20.9"
   },
   "scripts": {
-    "dev": "next dev --turbopack",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint .",
+    "dev": "cd desktop/ui && next dev",
+    "build": "cd desktop/ui && next build",
+    "lint": "eslint desktop/ui components lib",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "db:migrate": "node scripts/db-migrate.mjs",
-    "ingest:roster": "tsx scripts/ingest-roster.mjs",
-    "ingest:matches": "tsx scripts/ingest-matches.mjs",
-    "consensus:generate": "tsx scripts/generate-consensus-artifact.mts",
-    "kits:refresh": "tsx scripts/refresh-champion-kits.mts",
-    "rebuild": "tsx scripts/rebuild-controller.mjs",
-    "prebuild": "node scripts/sync-companion-version.mjs"
+    "test": "vitest run"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.1.0",
     "@phosphor-icons/react": "^2.1.10",
-    "@vercel/functions": "^3.9.5",
     "next": "16.3.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"

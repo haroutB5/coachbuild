@@ -35,6 +35,18 @@ if (-not (Test-Path $iconPath)) {
     throw "Application icon was not included in publish output: $iconPath"
 }
 
+# The Draft tab is served from these files, not from a hosted site. A package
+# missing them installs an app whose first tab is a dead navigation, and the
+# build stays green either way, so assert it here rather than trusting msbuild.
+$draftPage = Join-Path $publishDirectory 'UI\index.html'
+if (-not (Test-Path $draftPage)) {
+    throw "The local draft UI was not included in publish output: $draftPage"
+}
+$draftScripts = Get-ChildItem -Path (Join-Path $publishDirectory 'UI\_next') -Filter *.js -Recurse -ErrorAction SilentlyContinue
+if (-not $draftScripts) {
+    throw "The local draft UI shipped no script bundle under $publishDirectory\UI\_next."
+}
+
 $bootstrapper = Join-Path $publishDirectory 'WebView2\MicrosoftEdgeWebview2Setup.exe'
 if (-not (Test-Path $bootstrapper)) {
     if ($SkipWebView2Bootstrapper) {

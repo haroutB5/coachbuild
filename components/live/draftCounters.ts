@@ -93,24 +93,3 @@ export function normalizeDraftCountersResponse(raw: unknown): DraftCountersRespo
   };
 }
 
-export interface DraftCountersDeps {
-  fetchImpl?: typeof fetch;
-}
-
-/** GET /api/draft/counters, defensive end to end — network failure, non-2xx,
- *  and malformed-body all degrade to null (the strip renders its own
- *  one-line note, same posture as every other fetch wrapper here). */
-export async function fetchDraftCounters(
-  params: DraftCountersParams,
-  deps: DraftCountersDeps = {}
-): Promise<DraftCountersResponse | null> {
-  const f = deps.fetchImpl ?? fetch;
-  try {
-    const res = await f(`/api/draft/counters?${buildDraftCountersQuery(params)}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return normalizeDraftCountersResponse(data);
-  } catch {
-    return null;
-  }
-}

@@ -244,7 +244,7 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Button x:Name="CompanionTabButton"
                             Style="{StaticResource TabButton}"
-                            Content="✦  Companion"
+                            Content="✦  Draft"
                             Click="OnCompanionTabClick" />
                     <Button x:Name="UggTabButton"
                             Style="{StaticResource TabButton}"
@@ -260,7 +260,7 @@
                             Click="OnOpGgTabClick" />
                 </StackPanel>
                 <TextBlock x:Name="TabStateText"
-                           Text="Companion"
+                           Text="Draft"
                            Style="{StaticResource ChromeText}"
                            Foreground="{StaticResource MutedTextBrush}"
                            FontSize="11"

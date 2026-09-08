@@ -23,11 +23,7 @@ public sealed class TrayControllerTests
             var phaseItem = menu.Items.OfType<Forms.ToolStripMenuItem>()
                 .Single(item => (item.Text ?? string.Empty).StartsWith("Phase: ", StringComparison.Ordinal));
             var phaseIndex = menu.Items.IndexOf(phaseItem);
-            // 1.0.15 inserted the WEB build's own line between these two, so
-            // this reads the app-version line by position relative to IT
-            // rather than assuming the app version is immediately above Phase.
-            var webItem = Assert.IsType<Forms.ToolStripMenuItem>(menu.Items[phaseIndex - 1]);
-            var versionItem = Assert.IsType<Forms.ToolStripMenuItem>(menu.Items[phaseIndex - 2]);
+            var versionItem = Assert.IsType<Forms.ToolStripMenuItem>(menu.Items[phaseIndex - 1]);
 
             var informationalVersion = Assembly.GetEntryAssembly()?
                 .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
@@ -39,12 +35,7 @@ public sealed class TrayControllerTests
             Assert.Equal($"CoachBuild v{expectedVersion}", versionItem.Text);
             Assert.False(versionItem.Enabled);
 
-            // The two versions are DIFFERENT numbers and the menu must not
-            // let them be confused: the desktop app's, and the web build the
-            // hosted window is running. A fresh tray has no window.
-            Assert.Equal("Web: no window open", webItem.Text);
-            Assert.False(webItem.Enabled);
-            Assert.NotEqual(versionItem.Text, webItem.Text);
+            Assert.DoesNotContain(menu.Items.OfType<Forms.ToolStripMenuItem>(), item => (item.Text ?? "").StartsWith("Web: "));
         }
         finally
         {
@@ -171,7 +162,7 @@ public sealed class TrayControllerTests
     }
 
     [Fact]
-    public void My_Stats_pairing_is_reachable_from_the_tray()
+    public void My_Stats_pairing_is_retired_and_local_logs_remain()
     {
         using var tray = new TrayController(Dispatcher.CurrentDispatcher);
         var raised = new List<TrayCommand>();
@@ -182,12 +173,10 @@ public sealed class TrayControllerTests
         menu.Show(new Point(0, 0));
         try
         {
-            var pairing = menu.Items.OfType<Forms.ToolStripMenuItem>()
-                .Single(item => item.Text == TrayMenuState.PairMyStatsVerb);
-
-            pairing.PerformClick();
-
-            Assert.Equal(TrayCommand.PairMyStats, Assert.Single(raised));
+            var items = menu.Items.OfType<Forms.ToolStripMenuItem>().ToList();
+            Assert.DoesNotContain(items, item => item.Text == TrayMenuState.PairMyStatsVerb);
+            Assert.Contains(items, item => item.Text == TrayMenuState.OpenLogFolderVerb);
+            Assert.Empty(raised);
         }
         finally
         {
@@ -204,7 +193,7 @@ public sealed class TrayControllerTests
     /// pass just as happily against a scheduled one.</para>
     /// </summary>
     [Fact]
-    public void Sending_diagnostics_is_reachable_from_the_tray()
+    public void Hosted_diagnostics_are_retired_and_local_logs_remain()
     {
         using var tray = new TrayController(Dispatcher.CurrentDispatcher);
         var raised = new List<TrayCommand>();
@@ -216,16 +205,9 @@ public sealed class TrayControllerTests
         try
         {
             var items = menu.Items.OfType<Forms.ToolStripMenuItem>().ToList();
-            var send = items.Single(item => item.Text == TrayMenuState.SendDiagnosticsVerb);
-
-            Assert.True(send.Enabled, "the item must never be a control that cannot be pressed");
-            send.PerformClick();
-            Assert.Equal(TrayCommand.SendDiagnostics, Assert.Single(raised));
-
-            // Directly under the pairing item, which is what makes it useful.
-            Assert.Equal(
-                items.FindIndex(item => item.Text == TrayMenuState.PairMyStatsVerb) + 1,
-                items.IndexOf(send));
+            Assert.DoesNotContain(items, item => item.Text == TrayMenuState.SendDiagnosticsVerb);
+            Assert.Contains(items, item => item.Text == TrayMenuState.OpenLogFolderVerb);
+            Assert.Empty(raised);
         }
         finally
         {

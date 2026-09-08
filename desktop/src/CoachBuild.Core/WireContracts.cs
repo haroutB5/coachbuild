@@ -6,8 +6,8 @@ namespace CoachBuild.Core;
 /// <summary>Constants shared by the native bridge and companionClient.ts.</summary>
 public static class CompanionWire
 {
-    public const string AppOrigin = "https://coachbuild.vercel.app";
-    public const string Version = "1.13.0";
+    public const string AppOrigin = "https://coachbuild.local";
+    public const string Version = "2.0.0";
     public const string SessionFileName = "companion-session.txt";
     public const int AttachWindowSeconds = 150;
     public const int OpenGraceSeconds = 25;

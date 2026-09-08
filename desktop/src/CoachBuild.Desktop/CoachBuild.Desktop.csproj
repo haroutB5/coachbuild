@@ -10,7 +10,7 @@
     <StartupObject>CoachBuild.Desktop.Program</StartupObject>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Deterministic>true</Deterministic>
-    <Version>1.3.1</Version>
+    <Version>2.0.0</Version>
     <ApplicationIcon>Assets\tray-icon.ico</ApplicationIcon>
     <AssemblyName>CoachBuild.Desktop</AssemblyName>
     <RootNamespace>CoachBuild.Desktop</RootNamespace>
@@ -27,4 +27,20 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
     <PackageReference Include="Velopack" Version="0.0.1297" />
   </ItemGroup>
+  <!--
+    The Companion ("Draft") tab is served from a static export shipped inside
+    the app, not from a hosted origin. Producing it here means a plain
+    `dotnet build` / `dotnet publish` always yields a runnable app.
+  -->
+  <Import Project="..\..\build\DraftUi.targets" />
+  <!--
+    WorkingDirectory is the UI directory, not the repo root, and that is
+    load-bearing: Tailwind auto-discovers tailwind.config.cjs from the process
+    cwd. Building from the root instead resolves that config's content globs
+    against the root, matches nothing, and emits zero utility classes — a build
+    that reports success and ships an unstyled page. See desktop/ui/postcss.config.mjs.
+  -->
+  <Target Name="BuildDraftUi" BeforeTargets="CollectDraftUiAssets" Condition="'$(DraftUiIsInnerBuild)' != 'true'">
+    <Exec WorkingDirectory="$(DraftUiSourceDirectory)" Command="node ../../node_modules/next/dist/bin/next build" />
+  </Target>
 </Project>

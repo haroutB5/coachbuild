@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using CoachBuild.Desktop.Tray;
 using CoachBuild.Desktop.Web;
 using Xunit;
@@ -10,16 +11,82 @@ public sealed class WebView2WindowTests
     public void HostedPagePolicyKeepsSessionTokenAndCanonicalRoutes()
     {
         var token = new string('a', 64);
-        var policy = new HostedPagePolicy("https://coachbuild.vercel.app");
+        var policy = new HostedPagePolicy("https://coachbuild.local");
 
         var draft = policy.BuildUrl(new ReopenTarget(ReopenDestination.Draft, 103, 2), token);
         var builds = policy.BuildUrl(new ReopenTarget(ReopenDestination.Builds), token);
 
-        Assert.Equal("https://coachbuild.vercel.app/draft?session=" + token, draft.ToString());
-        Assert.Equal("https://coachbuild.vercel.app/?session=" + token, builds.ToString());
+        // Both legacy destinations resolve to the one packaged document. The
+        // file name is explicit because the virtual-host mapping serves no
+        // default document for a bare "/".
+        Assert.Equal("https://coachbuild.local/index.html?session=" + token, draft.ToString());
+        Assert.Equal("https://coachbuild.local/index.html?session=" + token, builds.ToString());
         Assert.True(policy.IsAllowed(draft));
         Assert.False(policy.IsAllowed("https://example.com/draft?session=" + token));
-        Assert.False(policy.IsAllowed("http://coachbuild.vercel.app/"));
+        Assert.False(policy.IsAllowed("http://coachbuild.local/"));
+    }
+
+    /// <summary>
+    /// The Companion tab is served from <see cref="HostedPagePolicy.LocalAssetFolder"/>
+    /// next to the app binary. This is the packaging gate: the static export
+    /// reaches the output directory only if the csproj adds its Content items
+    /// before AssignTargetPaths; a build that adds them later stays green while
+    /// shipping an empty folder. Referencing projects (this one) receive the
+    /// same copied items, so asserting here exercises the whole chain.
+    /// </summary>
+    [Fact]
+    public void TheDraftPageIsPackagedNextToTheAppBinary()
+    {
+        var folder = Path.Combine(AppContext.BaseDirectory, HostedPagePolicy.LocalAssetFolder);
+        var entry = Path.Combine(folder, HostedPagePolicy.LocalEntryPoint);
+
+        Assert.True(
+            File.Exists(entry),
+            $"the packaged draft page is missing at {entry}; the Companion tab would open a dead navigation");
+
+        // Control: the document must carry the app's own script bundle, not
+        // merely exist. An empty or placeholder file would satisfy Exists.
+        var markup = File.ReadAllText(entry);
+        Assert.Contains("/_next/", markup, StringComparison.Ordinal);
+        var bundles = Path.Combine(folder, "_next");
+        Assert.True(
+            Directory.Exists(bundles) &&
+            Directory.EnumerateFiles(bundles, "*.js", SearchOption.AllDirectories).Any(),
+            "the packaged draft page references a script bundle that was not copied");
+
+        // The stylesheet must carry real Tailwind UTILITIES, not just preflight.
+        // Tailwind emits preflight even when its content list resolves to
+        // nothing, so a completely unstyled page still produces a
+        // plausible-looking stylesheet and a successful build — which is what
+        // shipped while the config was passed inline to PostCSS.
+        //
+        // The sheets are resolved through index.html's own <link> hrefs, NOT by
+        // globbing *.css. A glob reads whatever is in the folder, and the copy
+        // step does not remove superseded hashes, so a stale good stylesheet
+        // from an earlier build satisfies a glob no matter what this build
+        // produced. That is not hypothetical: it let a deliberately broken
+        // config pass this assertion once.
+        var hrefs = Regex
+            .Matches(markup, "href=\"(?<href>/_next/[^\"]+?\\.css)\"")
+            .Select(match => match.Groups["href"].Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        Assert.True(hrefs.Length > 0, "the packaged draft page links no stylesheet");
+
+        var sheets = hrefs
+            .Select(href => Path.Combine(folder, href.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)))
+            .ToArray();
+        foreach (var sheet in sheets)
+            Assert.True(File.Exists(sheet), $"the page links {sheet} but it was not packaged");
+
+        var css = sheets.Select(File.ReadAllText).ToArray();
+        foreach (var utility in new[] { ".mx-auto", ".rounded-lg", ".font-semibold" })
+        {
+            Assert.True(
+                css.Any(sheet => sheet.Contains(utility, StringComparison.Ordinal)),
+                $"the linked stylesheet has no '{utility}' rule; Tailwind emitted preflight but no utilities, "
+                + "so the draft page ships unstyled");
+        }
     }
 
     [Fact]

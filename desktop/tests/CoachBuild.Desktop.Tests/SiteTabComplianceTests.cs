@@ -68,13 +68,13 @@ public sealed class SiteTabComplianceTests
     /// would arrive.
     /// </summary>
     [Fact]
-    public void The_window_scripts_only_version_read_runes_click_and_auto_fetch_sites()
+    public void The_window_scripts_only_runes_click_and_auto_fetch_sites()
     {
         var source = ReadSource(WindowSource);
 
         // Controls: every call family this app is allowed to make must be
         // present, or the site assertions below are measuring nothing.
-        Assert.Contains("coachbuild-version", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("coachbuild-version", source, StringComparison.Ordinal);
         Assert.Contains("RunRunesImportAsync", source, StringComparison.Ordinal);
         Assert.Contains("RunCoachlessWalkAsync", source, StringComparison.Ordinal);
         Assert.Contains("ExtractVisibleOnUiAsync", source, StringComparison.Ordinal);
@@ -82,10 +82,9 @@ public sealed class SiteTabComplianceTests
         // Invocations only. The names also appear in prose; counting comments
         // would make this assertion fail for a documentation edit.
         var invocations = Regex.Matches(source, @"\.\s*ExecuteScriptAsync\s*\(");
-        Assert.True(invocations.Count >= 5, "control: all five script families must exist");
+        Assert.True(invocations.Count >= 4, "control: all four script families must exist");
         var allowedSites = new HashSet<string>(
             [
-                "QueryLoadedWebVersionAsync",
                 "RunRunesImportAsync",
                 "RunCoachlessWalkAsync",
                 "ExtractVisibleOnUiAsync",
@@ -111,38 +110,9 @@ public sealed class SiteTabComplianceTests
             Assert.True(
                 callText.Contains("UGgScript", StringComparison.Ordinal) ||
                 callText.Contains("CoachlessStepScript(", StringComparison.Ordinal) ||
-                callText.Contains("CoachlessInspectScript", StringComparison.Ordinal) ||
-                callText.Contains("coachbuild-version", StringComparison.Ordinal),
+                callText.Contains("CoachlessInspectScript", StringComparison.Ordinal),
                 "every script call must run an extractor step");
         }
-    }
-
-    /// <summary>
-    /// The version read is reached only for the Companion tab. Without the
-    /// guard, a site tab completing a navigation would run a script against
-    /// u.gg or coachless.gg — harmless in intent, still a DOM read of someone
-    /// else's page.
-    /// </summary>
-    [Fact]
-    public void The_version_read_is_gated_on_the_companion_tab()
-    {
-        var source = ReadSource(WindowSource);
-        var index = source.IndexOf("ExecuteScriptAsync", StringComparison.Ordinal);
-        Assert.True(index > 0, "control: the scripted call must exist to be gated");
-
-        // The tab guard has to appear between the navigation-completed handler
-        // and the script call, not merely somewhere in a 1,000-line file.
-        var preceding = source[..index];
-        var lastGuard = preceding.LastIndexOf(
-            "state.Tab != CompanionTab.Companion",
-            StringComparison.Ordinal);
-        var lastHandler = preceding.LastIndexOf(
-            "private async Task ReadLoadedWebVersionAsync",
-            StringComparison.Ordinal);
-        Assert.True(
-            lastGuard > 0 && lastGuard < index,
-            "the version read must sit behind a Companion-tab guard");
-        Assert.True(lastHandler > 0, "control: the version read helper must exist");
     }
 
     /// <summary>

@@ -1,145 +1,168 @@
-# CoachBuild — features (current state, web v0.129.0 + desktop 1.1.1, 2026-09-08)
+# CoachBuild — features (desktop 2.0.0, 2026-09-08)
 
-Personal League of Legends coaching companion. Six surfaces — **Builds, Draft, Companion, My Stats, Patch Movers, Pro Players** — under one global navy/gold shell (branded left rail on desktop, bottom tab bar on mobile). No accounts, no ads, no tracking — runs against public/free data plus a small personal Postgres store and one linked personal Riot account.
+Personal League of Legends coaching companion. **One Windows desktop app.** No
+website, no account, no ads, no tracking, no server, no database. It reads your
+League client on your own machine and two public data sources, and it writes item
+sets and rune pages back into the client.
 
-**Honesty posture (a deliberate feature, not a disclaimer):** every surface labels its data as MEASURED, CURATED, or JUDGMENT — real data speaks for itself; a curated stand-in (no upstream endpoint exists) says so; a judgment call (an editorial threshold, a fallback heuristic) never dresses up as a measured stat. Concretely: patch notes absent for a patch show "—", never an invented note; a Draft takeaway chip without a specific measured claim reads a generic "High ban priority" rather than fabricating a mechanic; an item-set line carries a THREE-state evidence label describing its own contents — bare title when genuinely measured, "(low data)" on thin evidence, "(suggested)" when the line is entirely judgment fill — and a block title never claims an ordering it does not keep (v0.57.0/v0.58.0); My Stats data never touches a recommendation score, however tempting a stat comparison might be.
+**v2.0.0 retired the web app.** The six web surfaces — Builds, Draft, Companion,
+My Stats, Patch Movers, Pro Players — are gone, along with the app's own item
+recommender. What replaced the recommender is the thing people actually wanted:
+**the real sites, in the app, importing straight into the client.** The v1 feature
+set is preserved in `docs/archive/` and `CHANGELOG.md`.
 
-## Global navigation
+**Honesty posture (a deliberate feature, not a disclaimer).** Every surface
+labels its data as MEASURED, CURATED or JUDGMENT. A missing value renders as an
+explicit absence — never a plausible number, never a dash with a unit welded on.
+A curated stand-in says so. Nothing personal ever feeds a score.
 
-Every route shares one champion search (top bar) and one nav. Desktop (`≥lg`): a left rail with two groups — **PLAY** (Builds, Draft, Companion) and **DATA** (Pro Players, Patch Movers, My Stats) — plus a live companion status card (5 real states: unpaired, paired-no-client, client-detected, in champ-select, in-game — never shows "connected" unless it genuinely is) and a `PATCH n · vX.Y.Z` footer. Mobile (`<lg`): a fixed bottom bar with exactly 4 destinations (Builds, Pro Players, Patch Movers, My Stats) — Companion and Draft are desktop-only by design. A gold "APPLY RUNES" button and a live champ-select chip ("CHAMP SELECT — PICKING <champion>") sit in the top bar whenever a companion session is paired.
+## The window
 
-**The top bar is form-factor aware (v0.63.4).** APPLY RUNES is **desktop-only on every route**: it writes to the League client through the companion at `127.0.0.1`, so on a phone — where `127.0.0.1` is the phone — it could never do anything, and a permanently dead control was occupying the most valuable strip on the screen. The global champion search is hidden at mobile width on `/history` and `/draft` only, because those pages own their own champion/player search (Draft otherwise stacked three champion inputs on one phone screen); it stays everywhere else on mobile, and on every route at desktop width. On the two routes where both are hidden the bar **collapses entirely** rather than rendering as padding plus a border, so those pages start directly at their heading.
+Four tabs, one WebView2 window, opened from the tray or automatically when champ
+select starts.
 
-## Builds (`/`)
+| Tab | What it is |
+|---|---|
+| **Draft** | CoachBuild's own page, shipped inside the app |
+| **u.gg** | the real site — auto item-set import, plus a runes button |
+| **Coachless** | the real site — auto item-set import |
+| **op.gg** | the real site, opened on your own profile |
 
-Pick a champion, get a ranked recommendation of the strongest runes, item path, and summoner spells — sourced from coachless.gg's deep-learning WPA (Win Probability Added) stats.
+Each tab loads lazily the first time you visit it, and each keeps its own browser
+profile, so a Cloudflare check you pass on one site stays passed and none of them
+shares storage with the app's session. There is no address bar: every navigation
+starts from a link on a site you chose, and only https is allowed, so a page can
+never hand Windows a `steam:` or `ms-settings:` link.
 
-- **Champion search + lane/elo tabs, unified.** Champion search lives in the global top bar. Lane tabs (Top/Jungle/Mid/Bot/Support) and rank-bracket/elo tabs (High Elo/Diamond/Emerald/Platinum) sit inside the champion hero card. A HIGH/MEDIUM/LOW CONFIDENCE chip bands the recommendation by sample size.
-- **Top-3 setups per champion + lane.** Every primary rune tree AND every secondary tree is evaluated; the app returns up to 3 confidence-weighted variants, preferring different primary trees across variants.
-- **Confidence-weighted ranking.** The headline pick in each slot is the most-played choice clearing a global adoption bar (5% of the champion's games in that role, floor 500 games) — the "reliable" pick, not just the flashiest WPA on a tiny sample. Low-sample alternatives are flagged with their real sample count rather than reading as flatly "better."
-- **Full rune page, shards, spells.** Keystone + primary tree, secondary tree + 2 runes, all 3 stat shards, up to 2 summoner spells. Since v0.127.0 the shard table matches the current client (Offense / Flex / Defense rows), low-sample rune alternatives are held to the same minimum-games floor as headline picks, and a structurally invalid page (wrong tree, wrong slot, duplicate secondary rows, stale shard ids) can no longer be exported to the client — it fails loudly instead of applying something the client would reject or misread.
-- **Core build order + Buy order.** The reliable item path, plus (when it differs) a conditional "if you build X then Y then Z" sequence re-derived with each pick conditioned on already owning the prior one(s). **Both respect real game-slot limits:** every non-bot lane shows at most 5 full items + boots; Bot/ADC lane shows up to 6 full items + boots (the late-game boots-sell exception) — never an impossible 7-tile inventory.
-- **Support Item Upgrade card** (support role only) — shows which of the 5 quest-final support items (off the World Atlas → Runic Compass → Bounty of Worlds chain) suits the champion, from real per-champ item data when available, otherwise a labeled "Suggested — not measured" archetype-based fallback.
-- **Skill Order card (v0.64.0, gridded v0.92.0).** The recommended ability-levelling order — a compact priority string (`Q › W › E`, the thing players memorise) above the full 18-level grid, one row per ability with a coloured cell at each level it is ranked. (The card originally avoided the grid on phone-width grounds; it reads fine and the same component now serves Builds, Pro and OTP.) Sourced from OP.GG, cached 6h. **The source publishes only levels 1–15**, so 16–18 are derived by subtraction under the standard 5/5/5/3 rank model — and when that arithmetic doesn't resolve the card **refuses to complete**, showing only the levels genuinely known with a visible caption saying so, never padding rows to look tidy. Champions the model can't read at all (Kha'Zix encodes ultimates as `R-Q`/`R-W`) render no card rather than a plausible wrong one. Sample size always shown.
-- **Pro Consensus card.** What real pros/high-soloq actually build/run — a plain pick-frequency view, not WPA. Its own Starting-item and boots partitions (never mixed into the completed-item list). Percentages + sample-size caveats throughout; a genuine fetch failure shows a distinct error line, never silently collapsing into "no data."
-- **Rank bracket selector.** Real league tiers (Platinum through Challenger via `rank=`); default is the legacy High-Elo (Diamond/Master/GM) blend.
-- **Matchup-conditioned builds — not shipped.** Built end-to-end, but coachless rejects matchup parameters upstream (verified 403 on every endpoint). Degrades gracefully; will auto-activate if upstream ever supports it.
-- **Item-set export to the game client** (via the Companion, see below) — Core/Buy order/Pro/Highest-WPA/damage-family archetype lines (AP/Mage, AP Burst, Tank Mage, Bruiser, Lethality/Assassin, Crit/Marksman, On-hit, pure Tank) as blocks inside ONE in-client item set per champion+role, only the archetypes that make sense for that champion's actual damage family. Damage-family resolution requires a decisive margin before an item tally overrides class tags, so tank and enchanter supports are no longer misread as AD (v0.58.0 — one incidentally-tagged support item used to be enough to flip them). Since v0.127.0, mutually exclusive items (the client's purchase-restriction families: Last Whisper, Lifeline, void penetration, Tear line) never appear together in a recommended build, an exported line, or a "For this game" swap.
-- **"For this game": one build line that answers the enemy team (v0.120.0).** When all five enemy champions are locked, your item set gains a fifth block called `For this game`: your normal WPA build with up to three picks changed for the team you are actually facing. At most one boot swap and at most two items, each dropped in at the position you would really buy it (anti-heal second, penetration or a defensive item third, the answer to assassins fourth). What makes room for them is the **last** item of the build, the one you are least likely to reach. An item your build already contains is simply moved earlier rather than displacing anything. Seven situations are recognised (two or more healers, two or more shielders, two or more tanks, heavy CC, heavy AP, heavy AD, two or more assassins) against a curated read of all 173 champions, and the block names its reason on the Builds page and in the client: `For this game: boots Mercury's Treads (4 AP); Kaenic Rookern (4 AP, judgment)`. If nothing about the enemy comp changes the build, no block appears. Only champion picks are read, which are visible to you in champ select before the game starts; nothing about what enemies buy during a game is used.
-- **It is labelled JUDGMENT, and the label is per item.** The block prefers an item your own build data already offers, and takes the curated pick when your data offers none. Viktor's data never offers an anti-heal item, so against two healers he still gets Morellonomicon and the line says `judgment` next to it. Anything the measured data did back is unmarked. That honesty is why the block sits **after** the WPA build rather than in front of it, and why `Situational` stopped carrying comp opinions entirely in this version: two comp-driven claims inside one set, held to different standards of evidence, could disagree with nothing on screen explaining why. (v0.118.0's `Situational vs AD/AP/CC` labels and v0.119.0's mid-draft re-writes are both gone.)
-- **It is written once, at the end of champ select.** The first item-set export still happens the moment your own champion resolves, usually with one or two enemies locked. The `For this game` block needs the whole comp, so it is written when champ select reaches finalization, after picks are locked, which is also after any champion trades, so the comp you get is the comp that plays. If the client does not report a phase, five enemy champions holding steady for three seconds counts instead. That is **at most two whole-set writes per champ select**, and a finalization write that would produce the same set writes nothing at all. Runes are never re-written this way.
+**The site tabs are read-mostly, and that is enforced rather than promised.** The
+app runs exactly four scripted reads against them — the runes button, the two item
+extractions, and the Coachless walk they share — and the build fails if a fifth
+appears anywhere, or if any automated navigation goes somewhere outside the
+app's own deep links for the champion you just locked.
 
-**Exported blocks are in real PURCHASE ORDER, not frequency order (v0.115.0/v0.116.0).** A shop block is a left-to-right row that a player reads as a buy order, so it now is one. Boots sit at the second slot rather than the fourth (measured over 978 real pro timelines across 14 champion-roles: the old fourth-slot placement was correct in 4.4% of games, the pooled median is slot 2), and the completed items are ordered by median purchase position taken from the same games the percentages come from. Where a source has no timelines of its own, the order is transferred from the other source for the same champion+role, and failing that estimated from the champion's own per-slot item pools. **531 of 551 blocks now carry a real order**; the 20 that cannot (single-item blocks, support pools of quest finals, off-meta champion-roles with no slot data) keep frequency order and say `most built` in the title instead of `build`, because a title is a claim about what the block contains. The headline case: an ADC block used to open on Infinity Edge, held by 70% of pros at the end of the game but bought **third**. A positional signal may only PERMUTE a block, never change which items are in it, so no ordering fix can quietly drop an item a player was already being shown.
-- **Dynamic patch.** Never hardcodes a data patch — probes ddragon's newest versions against coachless and walks backward until data is populated.
-- **Three build views: BUILD | PRO | OTP.** WPA-ranked recommendation, pro consensus, and the single best one-trick for that champion — the same shape on each, so any of the three can be the page you actually use in champ select. All three carry the manual Apply Runes / Add Item Build controls (v0.91.0).
-- **Four item-build categories on BUILD (invariants hardened v0.100.1).** WPA BUILD (the core recommendation, buy order); OPTIMIZED ORDER (a conditioned re-reading of the SAME build — it may only reorder the build's own items, never introduce one; when the conditioned data can't support a 2+ item chain it shows "order confirmed" or nothing; a negative-WPA step is shown honestly rather than hidden — user decision 2026-08-06); SITUATIONAL (swap menu, not an ordered build); HIDDEN GEM (high win rate, rarely built, not in your build — deduped by item id, largest sample wins, same selector as the exported shop block so the two can never disagree).
-- **OTP builds always present a full build (v0.100.1).** When the 15% usage floor leaves fewer than 5 full items, the list backfills with the highest-usage below-floor completed items — real low percentages shown, never inflated. Support-quest finals are excluded from non-support lanes' recommendation surfaces (a few mis-roled stored games could put Bloodsong in a top-laner's build); the played-game record keeps them, because it is a record.
-- **Skill order on all three (v0.92.0).** A full 18-level grid: rows Q/W/E/R, one coloured cell per level-up, with the max-priority order above it. Builds derives levels 16–18 from the champion's published max order and says so; **Pro and OTP never do** — theirs come from real recorded timelines, so a level nobody in the sample reached stays blank rather than becoming a guess. Every grid carries its own denominator ("22 of 386 games").
-- **The one-trick's order is really theirs (v0.91.0–v0.92.1).** Pulled from match-v5 timelines for the featured player, capped at their 30 most recent games against a shared API budget, so a card typically reads 16–22 games and grows as you browse. A one-trick with no timeline data yet says so plainly instead of showing an empty grid.
-- **Graceful degradation.** Insufficient data → friendly empty state; genuine error → distinct "couldn't load, try again" state. Never silently substitutes unrelated sample data.
-- **PWA.** Installable, service-worker cache tied to app version. Update toast ("Update ready — Refresh") — dismissal now persists across tabs/relaunches until a genuinely new version ships.
+## Draft
 
-## Draft (`/draft`)
+Your lane, your pick, your team, their team — and who beats the champion you are
+actually up against.
 
-**The Draft Assistant** (redesigned v0.90.0) — statistically-favored picks for a lane, given the enemies you've entered (manually, or auto-filled live from champ select via the Companion).
+- **It fills itself in from champ select.** Your lane, the enemies as they lock,
+  and your own hover arrive live from the League client. Editing lane, your pick
+  or the enemy list puts the page in manual mode until you reset or the next
+  champ select starts.
+- **Marking your lane opponent is not an edit.** Tagging which enemy you are
+  actually laning against is an annotation of live data, so enemy picks keep
+  filling in after you tag one — and the tag clears itself if that champion
+  leaves the enemy list. (This was a real bug in v1: tagging at three-of-five
+  enemies froze the page, so picks four and five never arrived.)
+- **Counter picks.** As soon as any enemy is visible, a strip shows the champions
+  that beat them in your lane, with matchup win rate, delta and games, from
+  lolalytics at Emerald+ on the current patch. Your own most-played champions are
+  listed first.
+- **The direction is proved, not assumed.** The page being read is the *enemy's*
+  counters page, so a champion counts as beating them only when the enemy's own
+  win rate against it is below 50%, cross-checked against the card's own sentence.
+  Rows under 500 games are not suggested. If the page's shape changes, the strip
+  says it could not read it — it never shows an empty list that looks like "no
+  champion counters this one".
+- **Your champion pool comes from the client.** Your top 20 champions by mastery,
+  read live. In v1 this was approximated from your recorded match history; it is
+  now the real thing.
+- **Live setup** is a section at the bottom of the same page: whether the
+  companion is running, whether the client is connected, and what phase you are
+  in. There is no separate pairing page and no pairing step — the app is the
+  companion.
 
-Two columns. A control row (your role, optional your-pick, allied and enemy team slots), three **Top Recommendations** cards, a **Recommended / Blind Picks / Counters / Comfort Picks** tab strip, live filters (min pick rate, include off-meta, minimum games), a legend, **Worst Matchups Preview**, and a **Detailed Rankings** panel with Off-Meta tags and win-rate deltas. Before you enter any enemy, that panel shows the blind-pick rankings and tells you so — there are no matchups to rank against yet. Whichever champions are on the three cards are always findable in the panel: if one sits outside the visible top ten under your current sort and filters, it is listed below under "Carded recommendations · shown for reference" **at its real rank and real numbers**, never shuffled upward to look better. It fits one screen at 1920×1125.
+## Importing builds
 
-- **Blind Pick (v0.89.0).** The top 10 champions to first-pick *before* you know your lane opponent. Ranked by expected win rate with a penalty for a bad worst case; the column that adds something over the plain ranking is **Floor** — your win rate across the worst 10% of matchups you're actually likely to face. Two champions with the same win rate can differ by three points there. The order stays close to Suggested Picks by nature, and the page says so rather than overclaiming.
-- **Hero cards are meta champions only.** An off-meta one-trick at 0.2% pick rate should not be the first thing you see captioned "Best Overall". The tables below still carry off-meta rows, tagged, because that is where you go looking for a niche pick.
-- **Comfort Picks** narrows the ranking to champions you've actually played. It filters, never re-scores — the order is identical to Recommended.
-- **Counters** keeps only candidates with a favourable shrunk matchup delta against the entered enemies.
-- **Pick rate is real.** Computed as true lane share; the underlying matchup matrix is symmetric, so a naive sum double-counts every game and halves the figure.
-- **Comp profile bars.** ENEMY COMP PROFILE renders as horizontal 0–100 bars across 6 axes (from a curated 173-champion kit-rating table), plus up to 3 tactical takeaway chips — honestly worded ("High ban priority" rather than a specific, unbacked claim) whenever the underlying data doesn't support a sharper statement.
-- **Ban suggestions are archived, not deleted (v0.90.0).** The redesign has no place for them; the API still computes them and `docs/archive/draft-bans/README.md` holds the formula and the steps to bring them back.
-- **Team synergy is deliberately absent.** No ally-pair data exists, so rather than render a placeholder the column and tab were cut.
-- **Lane-opponent inference.** Automatically infers your direct lane opponent from enemy team composition (with a dominance guard against genuinely ambiguous cases); an explicit tap always overrides.
-- **My Stats badges (display-only).** A small muted "you: 8-3" chip when you have personal record data against the resolved matchup — visually distinct from the scored win-rate color, never blended into the ranking. A "My pool" toggle filters (never re-scores) the list to champions you've actually played.
-- **Live sync via the Companion** — auto-fills your champion and updates as champ select progresses; a manual edit to lane, enemies, or hover enters "Manual mode" (clearly bannered) until you tap "Re-attach to live" or the next fresh champ select re-attaches automatically. Marking your lane opponent is NOT a manual edit (v0.128.0): it's an annotation of the live data, so enemy picks keep auto-filling after you tag them — and the tag clears itself if that champion ever leaves the live enemy list.
-- **Staleness honesty.** Shows a one-line notice when the underlying u.gg data is behind the app's own resolved current patch, rather than silently serving old numbers.
-- **Ingest health notice (v0.87.0).** A separate one-line notice appears only when the scheduled data-ingest job behind this page is confirmed unhealthy (a real recorded failure) — never shown on merely-unknown status, never a false "healthy."
+- **Item sets import themselves.** When you lock in, and again if you change the
+  rank filter or otherwise move the build page you are looking at, the app fetches
+  both u.gg's and Coachless's item set for your champion and role in the
+  background and writes them into the client **in one go**, so both appear in the
+  shop's set list together as `CoachBuild import: {Champion} {Role} (u.gg)` and
+  `(Coachless)`. It never touches the tab you are reading.
+- **Runes are one click, on u.gg.** The gold **Import runes** button reads the
+  build page you are looking at and writes the page into the client. It is hidden
+  on Coachless, which has no rune page. A build with no runes still imports the
+  items and says so.
+- **It never touches anything that is not ours.** The app will not delete or
+  overwrite a rune page or item set whose name does not start with `CoachBuild` —
+  with one deliberate exception: clicking **Import runes** yourself will replace
+  the current page whatever it is called, because a free account has two rune
+  slots and a real click is real consent.
+- **Exactly one set per champion and role.** Re-importing replaces it in place
+  rather than accumulating. The client stores all your item sets as one document
+  that is written whole and rejected whole, so an unbounded pile of old sets is
+  not a tidiness problem, it is how every one of your own sets stops saving.
 
-## Companion (`/live-setup`)
+## In-game overlay
 
-Setup and status for the optional PowerShell tray companion that bridges the app to your local League client.
+The skill-order overlay draws over the game and highlights an unspent point.
+Position it once with the adjust hotkey and it stays.
 
-- **Status hero card** — a 4-step progress rail (Client detected → Lobby → Champ Select → In Game), reflecting real companion state only (never shows a step as complete unless it genuinely polled that state).
-- **One-line install command**, automation toggles (auto-apply runes / auto-apply item sets on champ select, both opt-out-default once paired, both real accessible switches with a privacy footnote) and a connection test.
-- **What it does once paired:** entering champ select opens the Builds page (and/or Draft) to your locked/hovered champion automatically; a gold "Apply runes" push writes the recommended page into the client; "Add item builds" writes an in-client item set; an in-game Live panel shows the enemy comp (champion/position only).
-- **Compliance, hard and tested:** no summoner names anywhere, no cooldown/timer automation, rune/item writes are either strictly user-clicked or an opt-out-default suggestion-class action (never a silent game-affecting automation), and the companion never deletes or overwrites a rune page / item set it didn't create.
-- **Recent errors panel** — the last 5 classified companion failures (network/HTTP/malformed-response/LCU-rejected), so an on-device issue can be diagnosed from one screenshot.
-- **The desktop app (currently 1.1.1).** A second, richer companion: the same LCU bridge in a tray app with a tabbed WebView2 window for **Companion / u.gg / Coachless**, a self-updater, and a genuine in-game overlay. The site tabs render in-window and open lazily with separate profiles; the hosted Companion tab retains the session token. What it adds over the PowerShell tray: **the skill-order overlay**, which draws your recommended next ability over the game and highlights an unspent point (position it once with the adjust hotkey and it stays); **LP capture** for My Stats play sessions; **pairing** with My Stats; and **"Send diagnostics to My Stats…"**, which uploads a redacted tail of the companion log so a problem on a gaming PC can be looked at without moving a file off it (Riot IDs, ids and your Windows account name are stripped before it leaves; a balloon means it worked, a dialog means it did not and says why). Loading and closing edge states keep the app-owned layers usable, and champ-select offers appear only on the research tabs.
-- **The WPA numbers over the shop were removed in desktop 1.0.23.** From 1.0.16 to 1.0.22 the overlay drew each situational item's WPA delta on top of the shop's item icons. It is gone, and the reason is structural rather than a bug left unfixed: the numbers were anchored to a single position you calibrated by hand, while the Situational row's height on screen moves depending on how many blocks the selected set puts above it — and those blocks vary per champion. The overlay cannot see the screen to find the row, and screen capture / OCR / reading game memory are all permanently out of scope. Two screenshots at one calibration showed the numbers below the icons on a three-block set and above them on a five-block set, so the feature could not be made correct as designed. **The Situational items themselves still ship in the item set, unchanged**, and the skill-order overlay is unaffected (the adjust mode now has one target, so Tab no longer switches anything). Alignment you already saved is kept on disk, not deleted.
-- **Live "next ability to level" on `/compact` (v0.65.0, companion 1.8.0).** Put `/compact` on a second monitor during a game and it names the ability to level and its rank transition (`W 2 → 3`), read from the in-game Live Client Data API via the companion's `GET /skills`. **Nothing is drawn inside the game** — that is impossible, not merely unbuilt: the LCU has no ability/skill endpoint and structurally cannot (it drives the *client*, not the game), and the in-game API is read-only. Every app that appears to highlight abilities in the HUD draws an overlay *over* the game. Riot's policy explicitly permits reading your own level and ranks and "highlighting decisions that are important"; nothing about enemies is read. The resolver has **eleven named refusals** and renders nothing rather than guess — notably when the recommended order stops at level 15, and when the aggregate would advise an ultimate rank the game won't allow (seven champions publish R at level 12, because the feed is a per-level aggregate rather than a legal path).
+**In 2.0.0 it shows live ability state only.** It used to fetch a recommended
+levelling order from the app's own server; there is no server, so it does not
+show one. It does not invent an order and it does not serve you a stale one from
+before the upgrade. Nothing is read from the game beyond your own champion's level
+and ability ranks.
 
-## My Stats (`/mystats`)
+Screen capture, OCR and reading game memory are permanently out of scope. The WPA
+numbers over the shop, removed in desktop 1.0.23, are not coming back: they were
+anchored to one hand-calibrated position while the row they labelled moved
+depending on the champion, and the overlay cannot see the screen to find it.
 
-Your own recorded League history across every linked personal Riot account — **display-only, whole current SEASON, never feeds any recommendation or score.**
+## Tray, updates and setup
 
-**Splits are not a display scope (v0.88.0).** Every figure covers the full season. The page used to filter to the current split, which meant an account that played January to April, stopped, then played two games in July showed "2 games" under every panel while the account card directly above it read "142g · 60.6%". Two denominators, stacked, nothing saying they differed. Ranked solo/duo only, always.
+- **Tray**: status (app version, phase, companion busy/ready), reopen the window,
+  calibrate the overlay, open the log folder, quit.
+- **Updates** are checked every two hours, and opportunistically at game end, on
+  window close and on resume from sleep — never more than once in ten minutes, and
+  never restarting mid-game. A staged update shows a quiet line in the window
+  (`Update {version} ready — restart from the tray to apply`) rather than a toast
+  that steals focus.
+- **Setup is the installer.** There is no key to enter, no account to link, no
+  pairing secret and no environment to configure. If the League client is running,
+  it works.
 
-- **4 stat tiles:** Games, Win Rate, Main (most-played champion), Build Adherence. Since v0.110.1 a tile only draws a bar when it encodes a real ratio (Win Rate; Main's share of recorded games, sublabeled "82 of 157 games") — raw counts get no bar, and an unmeasured tile reads "Not measured yet" instead of a dash with an orphan bar stub. Bars carry aria-labels.
-- **Recent games list**, season-scoped like everything else — per-game KDA and a WPA-build / off-build chip, shown only when a real comparison was possible (the match's patch must match the live recommend pipeline's current patch). When it isn't possible, the chip now distinguishes *why* (v0.87.0): a match on a patch newer than what the build data covers reads "waiting for patch data" (upstream lag, not your history); a genuinely unresolved build still reads "build not recorded."
-- **Champion-pool card** with an on-build insight line. **CS/min shows for every champion (v0.88.1)** — a rate over few games renders muted rather than hidden, with its own games count beside it. A dash now means one thing only: nothing was measured. Previously a "fewer than 10 games" rule blanked 34 of 35 rows that all held real, time-weighted figures.
-- **On-demand refresh** — the page triggers an incremental sync on every view (cooldown-gated server-side so it can't be spammed), so "today's games" show up without waiting for the nightly cron.
-- **Account-not-linked / zero-games / fetch-error states** are all distinct, never a bare spinner.
-- **Play sessions (2026-08-21).** Every sitting of ranked solo you played, one row each: date, time range, W–L, and how much LP it moved. **A session is a sitting, not a day** — the boundary is an 8-hour gap between games, so a run from 22:40 to 01:32 is ONE session, not two halves either side of midnight. The panel sits in the left column of My Stats above the champion pool (a 2026-08-21 reorder put recent form ahead of the pool).
-- **The LP number is honest or it is a dash — there is no third option.** Riot's match API has never returned per-game LP, so a session's movement is measured between two real rank readings taken from your League client. Three states, and the page distinguishes them: **exact** (a reading either side of the sitting with no other ranked game in between) renders a plain signed number; **approximate** renders and says so; **unavailable** renders a dash and **never a number**. Tier boundaries are handled properly — Gold I 90 → Platinum IV 10 reads as +20, not −80 — and Master/Grandmaster/Challenger are treated as one continuous LP pool, so being cut from GM to Master overnight without playing does not show up as a 400-point loss.
-- **LP capture needs the desktop app, and it cannot be backfilled.** The readings come from your live client at app start, champ select and game end (see Companion below). Games played before you paired left nothing to read, and those sessions show a dash permanently. Sessions themselves are computed from match history and appear regardless.
-- **Pair desktop app.** A control on My Stats reveals and copies the account secret; the desktop tray takes it. Without it the desktop's My Stats features are simply inert — never unauthenticated, never silently on.
-- **Missing data is never a dash-plus-unit (v0.110.1).** No `—g`, no `— adh`: absent segments are omitted entirely, thin samples read as a labelled "Thin sample" badge with a tooltip, adherence is spelled out ("62% build adherence") or absent. The mobile header stacks (no side-by-side squeeze), the account picker's meta line wraps by whole segment instead of chopping mid-word, and the search bar's shortcut badge hides on touch devices and reads `Ctrl K` off-Mac.
+## Compliance
 
-## Patch Movers (`/movers`)
-
-The biggest champion win-rate shifts between the current and previous patch, across every lane at once — a single table (no more per-lane split), each row showing champion, role, current/previous win rate, the delta, and games. A curated per-role candidate pool (coachless has no champion-list/tier-list endpoint — the pool is a defensible approximation, not a true ladder top-N; the win-rate numbers themselves are real). Each mover carries a curated one-line patch note when one exists for that patch — otherwise "—", never a fabricated note.
-
-## Pro Players (`/history`)
-
-Search a tracked pro player or a champion and see recent games — solo queue and official pro-play, unified into one feed. Search-first (no separate landing table).
-
-- **Two search modes.** Player: debounced typeahead over tracked pros (team, lane, game count). Champion: the same picker as Builds, plus an optional lane filter.
-- **Favorites**, independent for players and champions — one-tap chips, 12-item cap each.
-- **Source filter** — All / Solo Queue / Pro Play.
-- **Game cards** — player/team, region, result, KDA, patch, a role-ordered 5v5 ally+enemy champion strip, a pro-play matchup line, rune/spell summary. Tap for full detail.
-- **Game detail sheet** — full teams (every one of the 10 players tappable, including untracked pros), named runes/spells/items with real tap-to-detail popovers (current-patch numeric tooltips, not Riot's placeholder text), item build order (minute-grouped, consumables toggle), skill order (solo queue only — pro-play's broadcast feed carries no ability-level data, and says so explicitly rather than showing a blank grid).
-- **Back-gesture navigation** — browser back/forward walks the exact selection/sheet history, no ghost entries.
-- **Leaguepedia CC BY-SA attribution** in the page footer.
-
-## Freshness model
-
-Every pro game (solo queue and pro-play) is filtered to a rolling 90-day window. Daily Vercel crons plus a fleet of local scheduled jobs keep the store current (solo-queue matches, pro-play, one-tricks, draft matchups, My Stats). A targeted on-demand script exists for jumping one specific player to the front of the pro-play backfill queue.
-
-**The in-game item set no longer depends on the database being up (2026-08-20).** The Pro and OTP consensus behind the exported shop set is precomputed once per patch and shipped as a static file, so exporting a build makes no database query at all. This was not an optimisation: when the shared database hit its free-plan compute quota, the exported set silently lost its Pro and OTP blocks for nine hours. A daily job regenerates and redeploys that snapshot, so a champion whose data has grown since the last bake starts showing up on its own. Two honest limits, both known: a one-trick sample below 21 games is treated as *no data* rather than shown thin, and a champion whose data arrives after a bake stays absent from the export until the next one.
-
-**A patch flip no longer breaks the export (v0.117.0).** It used to: the snapshot is stamped with the patch it was built from, so the day the game's patch advanced, every exported set fell back to live database queries until the next bake. That is closed. A snapshot up to two patches behind is now still used, and it says so: the block reads `Pro build (16.16 data)` rather than pretending to be current. This is honest rather than a shortcut, because the underlying sample is a rolling 90-day window and is not filtered by patch at all: on flip day the snapshot and a live query would return the same games. The daily job accepts a single forward patch step on its own and re-publishes, so a flip needs nothing from you. Beyond two patches behind the export does go back to live queries, which is the point at which fresher data really is worth the cost.
+- IDs and champion names only. **No summoner names, anywhere.**
+- Rune writes are user-clicked or the opt-out-default automatic import. Never a
+  polled action taken during a game.
+- Item sets are an inert suggestion in the shop panel, the same class of thing as
+  any external build-importer.
+- No auto-pick, no auto-ban, and no cooldown or timer computation from the
+  in-game data feed.
+- Only champion picks are read from champ select, which are visible to you before
+  the game starts. Nothing about what enemies buy during a game is used.
 
 ## Data attribution
 
-- Build recommendations, WPA stats, CDN icon/asset hosting: **coachless.gg**.
-- Draft matchup/baseline stats: **u.gg**.
-- Solo-queue match data + personal My Stats data: **Riot Games match-v5 API**; pro roster/account discovery via **lolpros.gg**.
-- Pro-play (official esports) match data: **Leaguepedia** (lol.fandom.com), CC BY-SA — attributed in the footer.
-- Pro-play item build reconstruction: **lolesports' public livestats feed**.
-- Rune tooltip numeric descriptions: **CommunityDragon**.
+- Counter-pick matchup data: **lolalytics**.
+- Champion data and icons: **ddragon** (Riot's public CDN).
+- Builds, runes and item sets: **u.gg** and **coachless.gg**, read as the sites
+  themselves.
+- Your own profile page: **op.gg**.
+- Everything about your own client: the **League Client API** and the in-game
+  **Live Client Data API**, on your own machine.
+
+Nothing leaves your machine except the requests to those public sites. There is no
+CoachBuild server to send anything to.
 
 This is a personal, non-commercial project — not endorsed by Riot Games.
 
-## What shipped, by release (0.1.0 → 0.65.0, plus the desktop app)
+## What changed in 2.0.0, plainly
 
-The features above are the CURRENT state; this is shipping order for context, not a substitute for `CHANGELOG.md`.
+**Gone:** the website and everything only it could do — the app's own WPA build
+recommender and its three consensus cards, post-game, My Stats (including LP
+tracking and play sessions), Pro Players, Patch Movers, the installable mobile
+app, and the PowerShell companion's download page. The scheduled data pipelines
+behind all of it are gone too, along with the database they wrote to.
 
-**0.1.0–0.31.1** built the original two-tab app (Builds + Pro's/History): top-3 setups, all-trees evaluation, confidence-weighted ranking, the full solo-queue + pro-play (Leaguepedia) pipelines, favorites, the game-detail experience (runes/spells/build/skill-order/timeline, tap-to-detail popovers), accessibility passes, team-comp strips, performance work (lazy icons, on-demand team-players payload, SW icon cache), browser back/forward integration on both pages, Pro Consensus, the optimized/buy-order item sequence, a rank-bracket selector, and Patch Movers' original (keystone/item WPA-swing) form.
+**Kept and now local:** the draft assistant, counter picks, live champ-select
+follow, automatic item-set import from both sites, the runes button, the op.gg
+tab, the overlay, the tray and the updater.
 
-**0.32.0–0.37.0** added the LCU-integrated PowerShell **Companion**: champ-select auto-open, Apply-runes, in-game Live panel, then item-set export, then the **Draft** tactical recommender (u.gg-sourced matchup scoring) — including a real P0 (v0.37.2) where the entire matchup dataset had been ingested mirror-flipped (a user cross-checked against lolalytics and caught it), fixed with a permanent cross-source ingest guard.
-
-**0.38.0–0.42.0** added **My Stats** (personal match tracker, ratified DISPLAY-ONLY per hard user directive) and its Draft integration (personal badges, My-pool filter), then a full cyan-HUD retheme of `/draft` as the "Tactical Draft Analyzer" with a comp radar, honest derived stats, and an accessibility pass.
-
-**0.43.0–0.48.6** iterated the in-client item-set export through several real correctness bugs: a 413 payload-too-large from unbounded cross-session accumulation, duplicate/thin archetype categories, a 2-boots bug, starting items leaking into completed-item lists, and the Pro/WPA rune-apply pages fighting over one shared LCU page (fixed by giving them two separate exact-titled pages). Also added damage-family-scoped item archetypes, a Support Item Upgrade card, a "Beats You" ban win-rate column, and companion diagnosability (rolling error log, classified hints for every failure mode).
-
-**0.49.0–0.51.3** shipped the current six-surface **global navigation redesign** (branded rail/tab-bar shell, `AppShell`), then a full UI reskin of all six surfaces to the user's WPA-Intelligence mockups in two waves: global top bar + champion search bus, the unified Builds view, Draft's gold retheme with comp bars, the Companion status hero, My Stats' tile/recent-games/adherence layout (migration 0014), Patch Movers' rewrite to per-champion win-rate shifts, and Pro Players simplifying back to search-first (a recent-games table added in 0.51.0 was removed in 0.51.2 per user directive). v0.51.3 closed out a real 7-tile-impossible-build display bug with the 6-slot build cap described above.
-
-**0.52.0–0.65.0** hardened the item and skill layers and made the app honest about form factor. The support-quest finals became a single mutually-exclusive slot everywhere they aggregate (Pro Consensus was showing two at once, burning two of six item slots on one choice), with the same collapse guarded at the recommendation-pool boundary so it cannot reopen; the six-slot cap learned that a support permanently carries the quest item. Mobile stopped being served desktop-only controls: APPLY RUNES is desktop-only because the companion is a localhost bridge to the League client, and the global search stands down on the two routes that own their own. The Builds page gained a **Skill Order** card whose defining property is what it refuses to do — the upstream feed publishes only levels 1–15, so 16–18 are derived by subtraction and simply withheld when that fails. And `/compact` became a live second screen naming the next ability to level, after research established that in-HUD highlighting is impossible through any official Riot interface and every app that appears to do it is drawing an overlay.
-
-**Web 0.66.0–0.114.0** is summarised only by `CHANGELOG.md`, not here. The arc worth knowing: the Builds page consolidated to one Diamond+ scope (the elo pills were removed after the "Diamond" pill was found to be sending Emerald), `/draft` was rebuilt as the Draft Assistant and corrected from Platinum+ to Diamond II+, the item-set export settled on exactly one set per champion+role carrying WPA / Pro / OTP / Hidden gem / Starting / Situational blocks, and My Stats dropped split scoping in favour of the whole season.
-
-**Desktop 1.0.7–1.0.23 (2026-08-15 → 2026-08-22)** is the .NET companion's own line. It fixed its updater and its stale-window bug (the hosted browser kept running whichever web build it opened with, so a user could be applying last week's item sets with no symptom), added a skill-order overlay with hand calibration and an unspent-point highlight, then spent 1.0.16–1.0.22 building WPA number badges over the shop and 1.0.23 removing them again — the honest conclusion of a feature that could not be anchored without seeing the screen. Along the way: an in-game champion-identity fix, an anomaly line that prints the four raw ability ranks and the game mode instead of the one number that could not discriminate, a rune-rejection reason split into `bad-body` / `bad-title` / `bad-runes`, a diagnostics channel that writes the *reason* a block is missing into the companion log, LP capture and pairing for My Stats play sessions, and a tray button that uploads a redacted log so a gaming PC never has to send a file.
+**Better:** your champion pool is read from the client instead of estimated; the
+draft page can no longer be a different version from the app it is running in,
+because it ships inside it; and the app needs no key, no database and no internet
+service of its own to work.

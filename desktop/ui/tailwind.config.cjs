@@ -1,7 +1,24 @@
-import type { Config } from "tailwindcss";
-
-const config: Config = {
-  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
+// THE live Tailwind config for the packaged draft page, and the only one that
+// is loaded. It is CommonJS with the conventional name so Tailwind's own
+// auto-discovery finds it — see postcss.config.mjs for why it must not be
+// passed inline instead.
+//
+// The globs below are relative, so THE BUILD MUST RUN WITH THIS DIRECTORY AS
+// CWD. `npm run build` and the csproj's BuildDraftUi target both do that
+// deliberately; running `next build desktop/ui` from the repo root instead
+// resolves these against the root, matches nothing, and emits zero utility
+// classes — a build that reports success and ships an unstyled page.
+//
+// The repo root still carries `tailwind.config.ts` with the same palette. It is
+// DEAD as of 2.0.0 (nothing loads it) and is queued for deletion; until it is
+// gone, treat this file as the source of truth and do not edit both.
+const config = {
+  content: [
+    "./app/**/*.{js,jsx,ts,tsx}",
+    "./*.{ts,tsx}",
+    "../../components/**/*.{ts,tsx}",
+    "../../lib/**/*.{ts,tsx}",
+  ],
   theme: {
     extend: {
       colors: {
@@ -86,5 +103,5 @@ const config: Config = {
   plugins: [],
 };
 
-export default config;
+module.exports = config;
 

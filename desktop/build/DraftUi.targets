@@ -1,0 +1,55 @@
+<Project>
+  <!--
+    Shared packaging for the Companion ("Draft") tab's static export.
+
+    The tab is served from files shipped inside the app (mapped onto the app's
+    own origin by WebView2), not from a hosted site. Both the app project and
+    the test project import this so the assertion in
+    WebView2WindowTests.TheDraftPageIsPackagedNextToTheAppBinary exercises the
+    real packaging path rather than a test-only copy.
+
+    The assets are deliberately NOT declared as <Content> items from inside a
+    target. That mis-pairs the copy: MSBuild takes destination names from the
+    Content items that already exist (Assets\tray-icon.ico, the WebView2
+    loader) and sources from the export, producing an output folder with the
+    app's file names and the export's bytes — and no index.html. The build
+    stays green while the shipped app has no page. `->` transforms below keep
+    every source paired with its own destination.
+  -->
+  <PropertyGroup>
+    <DraftUiSourceDirectory Condition="'$(DraftUiSourceDirectory)' == ''">$(MSBuildThisFileDirectory)..\ui</DraftUiSourceDirectory>
+    <DraftUiOutputDirectory Condition="'$(DraftUiOutputDirectory)' == ''">$(DraftUiSourceDirectory)\out</DraftUiOutputDirectory>
+    <DraftUiFolderName Condition="'$(DraftUiFolderName)' == ''">UI</DraftUiFolderName>
+    <!-- WPF compiles through a generated *_wpftmp project; only the real one packages. -->
+    <DraftUiIsInnerBuild Condition="$([System.String]::Copy('$(MSBuildProjectName)').EndsWith('_wpftmp'))">true</DraftUiIsInnerBuild>
+  </PropertyGroup>
+
+  <Target Name="CollectDraftUiAssets" Condition="'$(DraftUiIsInnerBuild)' != 'true'">
+    <Error Condition="!Exists('$(DraftUiOutputDirectory)\index.html')"
+           Text="The draft UI static export is missing $(DraftUiOutputDirectory)\index.html. The Companion tab would open a dead navigation." />
+    <ItemGroup>
+      <DraftUiAsset Include="$(DraftUiOutputDirectory)\**\*" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyDraftUiToOutput"
+          AfterTargets="Build"
+          DependsOnTargets="CollectDraftUiAssets"
+          Condition="'$(DraftUiIsInnerBuild)' != 'true'">
+    <Copy SourceFiles="@(DraftUiAsset)"
+          DestinationFiles="@(DraftUiAsset->'$(OutDir)$(DraftUiFolderName)\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="PublishDraftUi"
+          BeforeTargets="ComputeResolvedFilesToPublishList"
+          DependsOnTargets="CollectDraftUiAssets"
+          Condition="'$(DraftUiIsInnerBuild)' != 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="@(DraftUiAsset)">
+        <RelativePath>$(DraftUiFolderName)\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+</Project>

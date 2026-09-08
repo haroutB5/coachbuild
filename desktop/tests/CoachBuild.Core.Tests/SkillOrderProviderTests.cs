@@ -51,7 +51,7 @@ public sealed class SkillOrderProviderTests
     public async Task Bare_null_is_no_data_and_is_cached_without_a_second_request()
     {
         var handler = new FixtureHandler(_ => "null");
-        using var provider = new SkillOrderProvider(new HttpClient(handler));
+        using var provider = new SkillOrderProvider(new HttpClient(handler), new Uri("https://fixtures.invalid/skill-order"));
 
         var first = await provider.GetSkillOrderAsync(103, "SUPPORT", CancellationToken.None);
         var second = await provider.GetSkillOrderAsync(103, "SUPPORT", CancellationToken.None);
@@ -70,7 +70,7 @@ public sealed class SkillOrderProviderTests
         var handler = new FixtureHandler(_ => """
         {"order":["Q","W","E"],"completed":true,"sampleSize":1}
         """);
-        using var provider = new SkillOrderProvider(new HttpClient(handler));
+        using var provider = new SkillOrderProvider(new HttpClient(handler), new Uri("https://fixtures.invalid/skill-order"));
         var state = new CompanionState();
         await using var bridge = new CompanionHttpServer(
             "session",
@@ -90,7 +90,7 @@ public sealed class SkillOrderProviderTests
     public async Task Malformed_payload_is_error_and_error_cache_prevents_poll_storm()
     {
         var handler = new FixtureHandler(_ => "{\"order\":[\"Q\",\"X\"],\"completed\":true,\"sampleSize\":1}");
-        using var provider = new SkillOrderProvider(new HttpClient(handler));
+        using var provider = new SkillOrderProvider(new HttpClient(handler), new Uri("https://fixtures.invalid/skill-order"));
 
         var first = await provider.GetSkillOrderAsync(103, "BOT", CancellationToken.None);
         var second = await provider.GetSkillOrderAsync(103, "BOT", CancellationToken.None);

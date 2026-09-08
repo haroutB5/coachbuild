@@ -163,7 +163,6 @@ public sealed class TrayController : IDisposable
         _menu.Items.Add(StatusItem($"CoachBuild v{AppVersion}"));
         // The WEB build the open window is running — a different number from
         // the line above it, and the one nobody could answer on 2026-08-19.
-        _menu.Items.Add(StatusItem(_state.WebVersionLine));
         _menu.Items.Add(StatusItem($"Phase: {DisplayPhase(_state.Phase)}"));
         _menu.Items.Add(StatusItem(_state.IsCompanionBusy ? "Companion: busy" : "Companion: ready"));
         using (var process = Process.GetCurrentProcess())
@@ -194,15 +193,6 @@ public sealed class TrayController : IDisposable
         _menu.Items.Add(MenuItem(
             TrayMenuState.OpenLogFolderVerb,
             (_, _) => RaiseCommand(TrayCommand.OpenLogFolder)));
-        _menu.Items.Add(MenuItem(
-            TrayMenuState.PairMyStatsVerb,
-            (_, _) => RaiseCommand(TrayCommand.PairMyStats)));
-        // Directly under the pairing item: it needs the same secret, and the
-        // "not paired yet" message names that item above by its exact string.
-        _menu.Items.Add(MenuItem(
-            TrayMenuState.SendDiagnosticsVerb,
-            (_, _) => RaiseCommand(TrayCommand.SendDiagnostics)));
-
         _menu.Items.Add(new Forms.ToolStripSeparator());
         if (!_state.IsAdjusting)
             _menu.Items.Add(MenuItem("Calibrate overlay", (_, _) => RaiseCommand(TrayCommand.Calibrate)));

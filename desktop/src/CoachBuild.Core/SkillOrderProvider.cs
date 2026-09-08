@@ -58,13 +58,9 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
 {
     public const int ErrorRetryMilliseconds = 15_000;
     public const int NoDataRetryMilliseconds = 60_000;
-    public static readonly Uri DefaultEndpoint = new(
-        "https://coachbuild.vercel.app/api/skill-order",
-        UriKind.Absolute);
-
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
-    private readonly Uri _endpoint;
+    private readonly Uri? _endpoint;
     private readonly TimeProvider _time;
     private readonly object _gate = new();
     private readonly Dictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
@@ -78,15 +74,17 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
     {
         _client = client ?? new HttpClient();
         _ownsClient = client is null;
-        _endpoint = endpoint ?? DefaultEndpoint;
+        // v2 has no hosted recommender. The native overlay still shows live
+        // ability state; an order is available only with an explicit provider.
+        _endpoint = endpoint;
         // The 15 s / 60 s failure cooldowns below are the reason the caller's
         // retry backoff has to be longer than they are. They were untestable
         // while they read the ambient clock, so nothing pinned that
         // relationship; an injectable clock makes both halves assertable.
         _time = timeProvider ?? TimeProvider.System;
-        if (!_endpoint.IsAbsoluteUri ||
+        if (_endpoint is not null && (!_endpoint.IsAbsoluteUri ||
             !string.Equals(_endpoint.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(_endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            !string.Equals(_endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException("Skill-order endpoint must be an absolute HTTP(S) URI", nameof(endpoint));
     }
 
@@ -96,6 +94,7 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
         CancellationToken ct)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(SkillOrderProvider));
+        if (_endpoint is null) return Task.FromResult(NoData(championId));
         if (championId <= 0) return Task.FromResult(NoData(championId));
         var roleId = RoleId(role);
         if (roleId is null) return Task.FromResult(NoData(championId));
@@ -198,7 +197,7 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
 
     private Uri BuildUri(int championId, int roleId)
     {
-        var separator = string.IsNullOrEmpty(_endpoint.Query) ? "?" : "&";
+        var separator = string.IsNullOrEmpty(_endpoint!.Query) ? "?" : "&";
         return new Uri(
             $"{_endpoint}{separator}champ={championId.ToString(CultureInfo.InvariantCulture)}&role={roleId.ToString(CultureInfo.InvariantCulture)}",
             UriKind.Absolute);

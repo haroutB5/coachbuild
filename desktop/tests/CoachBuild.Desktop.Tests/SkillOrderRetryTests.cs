@@ -172,7 +172,7 @@ public sealed class SkillOrderRetryTests
         // served the cached failure without touching the network.
         using var provider = new SkillOrderProvider(
             http,
-            SkillOrderProvider.DefaultEndpoint,
+            new Uri("https://fixtures.invalid/skill-order"),
             clock);
         var counting = new CountingSkillOrderProvider(provider);
 

@@ -4,6 +4,16 @@ using System.Text.Json;
 
 namespace CoachBuild.Core;
 
+/// <summary>Production v2 has no hosted rank or diagnostics collection.</summary>
+public sealed class RetiredHostedSink : IRankSampleSink, IDiagnosticsSink
+{
+    public static RetiredHostedSink Instance { get; } = new();
+    public Task<RankSamplePostResult> PostAsync(RankSampleBody body, string secret, CancellationToken cancellationToken) =>
+        Task.FromResult(RankSamplePostResult.Rejected);
+    public Task<RankSamplePostResult> PostAsync(DiagnosticsBody body, string secret, CancellationToken cancellationToken) =>
+        Task.FromResult(RankSamplePostResult.Rejected);
+}
+
 /// <summary>
 /// The single My Stats transport: one HttpClient, one timeout, one auth header
 /// spelling, one failure taxonomy, for every account-secret POST the desktop

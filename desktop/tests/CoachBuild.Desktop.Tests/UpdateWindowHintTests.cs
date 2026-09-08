@@ -48,7 +48,7 @@ public sealed class UpdateWindowHintTests
 
     [Theory]
     [InlineData("Ready")]
-    [InlineData("Companion ready")]
+    [InlineData("Draft ready")]
     [InlineData("u.gg ready")]
     [InlineData("Coachless ready")]
     [InlineData("")]

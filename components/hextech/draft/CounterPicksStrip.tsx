@@ -5,7 +5,7 @@ import type { LaneId } from "@/components/hextech/heroContracts";
 import { LANE_TO_ROLE_ID } from "@/components/hextech/heroContracts";
 import type { ChampionIconEntry } from "@/components/proAssets";
 import { IconWithFallback } from "@/components/IconWithFallback";
-import { fetchDraftCounters, type DraftCountersResponse } from "@/components/live/draftCounters";
+import type { DraftCountersParams, DraftCountersResponse } from "@/components/live/draftCounters";
 import { resolveCounterPickPool, splitCounterSuggestions, type CounterPickPoolSource } from "@/lib/lolalytics/pool";
 
 type StripState =
@@ -91,6 +91,7 @@ export default function CounterPicksStrip({
   champIcons,
   mystatsPoolChampIds,
   lcuPoolChampIds = null,
+  loadCounters,
 }: {
   /** Resolved lane-opponent champion id, or null when none is resolved. */
   enemyId: number | null;
@@ -102,6 +103,7 @@ export default function CounterPicksStrip({
   /** Companion LCU pool ids when a pool endpoint exists — preferred source
    *  (pool-provider seam, see lib/lolalytics/pool.ts). Null today. */
   lcuPoolChampIds?: number[] | null;
+  loadCounters: (params: DraftCountersParams, signal: AbortSignal) => Promise<DraftCountersResponse>;
 }) {
   const [state, setState] = useState<StripState>({ status: "loading" });
   const reqIdRef = useRef(0);
@@ -112,14 +114,16 @@ export default function CounterPicksStrip({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- loading is the existing request-state transition.
     setState({ status: "loading" });
     const controller = new AbortController();
-    fetchDraftCounters({ enemy: enemyId, lane: LANE_TO_ROLE_ID[lane] }, { fetchImpl: (url) => fetch(url, { signal: controller.signal }) }).then(
+    const params = { enemy: enemyId, lane: LANE_TO_ROLE_ID[lane] };
+    const request = loadCounters(params, controller.signal);
+    request.catch(() => null).then(
       (data) => {
-        if (reqIdRef.current !== requestId) return;
+        if (controller.signal.aborted || reqIdRef.current !== requestId) return;
         setState(data ? { status: "ok", data } : { status: "error" });
       }
     );
     return () => controller.abort();
-  }, [enemyId, lane]);
+  }, [enemyId, lane, loadCounters]);
 
   if (enemyId === null) return null;
 
@@ -160,7 +164,7 @@ export default function CounterPicksStrip({
 
       {state.status === "error" && (
         <p className="mt-2 text-[11.5px] leading-[1.45] text-txt/[0.5]">
-          Counter picks are unavailable right now (lolalytics didn&apos;t answer) — the matchup ranking above is unaffected.
+          Counter picks are unavailable right now. Lolalytics could not be fetched or its page format changed.
         </p>
       )}
 
