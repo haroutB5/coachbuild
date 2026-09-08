@@ -1,5 +1,25 @@
 # Changelog
 
+## Desktop 1.2.1 — update checks at idle moments + a staged-update hint (2026-09-08)
+
+The updater still checks every 2 hours, but no longer waits for the tick when
+an idle moment already arrived:
+
+- **Event-driven checks with a 10-minute cooldown.** Game end (a phase move
+  out of InProgress/Reconnect into anything not restart-forbidden), companion
+  window close, and resume from sleep each request a check through the same
+  semaphore the loop uses; a check that ran within the last 10 minutes makes
+  the request a no-op. The when-decision is the pure `OpportunisticCheckPolicy`
+  (trigger + last-check timestamp), so the schedule is unit-tested without a
+  clock. Nothing about the busy gates changed: a check may download mid-game,
+  but the restart still waits for ChampSelect/InProgress/Matchmaking/
+  ReadyCheck/Reconnect to clear.
+- **A quiet staged-update hint in the window.** While a release sits deferred
+  behind the open window, the status line reads `Update {version} ready -
+  restart from the tray to apply`. Site messages (import results, popup
+  notices) always win the slot; the hint only paints onto idle text and clears
+  the moment the model leaves Staged/DeferredBusy. No toast, no focus steal.
+
 ## Desktop 1.2.0 — import a build page into the client (2026-09-08)
 
 The research tabs grow a gold **Import build** button in the offer bar, next to

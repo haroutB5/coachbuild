@@ -67,6 +67,7 @@ public sealed class VelopackUpdateService : IAsyncDisposable
     private int _busy;
     private bool _restartRequested;
     private string? _lastDeferralLogged;
+    private DateTimeOffset? _lastCheckAt;
     private UpdateTrayModel _model = UpdateTrayModel.None;
 
     public VelopackUpdateService(
@@ -97,6 +98,14 @@ public sealed class VelopackUpdateService : IAsyncDisposable
     public bool IsBusy => Volatile.Read(ref _busy) != 0;
 
     public AvailableUpdate? PendingUpdate => _pending;
+
+    /// <summary>
+    /// When the last check attempt started, or null before the first one.
+    /// Advancing this is what arms <see cref="OpportunisticCheckPolicy"/>'s
+    /// cooldown; it is read on the requesting thread and written under the
+    /// operation semaphore, so a stale read can only cause one extra check.
+    /// </summary>
+    public DateTimeOffset? LastCheckAt => _lastCheckAt;
 
     /// <summary>Exposed for tests; production drives this from <see cref="StartAsync"/>.</summary>
     public Task? LoopTask => _loop;
@@ -175,6 +184,7 @@ public sealed class VelopackUpdateService : IAsyncDisposable
                 return;
             }
 
+            _lastCheckAt = _time.GetUtcNow();
             var current = SafeCurrentVersion();
             Log($"update: checking {UpdateBootstrapper.ReleaseMetadataUrl} (installed {current ?? "unknown"})");
             SetModel(UpdateTrayModel.For(UpdateStatus.Checking));
@@ -210,6 +220,27 @@ public sealed class VelopackUpdateService : IAsyncDisposable
         {
             _operation.Release();
         }
+    }
+
+    /// <summary>
+    /// A check requested by an idle moment (game end, window close, resume
+    /// from sleep) rather than the 2-hour loop. A no-op when a check ran
+    /// within <see cref="OpportunisticCheckPolicy.Cooldown"/>; otherwise this
+    /// is <see cref="CheckNowAsync"/>, semaphore and all — concurrent triggers
+    /// queue behind the running operation instead of overlapping it. The
+    /// cooldown read and the check itself are not atomic, so two triggers
+    /// racing each other can both proceed; the cost is one extra feed hit.
+    /// </summary>
+    public Task RequestOpportunisticCheckAsync(
+        OpportunisticCheckTrigger trigger,
+        CancellationToken cancellationToken = default)
+    {
+        if (!OpportunisticCheckPolicy.ShouldCheck(trigger, _time.GetUtcNow(), _lastCheckAt))
+        {
+            return Task.CompletedTask;
+        }
+
+        return CheckNowAsync(cancellationToken);
     }
 
     /// <summary>

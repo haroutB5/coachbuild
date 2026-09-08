@@ -48,6 +48,10 @@ PowerShell companion while the staged native rollout proves parity.
   and offers a retry.
 - **Updates:** Velopack checks/downloads in the background, defers application
   while the companion is busy, then applies and relaunches when the gate clears.
+  The 2-hour loop is the fallback: game end, companion window close, and resume
+  from sleep each request an opportunistic check (no-op if a check ran within
+  the last 10 minutes). A release staged behind the open window shows a quiet
+  one-line hint in the window's status bar; site messages always win that slot.
 
 ## Files and persistent paths
 

@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Threading;
 using System.Text.Json;
+using Microsoft.Win32;
 using CoachBuild.Core;
 using CoachBuild.Desktop.Diagnostics;
 using CoachBuild.Desktop.Overlay;
@@ -344,6 +345,9 @@ public partial class App : WpfApplication
             diagnostics: message => _log?.Info(message),
             feedUrl: Options.Feed);
         _updates.StatusChanged += OnUpdateStatusChanged;
+        // A laptop asleep past the 2-hour tick misses releases entirely, so a
+        // resume is an idle moment worth checking at. Unsubscribed in OnExit.
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
         _ = _updates.StartAsync(_shutdown.Token);
         if (_services is IDesktopHostLifecycle lifecycle)
             _ = Task.Run(() => lifecycle.StartAsync(_shutdown.Token));
@@ -530,6 +534,7 @@ public partial class App : WpfApplication
         UserNotificationState? shellState = null)
     {
         var phase = TrayMenuState.ParsePhase(snapshot.Phase);
+        var previousPhase = _trayState.Phase;
         LogPollLiveness(snapshot.Phase);
         Volatile.Write(ref _snapshotBusy, snapshot.IsCompanionBusy ? 1 : 0);
         Volatile.Write(ref _phaseBusy, IsBusyPhase(phase) ? 1 : 0);
@@ -566,6 +571,18 @@ public partial class App : WpfApplication
                 Volatile.Read(ref _webViewUserOpened) != 0) == CompanionWindowAction.CloseForGame)
         {
             CloseCompanionWindowForGame();
+        }
+
+        // Post-game is the natural idle window: the busy gate just cleared
+        // and the player is reading stats, not playing. Fire-and-forget off
+        // the dispatcher; the service's semaphore serialises with any running
+        // check and the 10-minute cooldown absorbs phase blips.
+        if (OpportunisticCheckPolicy.IsGameEndTransition(previousPhase, phase))
+        {
+            _log?.Info($"update: game ended ({previousPhase} -> {phase}); checking for a release now");
+            var updates = _updates;
+            if (updates is not null)
+                _ = Task.Run(() => updates.RequestOpportunisticCheckAsync(OpportunisticCheckTrigger.GameEnd));
         }
 
         if (snapshot.Overlay is not null)
@@ -646,6 +663,9 @@ public partial class App : WpfApplication
             _trayState = _trayState with { Update = model };
             _tray?.UpdateState(_trayState);
             AnnounceUpdate(model);
+            // The staged-update hint lives in the window's own status line;
+            // the window decides whether the slot is idle enough to show it.
+            _webView?.UpdateStagedUpdateHint(model);
         }, DispatcherPriority.Background);
     }
 
@@ -662,6 +682,20 @@ public partial class App : WpfApplication
         _tray?.ShowBalloon(
             $"CoachBuild {model.Version} is ready",
             "Right-click the tray icon and choose “Restart to update”, or close this window and it will apply on its own.");
+    }
+
+    /// <summary>
+    /// A resume may have slept straight past the 2-hour tick. The cooldown
+    /// keeps a flapping power state to one check per 10 minutes; the service
+    /// owns the rest.
+    /// </summary>
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (_isShuttingDown || e.Mode != PowerModes.Resume) return;
+        _log?.Info("update: system resumed from sleep; checking for releases missed while asleep");
+        var updates = _updates;
+        if (updates is not null)
+            _ = Task.Run(() => updates.RequestOpportunisticCheckAsync(OpportunisticCheckTrigger.SystemResume));
     }
 
     /// <summary>
@@ -992,6 +1026,7 @@ public partial class App : WpfApplication
 
     private void OnWebViewClosed(object? sender, EventArgs e)
     {
+        var wasVisible = Volatile.Read(ref _webViewVisible) != 0;
         Volatile.Write(ref _webViewVisible, 0);
         Volatile.Write(ref _webViewUserOpened, 0);
         if (sender is WebView2Window closed && ReferenceEquals(_webView, closed))
@@ -1011,6 +1046,10 @@ public partial class App : WpfApplication
         // notice; ask explicitly rather than wait for the next loop tick.
         var updates = _updates;
         if (updates is not null) _ = Task.Run(() => updates.RetryPendingApplyAsync());
+        // Closing is also an idle moment worth checking at: the last check
+        // may be up to 2 hours old and the cooldown keeps this to one hit.
+        if (OpportunisticCheckPolicy.IsWindowCloseTransition(wasVisible, isVisible: false) && updates is not null)
+            _ = Task.Run(() => updates.RequestOpportunisticCheckAsync(OpportunisticCheckTrigger.WindowClosed));
     }
 
     private bool IsUpdateBusyForService()
@@ -1312,6 +1351,7 @@ public partial class App : WpfApplication
 
         _isShuttingDown = true;
         _shutdown.Cancel();
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
 
         // Close UI resources synchronously before waiting on background work.
         // This prevents a canceled dispatcher task from leaving a ghost tray

@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using CoachBuild.Desktop.Tray;
+using CoachBuild.Desktop.Updates;
 
 namespace CoachBuild.Desktop.Web;
 
@@ -64,6 +65,8 @@ public partial class WebView2Window : Window
     private readonly ISiteImportHost? _siteImport;
     private bool _lcuConnected;
     private bool _importRunning;
+    private string? _activeUpdateHint;
+    private string? _paintedUpdateHint;
     private ReopenTarget _lastTarget = new(ReopenDestination.Home);
     private CompanionTab _activeTab = CompanionTab.Companion;
     private bool _hasActiveTab;
@@ -285,6 +288,49 @@ public partial class WebView2Window : Window
 
         _lcuConnected = lcuConnected;
         UpdateOfferBar();
+    }
+
+    /// <summary>
+    /// Receives the update service's staged-release projection for the status
+    /// line. Like the champ-select context above this only redraws chrome: it
+    /// paints the hint when the slot is idle, leaves a site message exactly
+    /// as it is, and clears only its own paint.
+    /// </summary>
+    public void UpdateStagedUpdateHint(UpdateTrayModel? model)
+    {
+        if (_disposed) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(
+                new Action(() => UpdateStagedUpdateHint(model)),
+                System.Windows.Threading.DispatcherPriority.Background);
+            return;
+        }
+
+        _activeUpdateHint = UpdateWindowHint.For(model);
+        RefreshUpdateHint();
+    }
+
+    /// <summary>
+    /// The slot shapes the hint may land on without fighting the site tabs:
+    /// the initial text, a navigation-idle line, an empty slot, or the hint's
+    /// own paint (a version bump repaints over itself). Pure so the sharing
+    /// rule is assertable without a window.
+    /// </summary>
+    internal static bool IsIdleStatusSlot(string? statusText, string? paintedHint)
+    {
+        if (!string.IsNullOrEmpty(paintedHint)
+            && string.Equals(statusText, paintedHint, StringComparison.Ordinal))
+            return true;
+        if (string.IsNullOrEmpty(statusText)) return true;
+        if (string.Equals(statusText, "Ready", StringComparison.Ordinal)) return true;
+        foreach (var tab in CompanionTabs.Order)
+        {
+            if (string.Equals(statusText, $"{CompanionTabs.LabelFor(tab)} ready", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     public void GoBack()
@@ -553,7 +599,16 @@ public partial class WebView2Window : Window
             if (IsActiveTab(state))
             {
                 HideFallbackAndError();
-                StatusText.Text = $"{CompanionTabs.LabelFor(state.Tab)} ready";
+                if (_activeUpdateHint is not null)
+                {
+                    StatusText.Text = _activeUpdateHint;
+                    _paintedUpdateHint = _activeUpdateHint;
+                }
+                else
+                {
+                    StatusText.Text = $"{CompanionTabs.LabelFor(state.Tab)} ready";
+                    _paintedUpdateHint = null;
+                }
                 if (state.Core is not null)
                     state.Browser.ZoomFactor = _preferences.ZoomFor(state.Tab);
                 UpdateChrome();
@@ -1193,6 +1248,36 @@ public partial class WebView2Window : Window
     {
         StatusText.Text = message;
     }
+
+    /// <summary>
+    /// Paints or clears the staged-update hint without fighting the site
+    /// tabs: the hint only ever lands on an idle slot, and clearing only ever
+    /// removes the hint's own paint. A site message in the slot is left
+    /// exactly as it is — it wins by staying.
+    /// </summary>
+    private void RefreshUpdateHint()
+    {
+        if (_disposed || !Dispatcher.CheckAccess()) return;
+        if (_activeUpdateHint is not null)
+        {
+            if (IsIdleStatusSlot(StatusText.Text, _paintedUpdateHint))
+            {
+                StatusText.Text = _activeUpdateHint;
+                _paintedUpdateHint = _activeUpdateHint;
+            }
+
+            return;
+        }
+
+        if (_paintedUpdateHint is not null
+            && string.Equals(StatusText.Text, _paintedUpdateHint, StringComparison.Ordinal))
+        {
+            StatusText.Text = IdleStatusText();
+            _paintedUpdateHint = null;
+        }
+    }
+
+    private string IdleStatusText() => $"{CompanionTabs.LabelFor(ActiveTab)} ready";
 
     private static string DisplayUrl(string? source)
     {
