@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.130.0 -- lolalytics counter picks in Draft Assistant (2026-09-08)
+
+- `/draft` now shows a **Counter picks** strip as soon as an enemy pick or
+  hover is visible, switching to the resolved lane opponent when one is
+  available. Suggestions are the champions that beat that enemy in the
+  selected lane, with matchup win rate, delta and games, labelled with the
+  lolalytics tier and patch.
+- Suggestions from the user's champion pool appear first, followed by the
+  overall list. The provider seam prefers companion/LCU pool ids when that
+  bridge data is available and uses My Stats only as the current fallback.
+  Rows below 500 games and rows that do not actually beat the enemy are not
+  suggested.
+- `GET /api/draft/counters` fetches the selected enemy's own lolalytics SSR
+  counters page with a normal user agent and caches each successful
+  enemy+lane+Emerald+ tier+patch parse for 24 hours in the existing Vercel
+  runtime cache (`lola:counters:v1:*`); no matchup matrix or Neon table is
+  created. Page-shape and direction failures return typed 502 reasons and are
+  never cached as empty data.
+- Parser, direction flip, sample gate, pool precedence/intersection and route
+  cache behavior are fixture/unit tested. The fixture is a four-card extract
+  from the captured Viktor middle Emerald+ 16.17 SSR page.
+
 ## Desktop 1.3.0 — auto item import from both sites + runes-only button (2026-09-08)
 
 Item sets now import themselves; the offer-bar button keeps only the runes:

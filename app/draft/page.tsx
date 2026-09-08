@@ -47,6 +47,7 @@ import DraftCompBars from "@/components/hextech/DraftCompBars";
 import DraftPicksTable from "@/components/hextech/DraftPicksTable";
 import DraftControls from "@/components/hextech/draft/DraftControls";
 import DraftLockInCard from "@/components/hextech/draft/DraftLockInCard";
+import CounterPicksStrip from "@/components/hextech/draft/CounterPicksStrip";
 import DraftMatchupGrid from "@/components/hextech/draft/DraftMatchupGrid";
 import DraftRecommendation from "@/components/hextech/draft/DraftRecommendation";
 import { preserveOriginalDraftRanks } from "@/components/hextech/draft/draftRanking";
@@ -554,6 +555,11 @@ export default function DraftPage() {
   const serverInferredLaneOpponentId = state.status === "ok" ? state.data.meta.laneOppInferred : null;
   const effectiveLaneOpponentId = laneOpponentId ?? serverInferredLaneOpponentId;
   const laneOpponentName = effectiveLaneOpponentId === null ? null : championEntry(champIcons, effectiveLaneOpponentId).name;
+  // Counter suggestions can start as soon as any enemy pick/hover is
+  // visible. A resolved direct lane opponent wins; until then, use the first
+  // stable enemy chip rather than hiding the feature altogether.
+  const counterEnemyId = effectiveLaneOpponentId ?? enemyIds[0] ?? null;
+  const counterEnemyName = counterEnemyId === null ? null : championEntry(champIcons, counterEnemyId).name;
 
   const basePlays: DraftPlayResult[] = state.status === "ok" ? state.data.plays : [];
   const basePotentialPlays: DraftPlayResult[] = state.status === "ok" ? state.data.potentialPlays : [];
@@ -906,6 +912,13 @@ export default function DraftPage() {
               <DraftCompBars enemyIds={enemyIds} />
             </div>
             <DraftMatchupGrid candidates={matchupRows} enemyIds={enemyIds} champIcons={champIcons} previews={matchupPreviewMap} />
+            <CounterPicksStrip
+              enemyId={counterEnemyId}
+              enemyName={counterEnemyName}
+              lane={lane}
+              champIcons={champIcons}
+              mystatsPoolChampIds={Array.from(personalPoolMap.keys())}
+            />
             <DraftLockInCard />
           </aside>
         </div>
