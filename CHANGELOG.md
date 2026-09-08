@@ -1,5 +1,34 @@
 # Changelog
 
+## Desktop 1.2.0 — import a build page into the client (2026-09-08)
+
+The research tabs grow a gold **Import build** button in the offer bar, next to
+the champ-select site chips (demoted to secondary styling):
+
+- **One click, one read.** Clicking Import runs a single read-only extractor
+  script against the site tab you are viewing — u.gg champion build pages
+  (`u.gg/lol/champions/{slug}/build/{role}`) yield runes plus the recommended
+  item sections; the Coachless builds overview (`coachless.gg/builds/{slug}`)
+  yields its per-slot top picks. The button enables only on a build-page URL
+  while the League client is connected, and its tooltip states the reason when
+  it does not. The status line reports `Imported runes + N-item set for Jhin
+  (ADC) from u.gg`, or the exact typed failure.
+- **Validated before anything is written.** Scraped perk ids are checked
+  against the ddragon-derived perk catalog (including the fourth Sorcery
+  keystone the web snapshot predates) and the current shard rows; wrong or
+  partial data reports precisely and writes nothing — no partial rune page.
+  Both writes reuse the existing services and the shared
+  `CoachBuild import: {Champion} {Role} ({site})` title, so re-importing edits
+  the same page and item set.
+- **Scope is structural, not promised.** Site-tab script execution is reachable
+  only from the import click handler (plus the hosted page's version-meta
+  read); the champ-select offer path still cannot navigate; no timer or event
+  may scrape. `SiteTabComplianceTests` fails the build if a third script call
+  appears. Known limitation, stated on the button's behalf: Coachless renders
+  no full rune page on its overview, so importing from there reports "the page
+  yielded no rune build to import" until a rune-bearing page shape is proven
+  with a fixture.
+
 ## Desktop 1.1.1 — closing and loading states stay quiet (2026-09-08)
 
 The companion window now handles a few edge states more cleanly:

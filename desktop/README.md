@@ -28,11 +28,17 @@ PowerShell companion while the staged native rollout proves parity.
   by default. It becomes keyboard-interactive only for calibration/adjustment.
   Calibration is stored by monitor resolution and DPI.
 - **WebView2:** one owned window with three tabs — Companion, u.gg, Coachless
-  (1.1.1). The Companion tab navigates between `/draft` and canonical Builds
+  (1.2.0). The Companion tab navigates between `/draft` and canonical Builds
   URLs and is same-origin only; it is the only tab carrying the session token
-  and the only one whose document is ever scripted (the version meta tag).
-  Site tabs are **rendering only** — no scraping, no DOM reads, no automated
-  navigation — and are restricted to https. Each tab's WebView2 is created on
+  and the only one whose document is ever scripted unprompted (the version meta
+  tag). Site tabs are **rendering only** — no scraping, no DOM reads, no
+  automated navigation — with exactly one user-initiated exception: the gold
+  **Import build** button in the offer bar reads the rune build and item set
+  off the build page you are viewing (u.gg) or its per-slot top picks
+  (Coachless overview), validates them against the local perk/shard catalogs,
+  and writes a rune page + item set via the existing LCU services — once per
+  click, only on a build-page URL while the client is connected. Site tabs are
+  restricted to https. Each tab's WebView2 is created on
   first visit and gets its own profile directory under `WebView2/`, so cookies
   and site preferences persist without sharing storage with the hosted app.
   A native host remains hidden until its browser is ready, and callbacks arriving
