@@ -486,8 +486,23 @@ public sealed class UpdateDeliveryTests
     [Fact]
     public void The_shipped_intervals_check_on_launch_and_keep_checking()
     {
-        Assert.Equal(TimeSpan.FromHours(2), VelopackUpdateService.DefaultCheckInterval);
+        Assert.Equal(TimeSpan.FromMinutes(5), VelopackUpdateService.DefaultCheckInterval);
         Assert.Equal(TimeSpan.FromSeconds(60), VelopackUpdateService.DefaultApplyRetryInterval);
+    }
+
+    [Fact]
+    public async Task Production_defaults_apply_automatically_after_busy_context_clears()
+    {
+        var client = new FakeUpdateClient("2.2.4", "2.2.5");
+        var busy = true;
+        await using var service = new VelopackUpdateService(client, isCompanionBusy: () => busy);
+        await service.CheckNowAsync();
+        Assert.Equal(1, client.DownloadCount);
+        Assert.Equal(0, client.ApplyCount);
+        busy = false;
+        await service.SetCompanionBusyAsync(false);
+        Assert.Equal(1, client.ApplyCount);
+        Assert.Equal(new[] { "check", "download", "apply" }, client.Calls);
     }
 
     // -------------------------------------------------------------- tray model

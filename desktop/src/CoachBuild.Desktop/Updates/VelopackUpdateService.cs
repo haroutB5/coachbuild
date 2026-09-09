@@ -49,7 +49,7 @@ public enum UpdateLoopAction
 /// </summary>
 public sealed class VelopackUpdateService : IAsyncDisposable
 {
-    public static readonly TimeSpan DefaultCheckInterval = TimeSpan.FromHours(2);
+    public static readonly TimeSpan DefaultCheckInterval = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan DefaultApplyRetryInterval = TimeSpan.FromSeconds(60);
 
     private readonly IUpdateClient _client;

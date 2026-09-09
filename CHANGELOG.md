@@ -1,5 +1,14 @@
 # Changelog
 
+## Desktop 2.2.5 (2026-09-09)
+
+- Automatic updates no longer wait indefinitely for the Research window to
+  close. A downloaded update applies and restarts automatically when no game
+  phase or client write is busy, even if the window is open.
+- Background release checks run every five minutes instead of every two
+  hours. Matchmaking, ready check, champion select, in-game and reconnect
+  protection remains; deferred updates resume when the busy context clears.
+
 ## Desktop 2.2.4 (2026-09-09)
 
 - Draft now uses u.gg's Best Lane Counters (top 15 by GD15) and Worst Picks

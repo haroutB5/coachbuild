@@ -340,7 +340,6 @@ public partial class App : WpfApplication
         _ = ProbeWebView2AvailabilityAsync(_shutdown.Token);
         _updates = new VelopackUpdateService(
             isCompanionBusy: IsUpdateBusyForService,
-            isRestartDisruptive: IsRestartDisruptive,
             diagnostics: message => _log?.Info(message),
             feedUrl: Options.Feed);
         _updates.StatusChanged += OnUpdateStatusChanged;
@@ -976,23 +975,13 @@ public partial class App : WpfApplication
     /// window is opened on every non-autostart launch, so including it made the
     /// app permanently ineligible to apply its own update, and whether an
     /// update landed came down to a race between the download and WebView2's
-    /// window creation. It is now a separate, softer gate
-    /// (<see cref="IsRestartDisruptive"/>) that offers the restart instead of
-    /// silently swallowing it.
+    /// window creation. Window visibility does not defer automatic updates:
+    /// only active game phases and client writes hold the restart.
     /// </summary>
     private bool IsUpdateBusyContext()
     {
         return Volatile.Read(ref _snapshotBusy) != 0
             || Volatile.Read(ref _phaseBusy) != 0;
-    }
-
-    /// <summary>
-    /// The user is looking at the CoachBuild window. Not a reason to refuse an
-    /// update forever, only a reason not to yank the window away unasked.
-    /// </summary>
-    private bool IsRestartDisruptive()
-    {
-        return Volatile.Read(ref _webViewVisible) != 0;
     }
 
     private void SetUpdateBusy(bool busy)
