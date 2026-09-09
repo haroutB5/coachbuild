@@ -471,6 +471,35 @@ check('coachless nasus reads every slot including Starter',
   (clNasusRead.itemBlocks || []).length === 6 &&
   (clNasusRead.itemBlocks || []).some((b) => b.title === 'Starter' && b.itemIds.length > 0),
   JSON.stringify(clNasusRead).slice(0, 300));
+const clNasusTitles = (clNasusRead.itemBlocks || []).map((b) => b.title);
+check('coachless item blocks put Boots immediately after 1st Item',
+  JSON.stringify(clNasusTitles) === JSON.stringify(['Starter', '1st Item', 'Boots', '2nd Item', '3rd Item', '4th+ Item']),
+  JSON.stringify(clNasusTitles));
+
+// A duplicate top row must not make the same item occupy two slots. Mutate
+// only the 1st Item table's top icon to the Starter id; the extractor should
+// scan its rows in WPA order and use the next candidate instead.
+function replaceFirstItemIcon(html, title, itemId) {
+  const marker = `class="entry-name title">${title}</th>`;
+  const at = html.indexOf(marker);
+  if (at < 0) throw new Error('fixture has no ' + title + ' header');
+  const start = html.lastIndexOf('<table', at);
+  const end = html.indexOf('</table>', at);
+  if (start < 0 || end < 0) throw new Error('could not bound the ' + title + ' table');
+  const before = html.slice(0, start);
+  const table = html.slice(start, end).replace(/\/img\/item\/\d+/, `/img/item/${itemId}`);
+  return before + table + html.slice(end);
+}
+const clDuplicateTop = replaceFirstItemIcon(clNasusHtml, '1st Item', 1120);
+const clDuplicateRead = runOnDocument(clItemsJs, makeDocument(clDuplicateTop), clNasusUrl);
+const clDuplicateBlocks = clDuplicateRead.itemBlocks || [];
+const clDuplicateIds = clDuplicateBlocks.flatMap((b) => b.itemIds);
+check('coachless duplicate top item falls through to the next WPA row',
+  clDuplicateBlocks.find((b) => b.title === '1st Item')?.itemIds?.[0] !== 1120,
+  JSON.stringify(clDuplicateBlocks));
+check('coachless item blocks contain no repeated item ids',
+  new Set(clDuplicateIds).size === clDuplicateIds.length,
+  JSON.stringify(clDuplicateBlocks));
 
 // THE ACTUAL FIX. Strip the Starter table's item icons -- the live shape that
 // produced 'slot "Starter" yielded no items'. Before the fix this discarded ALL
@@ -572,6 +601,27 @@ check('runes shard ids are the top-WPA pick per row',
 check('empty cards are skipped rather than read as zero',
   runes.runes && !runes.runes.perkIds.includes(8463) && !runes.runes.perkIds.includes(8465),
   runes.runes && JSON.stringify(runes.runes.perkIds));
+
+// A dark low-occurrence card can carry a tempting WPA. Promote a known
+// low-occurrence keystone in the fixture without changing its explicit
+// is-low-occurrence class; the light card must still win. This guards the
+// class filter, not just the source text.
+function promoteLowOccurrenceCard(html, runeName) {
+  const icon = `/${runeName}/`;
+  const at = html.indexOf(icon);
+  if (at < 0) throw new Error('fixture has no ' + runeName + ' icon');
+  const start = html.lastIndexOf('<cl-rune-card', at);
+  const end = html.indexOf('</cl-rune-card>', at);
+  if (start < 0 || end < 0) throw new Error('could not bound the ' + runeName + ' card');
+  const before = html.slice(0, start);
+  const card = html.slice(start, end).replace(/(<div[^>]*class="rune-delta"[^>]*>.*?<span[^>]*>)[^<]+/s, '$1+99.99');
+  return before + card + html.slice(end);
+}
+const runesDarkPromoted = promoteLowOccurrenceCard(runesHtml, 'PressTheAttack');
+const runesDarkRead = runExtractor(runesJs, runesDarkPromoted, runesUrl);
+check('low-occurrence rune with a higher WPA is still ignored',
+  runesDarkRead.runes && runesDarkRead.runes.perkIds[0] === runes.runes.perkIds[0],
+  JSON.stringify(runesDarkRead.runes));
 
 // Typed failures, per missing part, never a guessed page.
 const runesWrongUrl = runExtractor(runesJs, runesHtml, 'https://coachless.gg/builds/nasus?role=top');

@@ -51,8 +51,37 @@ public sealed class SiteImportExtractorTests
         Assert.Contains("entry-name", SiteImportExtractors.CoachlessItemsTemplate, StringComparison.Ordinal);
         // Escaped in the JS regex literal (\/img\/item\/(\d+)\.): the item-id anchor.
         Assert.Contains("\\/img\\/item\\/", SiteImportExtractors.CoachlessItemsTemplate, StringComparison.Ordinal);
+        Assert.Contains("usedItemIds", SiteImportExtractors.CoachlessItemsTemplate, StringComparison.Ordinal);
         Assert.Contains("cl-role-selection", SiteImportExtractors.CoachlessItemsTemplate, StringComparison.Ordinal);
         Assert.Contains("'active'", SiteImportExtractors.CoachlessItemsTemplate, StringComparison.Ordinal);
+
+        Assert.Contains("is-low-occurrence", SiteImportExtractors.CoachlessRunesTemplate, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Coachless_items_keep_wpa_order_but_skip_duplicates_and_place_boots_after_first_item()
+    {
+        var read = SiteImportExtractors.CoachlessItemsTemplate;
+
+        Assert.Contains("var SLOT_ORDER = ['Starter', '1st Item', 'Boots', '2nd Item', '3rd Item', '4th+ Item'];", read, StringComparison.Ordinal);
+        Assert.Contains("usedItemIds.indexOf(candidateIds[ci]) >= 0", read, StringComparison.Ordinal);
+        Assert.Contains("if (!candidateIds.length || duplicate) continue;", read, StringComparison.Ordinal);
+        // The first non-duplicate row is selected, preserving Coachless's
+        // existing top-WPA ordering while avoiding repeated item ids.
+        Assert.Contains("row = cand[c];", read, StringComparison.Ordinal);
+        Assert.Contains("for (var used = 0; used < ids.length; used++) usedItemIds.push(ids[used]);", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Coachless_runes_ignore_dark_low_occurrence_cards_before_wpa_ranking()
+    {
+        var read = SiteImportExtractors.CoachlessRunesTemplate;
+
+        Assert.Contains("if (hasClass(cards[i], 'is-low-occurrence')) continue;", read, StringComparison.Ordinal);
+        Assert.Contains("best = { id: id, delta: delta }", read, StringComparison.Ordinal);
+        // Secondary rows are still ranked by WPA, but only after each row's
+        // low-occurrence candidates have been removed.
+        Assert.Contains("ranked.sort(function (a, b) { return b.delta - a.delta || a.row - b.row; });", read, StringComparison.Ordinal);
     }
 
     /// <summary>

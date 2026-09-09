@@ -416,11 +416,16 @@ public static class SiteImportExtractors
     /// Coachless items extractor, for the champion builds overview
     /// (<c>coachless.gg/builds/{slug}?role={role}</c>).
     ///
-    /// <para>The page sorts each slot table by WPA. Per the 2.2.0 field
-    /// decision, this performs exactly one read of the initial page and takes
-    /// the first <c>tr.data-row</c> from Starter, 1st, 2nd, 3rd, 4th+ and
-    /// Boots. It dispatches no clicks and waits for no recomputation. That is
-    /// intentionally the unconditioned top-WPA row per slot.</para>
+    /// <para>The page sorts each slot table by WPA. This performs exactly one
+    /// read of the initial page and takes the first <c>tr.data-row</c> from
+    /// Starter, 1st, Boots, 2nd, 3rd and 4th+ in that exported order. It
+    /// dispatches no clicks and waits for no recomputation. If the top-WPA
+    /// row repeats an item already emitted by an earlier slot, the next row
+    /// is scanned until a non-duplicate item is found.</para>
+    ///
+    /// <para>Boots are intentionally exported immediately after the first
+    /// item. The page renders the Boots table later, but the client build
+    /// should put boots after slot 1.</para>
     ///
     /// <para>AN EMPTY SLOT DEGRADES, IT DOES NOT ABORT (2.1.0). Field log
     /// 2026-09-08, Nasus top, on a run where the consent wall HAD been
@@ -565,9 +570,10 @@ public static class SiteImportExtractors
             else
               notes.push('coachless: the URL carried no role and the page rendered no active role');
           }
-            var SLOT_ORDER = ['Starter', '1st Item', '2nd Item', '3rd Item', '4th+ Item', 'Boots'];
+            var SLOT_ORDER = ['Starter', '1st Item', 'Boots', '2nd Item', '3rd Item', '4th+ Item'];
             var looked = slotTables();
             var blocks = [];
+            var usedItemIds = [];
             for (var b = 0; b < SLOT_ORDER.length; b++) {
               var entry = null;
               for (var e = 0; e < looked.length; e++) {
@@ -590,24 +596,46 @@ public static class SiteImportExtractors
                 notes.push('coachless: slot "' + SLOT_ORDER[b] + '" has no rows -- omitted');
                 continue;
               }
-              var row = cand[0];
-              var ids = itemIds(row);
-              if (!ids.length) {
-                // Name what the row DID carry, so the next live pass does not
-                // need another capture to tell "no icon at all" apart from
-                // "icons the page hid itself" (its own onerror handler).
-                var all = row.getElementsByTagName('img');
+              var row = null;
+              var ids = [];
+              // Rows are already ordered by WPA. Keep that order, but skip a
+              // row whose item was emitted by an earlier slot. This is a
+              // Coachless-only constraint: one item must not occupy multiple
+              // item-set slots merely because the site ranks it highly.
+              for (var c = 0; c < cand.length; c++) {
+                var candidateIds = itemIds(cand[c]);
+                var duplicate = false;
+                for (var ci = 0; ci < candidateIds.length; ci++) {
+                  if (usedItemIds.indexOf(candidateIds[ci]) >= 0) {
+                    duplicate = true;
+                    break;
+                  }
+                }
+                if (!candidateIds.length || duplicate) continue;
+                row = cand[c];
+                ids = candidateIds;
+                break;
+              }
+              if (!row || !ids.length) {
+                // Name what the rows DID carry, so the next live pass does
+                // not need another capture to tell "no icon at all" apart
+                // from "icons the page hid itself" (its own onerror
+                // handler), or an all-duplicate slot.
                 var hidden = 0;
                 var itemish = 0;
-                for (var v = 0; v < all.length; v++) {
-                  if (all[v].style && all[v].style.display === 'none') hidden++;
-                  if (String(all[v].getAttribute('src') || '').indexOf('/img/item/') >= 0) itemish++;
+                for (var ci2 = 0; ci2 < cand.length; ci2++) {
+                  var all = cand[ci2].getElementsByTagName('img');
+                  for (var v = 0; v < all.length; v++) {
+                    if (all[v].style && all[v].style.display === 'none') hidden++;
+                    if (String(all[v].getAttribute('src') || '').indexOf('/img/item/') >= 0) itemish++;
+                  }
                 }
                 notes.push('coachless: slot "' + SLOT_ORDER[b] + '" yielded no items -- omitted (' +
-                  cand.length + ' rows, top row has ' + all.length +
-                  ' img, ' + itemish + ' item-icon, ' + hidden + ' hidden)');
+                  cand.length + ' rows, candidates have ' + itemish +
+                  ' item-icon, ' + hidden + ' hidden)');
                 continue;
               }
+              for (var used = 0; used < ids.length; used++) usedItemIds.push(ids[used]);
               blocks.push({ title: SLOT_ORDER[b], itemIds: ids });
             }
             // Deliberately NOT the words "no build": preserve the per-slot
@@ -680,12 +708,14 @@ public static class SiteImportExtractors
     /// <c>.rune-matchcount</c>. Cards the site has no data for render
     /// <c>is-empty</c> with a literal <c>-.--</c> delta and are skipped.</para>
     ///
-    /// <para>THE PICK, per the client's own rune rules: the top-WPA keystone;
-    /// the top-WPA rune of each of the three primary rows; for the secondary
-    /// tree the top rune of each row, then the best TWO of those three rows
-    /// (the client takes two secondaries from two different rows); and the
-    /// top shard of each of the three shard rows. Ties keep the earlier card,
-    /// which is the site's own order.</para>
+    /// <para>THE PICK: Coachless marks low-sample cards with
+    /// <c>is-low-occurrence</c>. Exclude those dark cards first, then take the
+    /// top-WPA keystone, the top-WPA rune of each of the three primary rows,
+    /// the top-WPA rune in each secondary row and the best TWO secondary rows
+    /// (the client takes two secondaries from two different rows), and the
+    /// top-WPA shard of each shard row. Ties keep the earlier card, which is
+    /// the site's own order. This keeps high-sample/light choices such as
+    /// Galio's Celerity instead of a higher-WPA low-sample alternative.</para>
     ///
     /// <para>PARTIAL IS A TYPED FAILURE, NOT A GUESS. A full rune page is all
     /// or nothing at the client, so any missing part — an unreadable tree, a
@@ -807,11 +837,16 @@ public static class SiteImportExtractors
             var value = parseFloat(m[1]);
             return isFinite(value) ? value : null;
           }
-          // Top WPA of one row. Returns { id, delta } or null when no card in
-          // the row carries both a readable id and a reading.
+          // Top WPA of one row after removing low-occurrence cards. Returns
+          // { id, delta } or null when no eligible card carries both a
+          // readable id and a reading.
           function bestOf(cards, iconTag, resolveId) {
             var best = null;
             for (var i = 0; i < cards.length; i++) {
+              // The light cards are the site's high-sample choices. A dark
+              // is-low-occurrence card can have a tempting WPA from a tiny
+              // sample, so it must never win this selection.
+              if (hasClass(cards[i], 'is-low-occurrence')) continue;
               var delta = deltaOf(cards[i]);
               if (delta === null) continue;
               var id = resolveId(iconSrc(cards[i], iconTag));
@@ -825,12 +860,16 @@ public static class SiteImportExtractors
           // rendered against how many carried a reading -- the same
           // degrade-with-a-census shape the item slots use.
           function census(cards, iconTag, resolveId) {
-            var total = cards ? cards.length : 0, ids = 0, wpa = 0;
+            var total = cards ? cards.length : 0, ids = 0, wpa = 0, light = 0;
             for (var i = 0; i < total; i++) {
-              if (resolveId(iconSrc(cards[i], iconTag))) ids++;
-              if (deltaOf(cards[i]) !== null) wpa++;
+              var id = resolveId(iconSrc(cards[i], iconTag));
+              var delta = deltaOf(cards[i]);
+              if (id) ids++;
+              if (delta !== null) wpa++;
+              if (!hasClass(cards[i], 'is-low-occurrence') && id && delta !== null) light++;
             }
-            return total + ' cards rendered, ' + ids + ' with a readable id, ' + wpa + ' with a WPA reading';
+            return total + ' cards rendered, ' + ids + ' with a readable id, ' +
+              wpa + ' with a WPA reading, ' + light + ' light eligible';
           }
           function treeOf(cards) {
             for (var i = 0; i < cards.length; i++) {

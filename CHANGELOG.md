@@ -1,5 +1,20 @@
 # Changelog
 
+## Desktop 2.2.3 (2026-09-09)
+
+- Coachless rune imports now follow the site's confidence styling before
+  ranking by WPA. Cards marked `is-low-occurrence` are the dim, low-sample
+  choices shown on the page; those are excluded for keystones, primary and
+  secondary runes, and shards. This keeps light recommendations such as
+  Galio's Celerity from losing to a higher-WPA result drawn from too few games.
+- Coachless item sets no longer repeat an item in multiple build slots. When a
+  slot's top-WPA row repeats an earlier item, the extractor takes the next
+  distinct row in Coachless's existing order. Boots are now placed immediately
+  after the first-item block: Starter, 1st Item, Boots, 2nd, 3rd, then 4th+.
+- The captured-page oracle now mutation-tests both rules: a dark rune promoted
+  to +99.99 WPA must still lose, and a duplicate top item must fall through to
+  the next unique row.
+
 ## Desktop 2.2.2 (2026-09-09)
 
 - The two automatic rune pages no longer delete each other. Field evidence
