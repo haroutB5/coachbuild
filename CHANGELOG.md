@@ -1,5 +1,17 @@
 # Changelog
 
+## Desktop 2.2.6 (2026-09-09)
+
+- Import browsers are protected from idle cleanup during reads, and their
+  activity timestamp resets on reuse/recreation. This fixes second-game
+  imports losing their tabs mid-navigation.
+- Added Riot's CelerityTemp icon alias, fixing missing u.gg rune pages for
+  builds using Celerity. Coachless now waits for item icons when table rows
+  paint first, fixing the premature empty-item verdict reproduced on Volibear.
+- Coachless item imports now put the purchase sequence in one Build order
+  row in the in-game shop, with boots after the first full item. u.gg's
+  existing item sections are unchanged.
+
 ## Desktop 2.2.5 (2026-09-09)
 
 - Automatic updates no longer wait indefinitely for the Research window to

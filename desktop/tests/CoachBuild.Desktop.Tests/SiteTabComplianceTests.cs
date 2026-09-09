@@ -122,6 +122,33 @@ public sealed class SiteTabComplianceTests
     }
 
     [Fact]
+    public void Idle_sweep_is_wired_behind_the_import_flight_gate()
+    {
+        var source = ReadSource(WindowSource);
+        var sweepStart = source.IndexOf("internal void SweepIdleTabs", StringComparison.Ordinal);
+        var sweepEnd = source.IndexOf("private static readonly TimeSpan AutoImportNavigationTimeout", sweepStart, StringComparison.Ordinal);
+        Assert.True(sweepStart > 0 && sweepEnd > sweepStart, "idle sweep body not found");
+
+        var body = source[sweepStart..sweepEnd];
+        Assert.Contains(
+            "ShouldSweepIdleTabs(",
+            body,
+            StringComparison.Ordinal);
+        Assert.Contains("IsAutoImportRunning", body, StringComparison.Ordinal);
+        Assert.Contains("_activeBrowserOperations", body, StringComparison.Ordinal);
+
+        // The activity refresh is part of the same background-core path. This
+        // catches a regression where the sweep is gated but a recreated tab
+        // still carries its pre-release timestamp and is immediately eligible
+        // again after the run.
+        var fetchStart = source.IndexOf("private async Task<CoreWebView2?> GetFetchCoreAsync", StringComparison.Ordinal);
+        var fetchEnd = source.IndexOf("private async Task<CoreWebView2?> EnsureWorkerCoreAsync", fetchStart, StringComparison.Ordinal);
+        Assert.True(fetchStart > 0 && fetchEnd > fetchStart, "background fetch body not found");
+        var fetchBody = source[fetchStart..fetchEnd];
+        Assert.Contains("TouchTabActivity(site)", fetchBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_mystats_tab_runs_only_the_named_consent_step()
     {
         var source = ReadSource(WindowSource);

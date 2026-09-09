@@ -109,6 +109,13 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     private readonly Dictionary<CompanionTab, DateTimeOffset> _lastVisible = new();
     /// <summary>Hidden worker webviews for the auto-import, one per site at most. Never shown, never selected.</summary>
     private readonly Dictionary<CompanionTab, BrowserTabState> _workers = new();
+    /// <summary>
+    /// Browser operations currently owned by the import executor. The service
+    /// flight is the normal guard, but keeping this independent counter closes
+    /// the same lifetime race for queued executor calls and makes it
+    /// impossible for a sweep to dispose a core between navigation and read.
+    /// </summary>
+    private int _activeBrowserOperations;
     private readonly HashSet<string> _blockedAdDomainsLogged = new(StringComparer.Ordinal);
     /// <summary>
     /// The auto-import's run token (2.1.2). Champ-select END swaps this for a
@@ -566,6 +573,11 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             // it, and the log says so, so a slow first paint after ten idle
             // minutes reads as a deliberate release rather than a bug.
             state.Released = false;
+            // A background auto-import can be the first visitor after an idle
+            // release. Refresh the activity clock with that recreation, or
+            // the next snapshot tick would immediately tear the new browser
+            // down again once the run finishes.
+            TouchTabActivity(tab);
             LogLifecycle(SiteTabIdlePolicy.RecreateLine(tab));
         }
         if (state.Initialization is not null)
@@ -1255,7 +1267,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         // owning a timer: it is a pure decision plus a dispose, and it must
         // not run on a thread of its own next to WebView2. Deliberately
         // BEFORE the auto-import guard -- the memory a stale tab holds is not
-        // conditional on the import being attached.
+        // conditional on the import being attached. SweepIdleTabs itself
+        // stands down while either the service flight or an executor browser
+        // operation is active, so this ordering cannot evict a fetch started
+        // by the preceding tick.
         SweepIdleTabs(DateTimeOffset.UtcNow);
 
         var auto = _autoImport;
@@ -1442,6 +1457,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     {
         if (site is not (CompanionTab.UGg or CompanionTab.Coachless))
             return Task.FromResult<string?>(null);
+        Interlocked.Increment(ref _activeBrowserOperations);
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         Dispatcher.BeginInvoke(new Func<Task>(async () =>
         {
@@ -1452,6 +1468,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             catch (Exception error)
             {
                 completion.TrySetException(error);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeBrowserOperations);
             }
         }));
         return completion.Task;
@@ -1615,6 +1635,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(url);
+        Interlocked.Increment(ref _activeBrowserOperations);
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         Dispatcher.BeginInvoke(new Func<Task>(async () =>
         {
@@ -1627,6 +1648,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             catch (Exception error)
             {
                 completion.TrySetException(error);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeBrowserOperations);
             }
         }));
         return completion.Task;
@@ -1722,6 +1747,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         ArgumentNullException.ThrowIfNull(url);
         if (site is not (CompanionTab.UGg or CompanionTab.Coachless))
             return Task.FromResult<string?>(null);
+        Interlocked.Increment(ref _activeBrowserOperations);
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         Dispatcher.BeginInvoke(new Func<Task>(async () =>
         {
@@ -1734,6 +1760,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             catch (Exception error)
             {
                 completion.TrySetException(error);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeBrowserOperations);
             }
         }));
         return completion.Task;
@@ -1777,7 +1807,14 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         var state = GetState(site);
         if (state?.Initialized == true && state.Core is not null)
         {
-            if (!IsActiveTab(state)) return state.Core;
+            if (!IsActiveTab(state))
+            {
+                // Import reads are real browser activity even though they do
+                // not make the tab visible. Keep the reused background tab
+                // alive for the normal idle window after this fetch.
+                TouchTabActivity(site);
+                return state.Core;
+            }
         }
         else if (ActiveTab != site)
         {
@@ -1786,7 +1823,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             // real site profile from the first byte.
             var created = await EnsureTabAsync(site, cancellationToken).ConfigureAwait(true);
             if (created is not null && created.Core is not null && !IsActiveTab(created))
+            {
+                TouchTabActivity(site);
                 return created.Core;
+            }
         }
         return await EnsureWorkerCoreAsync(site, cancellationToken).ConfigureAwait(true);
     }
@@ -1951,7 +1991,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     /// </summary>
     internal void SweepIdleTabs(DateTimeOffset now)
     {
-        if (_disposed) return;
+        if (_disposed || !ShouldSweepIdleTabs(
+                _gameStartLinger,
+                IsAutoImportRunning,
+                Volatile.Read(ref _activeBrowserOperations))) return;
         if (!Dispatcher.CheckAccess())
         {
             Dispatcher.BeginInvoke(new Action(() => SweepIdleTabs(now)));
@@ -1993,6 +2036,19 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             LogLifecycle(SiteTabIdlePolicy.TeardownLine(tab));
         }
     }
+
+    /// <summary>
+    /// The idle sweep must stand down while an automatic import owns the
+    /// single flight. The flight can reuse a stale site tab, recreate one
+    /// after an idle release, or keep reading it across several snapshot
+    /// ticks; disposing it from the next tick turns a healthy fetch into the
+    /// 30-second navigation timeout seen in the second-game field log.
+    /// </summary>
+    internal static bool ShouldSweepIdleTabs(
+        bool gameStartLinger,
+        bool autoImportRunning,
+        int activeBrowserOperations = 0) =>
+        !gameStartLinger && !autoImportRunning && activeBrowserOperations <= 0;
 
     /// <summary>
     /// How long a worker fetch waits for its deep link to load before the
@@ -2299,6 +2355,16 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
 
     private BrowserTabState? GetState(CompanionTab tab) =>
         _tabs.TryGetValue(tab, out var state) ? state : null;
+
+    /// <summary>
+    /// Refreshes the idle clock for a tab that was used by a background
+    /// operation. The clock is named for the visible path for compatibility,
+    /// but import reuse is activity too: otherwise a recreated site browser
+    /// inherits the pre-release timestamp and is eligible on the next sweep.
+    /// Caller is on the dispatcher.
+    /// </summary>
+    private void TouchTabActivity(CompanionTab tab) =>
+        _lastVisible[tab] = DateTimeOffset.UtcNow;
 
     private BrowserTabState GetOrCreateState(CompanionTab tab)
     {

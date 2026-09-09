@@ -460,7 +460,7 @@ public static class PerkIconMap
             ["deathfiretouch"] = 8992, ["deathfiretouchkeystone"] = 8992,
             ["nullifyingorb"] = 8224, ["axiomarcanist"] = 8224,
             ["manaflowband"] = 8226, ["nimbuscloak"] = 8275, ["6361"] = 8275,
-            ["transcendence"] = 8210, ["celerity"] = 8234, ["absolutefocus"] = 8233,
+            ["transcendence"] = 8210, ["celerity"] = 8234, ["celeritytemp"] = 8234, ["absolutefocus"] = 8233,
             ["scorch"] = 8237, ["waterwalking"] = 8232, ["gatheringstorm"] = 8236,
             ["glacialaugment"] = 8351, ["unsealedspellbook"] = 8360, ["firststrike"] = 8369,
             ["hextechflashtraption"] = 8306, ["hexflash"] = 8306,
@@ -814,8 +814,9 @@ public static class SiteImportValidator
         string pageTitle,
         string championSlug,
         string? role,
-        IReadOnlyList<SiteImportItemBlock> blocks) =>
-        new(championId, [BuildItemSetElement(championId, pageTitle, championSlug, role, blocks)]);
+        IReadOnlyList<SiteImportItemBlock> blocks,
+        SiteImportSource? source = null) =>
+        new(championId, [BuildItemSetElement(championId, pageTitle, championSlug, role, blocks, source)]);
 
     /// <summary>
     /// One set's element for an <see cref="ApplyItemSetsRequest"/>. Split out
@@ -829,8 +830,13 @@ public static class SiteImportValidator
         string pageTitle,
         string championSlug,
         string? role,
-        IReadOnlyList<SiteImportItemBlock> blocks)
+        IReadOnlyList<SiteImportItemBlock> blocks,
+        SiteImportSource? source = null)
     {
+        // Coachless supplies a purchase sequence, not alternative item groups.
+        // Keep that sequence together in the in-game shop; u.gg keeps its sections.
+        if (source == SiteImportSource.Coachless)
+            blocks = [new SiteImportItemBlock("Build order", blocks.SelectMany(block => block.ItemIds).Distinct().ToArray())];
         var slug = ChampionNameKey.Normalize(championSlug);
         var roleToken = (role ?? string.Empty).Trim().ToLowerInvariant();
         if (string.IsNullOrEmpty(roleToken)) roleToken = "all";
@@ -925,7 +931,7 @@ public static class SiteImportApplier
         if (!ApplyPayloadValidation.TryValidateRunes(runeRequest, out var runeGate))
             return new SiteImportFailure(runeGate.Reason, $"{runeGate.Hint} -- nothing was imported");
         var itemRequest = SiteImportValidator.BuildItemSetRequest(
-            championId, title, payload.ChampionSlug, payload.Role, payload.ItemBlocks);
+            championId, title, payload.ChampionSlug, payload.Role, payload.ItemBlocks, payload.Source);
         if (!ApplyPayloadValidation.TryValidateItemSets(itemRequest, out var itemGate))
             return new SiteImportFailure(itemGate.Reason, $"{itemGate.Hint} -- nothing was imported");
 
@@ -1050,7 +1056,8 @@ public static class SiteImportApplier
                 entry.Title,
                 entry.Contribution.Payload.ChampionSlug,
                 entry.Contribution.Payload.Role,
-                entry.Contribution.Payload.ItemBlocks))
+                entry.Contribution.Payload.ItemBlocks,
+                entry.Contribution.Payload.Source))
             .ToList();
         var request = new ApplyItemSetsRequest(championId, elements);
         if (!ApplyPayloadValidation.TryValidateItemSets(request, out var itemGate))
@@ -1098,7 +1105,7 @@ public static class SiteImportApplier
         if (SiteImportValidator.ValidateItems(payload.ItemBlocks) is { } itemError)
             return new SiteImportFailure("bad-items", $"{itemError} -- nothing was imported");
         var itemRequest = SiteImportValidator.BuildItemSetRequest(
-            championId, title, payload.ChampionSlug, payload.Role, payload.ItemBlocks);
+            championId, title, payload.ChampionSlug, payload.Role, payload.ItemBlocks, payload.Source);
         if (!ApplyPayloadValidation.TryValidateItemSets(itemRequest, out var itemGate))
             return new SiteImportFailure(itemGate.Reason, $"{itemGate.Hint} -- nothing was imported");
 

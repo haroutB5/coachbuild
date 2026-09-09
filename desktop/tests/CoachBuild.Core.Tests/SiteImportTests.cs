@@ -16,10 +16,10 @@ public sealed class SiteImportTests
     [Fact]
     public void The_icon_table_covers_every_current_perk_exactly_once_per_alias()
     {
-        // 76 aliases. If ddragon renames a rune, refresh the table from
+        // 77 aliases. If ddragon renames a rune, refresh the table from
         // runesReforged.json rather than editing the count: the aliases are
         // data, and a count edit without new data is how a fallback dies.
-        Assert.Equal(76, PerkIconMap.ByName.Count);
+        Assert.Equal(77, PerkIconMap.ByName.Count);
         Assert.Equal(PerkIconMap.ByName.Keys.Distinct(StringComparer.Ordinal).Count(), PerkIconMap.ByName.Count);
     }
 
@@ -39,6 +39,7 @@ public sealed class SiteImportTests
     [InlineData("Phase Rush", 8230)]
     [InlineData("DEATHFIRE_TOUCH_KEYSTONE.png", 8992)]
     [InlineData("Deathfire Touch", 8992)]
+    [InlineData("perk-images/Styles/Sorcery/Celerity/CelerityTemp.png", 8234)]
     [InlineData("perk-images/Styles/Domination/Electrocute/Electrocute.png", 8112)]
     public void Treacherous_icon_aliases_resolve_to_their_perk_id(string alias, int expected)
     {
@@ -821,7 +822,8 @@ public sealed class SiteImportTests
         var set = sets[0];
         Assert.Equal("CoachBuild import: Jhin ADC (Coachless)", set.GetProperty("title").GetString());
         Assert.Equal(202, set.GetProperty("associatedChampions")[0].GetInt32());
-        Assert.Equal(6, set.GetProperty("blocks").GetArrayLength());
+        Assert.Equal(1, set.GetProperty("blocks").GetArrayLength());
+        Assert.Equal(6, set.GetProperty("blocks")[0].GetProperty("items").GetArrayLength());
         Assert.Equal("1120", set.GetProperty("blocks")[0].GetProperty("items")[0].GetProperty("id").GetString());
     }
 
@@ -1067,6 +1069,8 @@ public sealed class SiteImportTests
         Assert.Equal(2, sets.GetArrayLength());
         Assert.Equal("CoachBuild import: Jhin ADC (u.gg)", sets[0].GetProperty("title").GetString());
         Assert.Equal("CoachBuild import: Jhin ADC (Coachless)", sets[1].GetProperty("title").GetString());
+        Assert.Equal(1, sets[1].GetProperty("blocks").GetArrayLength());
+        Assert.Equal(6, sets[1].GetProperty("blocks")[0].GetProperty("items").GetArrayLength());
     }
 
     [Fact]
@@ -1162,6 +1166,28 @@ public sealed class SiteImportTests
             element.GetRawText());
         Assert.Equal($"coachbuild-import-jhin-adc", element.GetProperty("uid").GetString());
         Assert.Equal(202, element.GetProperty("associatedChampions")[0].GetInt32());
+    }
+
+    [Theory]
+    [InlineData(SiteImportSource.Coachless, 1)]
+    [InlineData(SiteImportSource.UGg, 4)]
+    public void Coachless_purchase_order_is_one_shop_row_while_ugg_sections_are_preserved(
+        SiteImportSource source, int expectedRows)
+    {
+        SiteImportItemBlock[] blocks =
+        [
+            new("Starter", [1055]),
+            new("1st Item", [6676]),
+            new("Boots", [3009]),
+            new("2nd Item", [3031]),
+        ];
+        var request = SiteImportValidator.BuildItemSetRequest(
+            202, "test", "jhin", "adc", blocks, source);
+        var rows = request.Sets![0].GetProperty("blocks");
+        Assert.Equal(expectedRows, rows.GetArrayLength());
+        Assert.Equal(new[] { "1055", "6676", "3009", "3031" }, rows.EnumerateArray()
+            .SelectMany(row => row.GetProperty("items").EnumerateArray())
+            .Select(item => item.GetProperty("id").GetString()));
     }
 
     /// <summary>

@@ -7,6 +7,24 @@ namespace CoachBuild.Desktop.Tests;
 
 public sealed class WebView2WindowTests
 {
+    [Theory]
+    [InlineData(false, false, 0, true)]
+    [InlineData(false, false, 1, false)]
+    [InlineData(true, false, 0, false)]
+    [InlineData(false, true, 0, false)]
+    [InlineData(true, true, 1, false)]
+    public void Idle_sweep_is_blocked_by_a_lingering_window_or_import_flight(
+        bool gameStartLinger,
+        bool autoImportRunning,
+        int activeBrowserOperations,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            WebView2Window.ShouldSweepIdleTabs(
+                gameStartLinger, autoImportRunning, activeBrowserOperations));
+    }
+
     [Fact]
     public void HostedPagePolicyKeepsSessionTokenAndCanonicalRoutes()
     {

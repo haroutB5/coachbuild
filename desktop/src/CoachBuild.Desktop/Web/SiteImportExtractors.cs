@@ -661,9 +661,19 @@ public static class SiteImportExtractors
           if (!blocks.length) {
             var barren = 'every item slot on the page was empty (' + pageCensus() + ') -- ' +
               notes.join('; ').slice(0, 240);
-            // Rows on the page mean the page rendered and simply has nothing
-            // we can read: a verdict. No rows mean it has not rendered yet.
-            return renderedRows() > 0 ? fail(barren) : failWait(barren);
+            // Coachless paints data rows before their item-icon components.
+            // Volibear can therefore have 64 rows but zero item URLs on the
+            // first read. Wait for those URLs within the existing settle cap;
+            // icons that exist but are hidden/broken remain a final verdict.
+            var icons = document.getElementsByTagName('img');
+            var hasItemIcon = false;
+            for (var ii = 0; ii < icons.length; ii++) {
+              if (/\/img\/item\/\d+\./i.test(String(icons[ii].getAttribute('src') || ''))) {
+                hasItemIcon = true;
+                break;
+              }
+            }
+            return renderedRows() > 0 && hasItemIcon ? fail(barren) : failWait(barren);
           }
           return JSON.stringify({
             source: 'coachless', championSlug: slug, role: role, runes: null,

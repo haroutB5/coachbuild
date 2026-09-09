@@ -558,13 +558,10 @@ check('a page where no slot yields items is still a typed failure',
   typeof clDead.error === 'string' && clDead.error.includes('every item slot'), JSON.stringify(clDead).slice(0, 300));
 check('and that reason does not say "no build" (which would collapse the detail)',
   typeof clDead.error === 'string' && !clDead.error.toLowerCase().includes('no build'), clDead.error);
-// 2.2.2, and this is the half that keeps the settle loop honest: this page IS
-// rendered -- six titled slot tables, rows in all of them -- it simply carries
-// no readable item icons. Waiting cannot change that, so it must NOT be marked
-// retryable. Without this the settle loop would turn every genuinely empty
-// build into an 8-second stall before the same failure.
-check('a RENDERED page that yields no items is a verdict, not a wait',
-  clDead.retryable === undefined, JSON.stringify(clDead).slice(0, 200));
+// Live Volibear paints rows before its icon components. Rows alone do not
+// prove the page has finished rendering; missing icon URLs must settle too.
+check('rendered rows without item URLs remain retryable until the settle cap',
+  clDead.retryable === true, JSON.stringify(clDead).slice(0, 200));
 check('and the mutant really is a rendered page (rows, just no icons)',
   typeof clDead.error === 'string' && !clDead.error.includes(', 0 data rows'), clDead.error);
 
