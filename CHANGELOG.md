@@ -1,5 +1,20 @@
 # Changelog
 
+## Desktop 2.2.1 (2026-09-09)
+
+- Automatic import now fires on the HOVERED champion, not only on the locked
+  one. Field evidence (`companion.log` 2026-09-09 12:18:30-12:19:43): a champ
+  select spent ~70s on a hovered Viktor and logged zero `auto-import:` lines,
+  because the deep-link trigger was `Locked && keyChanged`. Lock-only was too
+  late by design -- the pages are meant to be in the client while the user is
+  still choosing, and in the practice tool a lock starts the game at once.
+  A hover must hold still for 2.5s before it imports (the picker reports every
+  champion the user scrolls past); a lock imports immediately, and a lock on
+  the champion its own hover already imported costs nothing. The trigger is
+  named in the log: `(trigger: hover)` / `(trigger: lock)`. The settle is
+  clock-free -- the snapshot tick stamps `AutoImportInput.ObservedAt` -- so the
+  whole trigger matrix is unit-tested with scripted times.
+
 ## Desktop 2.2.0 — automatic dual runes, complete Coachless items, quieter sites (2026-09-09)
 
 - Coachless item import no longer clicks through a select-and-recompute walk.

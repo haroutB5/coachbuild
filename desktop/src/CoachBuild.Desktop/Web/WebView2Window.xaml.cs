@@ -1260,7 +1260,11 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         var auto = _autoImport;
         if (auto is null) return;
 
-        var input = AutoImportInput.FromContext(context, ActiveTab, CurrentUrl, lcuConnected);
+        // The tick's own timestamp: the hover settle is decided from these
+        // stamps rather than from a clock inside the service, so the whole
+        // trigger matrix stays unit-testable with scripted times.
+        var input = AutoImportInput.FromContext(
+            context, ActiveTab, CurrentUrl, lcuConnected, DateTimeOffset.UtcNow);
         // Fire-and-forget by construction (see the service contract). The
         // token is champ-select END's cancel handle: leaving ChampSelect for
         // None/Lobby aborts this flight and rolls its debounce back, while

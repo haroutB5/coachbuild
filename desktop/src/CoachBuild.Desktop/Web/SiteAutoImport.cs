@@ -4,9 +4,24 @@ namespace CoachBuild.Desktop.Web;
 
 /// <summary>
 /// What the automatic item import knows on one evaluation: the champ-select
-/// context (if any), which tab the user is viewing and its URL, and whether
-/// the client is connected. Built on the UI thread from the same 750 ms
-/// existing snapshot tick -- no new poll. (1.3.0.)
+/// context (if any), which tab the user is viewing and its URL, whether the
+/// client is connected, and WHEN this tick was observed. Built on the UI
+/// thread from the same 750 ms existing snapshot tick -- no new poll. (1.3.0;
+/// <see cref="ObservedAt"/> 2.2.1.)
+///
+/// <para><see cref="Locked"/> is the pick/hover discriminator and stays
+/// distinct: <c>cellChampionId</c> (locked) and <c>championPickIntent</c>
+/// (hovered) both reach here as <see cref="ChampionId"/>, and this flag is
+/// the only thing that says which one it is. Both now trigger an import; the
+/// hover one waits out <see cref="AutoImportCoordinator.HoverSettle"/> first.</para>
+///
+/// <para><see cref="ObservedAt"/> is supplied by the caller rather than read
+/// from a clock inside the decision, exactly as
+/// <c>OpportunisticCheckPolicy.ShouldCheck</c> takes its <c>now</c>: the
+/// hover settle is then unit-testable with scripted timestamps and no clock.
+/// Deliberately REQUIRED, with no default: a defaulted timestamp would make
+/// every tick look simultaneous and silently disable the settle in
+/// production while the fixtures still passed.</para>
 /// </summary>
 public sealed record AutoImportInput(
     int? ChampionId,
@@ -16,18 +31,44 @@ public sealed record AutoImportInput(
     bool Locked,
     CompanionTab VisibleTab,
     string? VisibleUrl,
-    bool LcuConnected)
+    bool LcuConnected,
+    DateTimeOffset ObservedAt)
 {
     public static AutoImportInput FromContext(
         ChampSelectContext? context,
         CompanionTab visibleTab,
         string? visibleUrl,
-        bool lcuConnected) =>
+        bool lcuConnected,
+        DateTimeOffset observedAt) =>
         context is null
-            ? new AutoImportInput(null, null, null, null, false, visibleTab, visibleUrl, lcuConnected)
+            ? new AutoImportInput(
+                null, null, null, null, false, visibleTab, visibleUrl, lcuConnected, observedAt)
             : new AutoImportInput(
                 context.ChampionId, context.ChampionKey, context.ChampionName,
-                context.RoleId, context.Locked, visibleTab, visibleUrl, lcuConnected);
+                context.RoleId, context.Locked, visibleTab, visibleUrl, lcuConnected, observedAt);
+}
+
+/// <summary>
+/// A HOVERED (not yet locked) champion and the tick at which that hover was
+/// first observed. The coordinator's clock-free settle: the service carries
+/// one of these across ticks and <see cref="AutoImportCoordinator.TrackHover"/>
+/// restamps it only when the hovered champion+role actually changes, so the
+/// user scrolling the picker never accumulates settle time on a champion they
+/// have already scrolled past.
+/// </summary>
+public sealed record AutoImportHover(int ChampionId, int? RoleId, DateTimeOffset FirstSeenAt);
+
+/// <summary>Which trigger licensed a run's deep-link fetch, for the log line.</summary>
+public enum AutoImportTrigger
+{
+    /// <summary>Nothing fired, or only the visible-page re-read did.</summary>
+    None,
+
+    /// <summary>The champion was locked in.</summary>
+    Lock,
+
+    /// <summary>The champion was hovered and the hover held still long enough.</summary>
+    Hover,
 }
 
 /// <summary>
@@ -84,7 +125,8 @@ public sealed record AutoImportOutcome(
 /// <summary>What evaluation decided: fetch these targets, or why nothing is due.</summary>
 public sealed record AutoImportFetch(
     IReadOnlyList<AutoImportSiteTarget> Fetch,
-    string? SkipReason);
+    string? SkipReason,
+    AutoImportTrigger Trigger = AutoImportTrigger.None);
 
 /// <summary>
 /// The pure decision half of the automatic item import: no clock, no
@@ -93,12 +135,32 @@ public sealed record AutoImportFetch(
 /// <see cref="SiteAutoImportService"/>); every transition is unit-tested
 /// with scripted inputs.
 ///
-/// <para>TRIGGERS, each debounced. (1) Champ-select lock: both sites, once
-/// per champion+role until it changes. (2) The visible site page: that site,
-/// when its URL is a recognized build page for the context champion and
-/// differs from the URL last attempted (e.g. the user changed the rank
-/// filter — the re-run imports the page as shown, not the deep link).
+/// <para>TRIGGERS, each debounced. (1) Champ-select PICK INTENT: both sites,
+/// once per champion+role until it changes. A LOCK fires it immediately; a
+/// HOVER fires it once the hover has held still for
+/// <see cref="HoverSettle"/>. (2) The visible site page: that site, when its
+/// URL is a recognized build page for the context champion and differs from
+/// the URL last attempted (e.g. the user changed the rank filter — the re-run
+/// imports the page as shown, not the deep link).
 /// </para>
+///
+/// <para>WHY THE HOVER FIRES AT ALL (field log 2026-09-09 12:18:30-12:19:43).
+/// The user picked Viktor, waited ~70s, saw no rune pages, and left without
+/// locking: not one <c>auto-import:</c> line in the whole champ select,
+/// because the only deep-link trigger was <c>Locked &amp;&amp; keyChanged</c>.
+/// Lock-only is too late BY DESIGN — the point of the feature is to have two
+/// rune pages sitting in the client so the user can pick one BEFORE the game,
+/// and in the practice tool a lock launches the game more or less at once. So
+/// the intent, not the commitment, is what arms the import.</para>
+///
+/// <para>WHY THE HOVER WAITS AND THE LOCK DOES NOT. A hover is what the
+/// champion picker reports while the user is still scrolling it, so importing
+/// on the first sight of one would fetch four pages for champions the user
+/// merely passed over. A lock is a decision that has already been made and is
+/// followed within seconds by the game starting: there is nothing left to
+/// settle and no time to spend settling it. The settle is measured from the
+/// hover's own first-seen tick (<see cref="AutoImportHover"/>), which the
+/// caller stamps — no clock in here.</para>
 ///
 /// <para>Attempts are debounced, not just successes: a quiet failure is
 /// recorded like a success, so a broken page logs once per champion+URL
@@ -119,7 +181,59 @@ public static class AutoImportCoordinator
     public const string DisconnectedSkipReason =
         "League client not connected -- auto-import standing by";
 
-    public static AutoImportFetch Evaluate(AutoImportState state, AutoImportInput input)
+    /// <summary>
+    /// How long a HOVERED champion must stay the hovered champion before its
+    /// pages are worth fetching. Long enough that scrolling the picker past a
+    /// champion never spends four page loads on it, short enough that the
+    /// pages are in the client while the user is still deciding. Only the
+    /// hover path consults it — a lock is already a decision (see the class
+    /// remarks).
+    /// </summary>
+    public static readonly TimeSpan HoverSettle = TimeSpan.FromMilliseconds(2500);
+
+    /// <summary>
+    /// Carries the hover observation across ticks: same hovered champion+role
+    /// keeps its original <see cref="AutoImportHover.FirstSeenAt"/> (settle
+    /// time accrues), anything else restamps it at this tick, and a lock, a
+    /// missing champion or a missing client drops it entirely. Pure: the
+    /// caller owns both the previous observation and the clock.
+    /// </summary>
+    public static AutoImportHover? TrackHover(AutoImportHover? previous, AutoImportInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        if (!input.LcuConnected || input.Locked ||
+            input.ChampionId is not > 0 || string.IsNullOrWhiteSpace(input.ChampionKey))
+            return null;
+        if (previous is not null &&
+            previous.ChampionId == input.ChampionId && previous.RoleId == input.RoleId)
+            return previous;
+        return new AutoImportHover(input.ChampionId.Value, input.RoleId, input.ObservedAt);
+    }
+
+    /// <summary>
+    /// True when <paramref name="hover"/> is an observation OF THIS INPUT's
+    /// champion+role that has held for at least <see cref="HoverSettle"/>.
+    /// The champion+role re-check is not redundant with
+    /// <see cref="TrackHover"/>: a stale observation handed in by a caller
+    /// that skipped a tick must not settle a champion it never described.
+    /// </summary>
+    public static bool IsHoverSettled(AutoImportHover? hover, AutoImportInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        return hover is not null &&
+            hover.ChampionId == input.ChampionId &&
+            hover.RoleId == input.RoleId &&
+            input.ObservedAt - hover.FirstSeenAt >= HoverSettle;
+    }
+
+    /// <param name="hover">
+    /// The running hover observation from <see cref="TrackHover"/>. Required
+    /// (null means "no hover settled yet"), never defaulted: a call site that
+    /// forgot it would silently be back to the lock-only behaviour this
+    /// method exists to fix.
+    /// </param>
+    public static AutoImportFetch Evaluate(
+        AutoImportState state, AutoImportInput input, AutoImportHover? hover)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(input);
@@ -131,8 +245,17 @@ public static class AutoImportCoordinator
         var keyChanged = state.ChampionId != input.ChampionId || state.RoleId != input.RoleId;
         var fetch = new List<AutoImportSiteTarget>();
 
-        // Trigger 1 — the lock: both sites at the deep links, once per key.
-        if (input.Locked && keyChanged)
+        // Trigger 1 — the pick intent: both sites at the deep links, once per
+        // key. A lock fires now; a hover fires once it has settled. Requirement
+        // 4 falls out of keyChanged: a lock on the champion already imported
+        // from its hover is the SAME key, so it re-imports nothing.
+        var trigger = AutoImportTrigger.None;
+        if (keyChanged)
+        {
+            if (input.Locked) trigger = AutoImportTrigger.Lock;
+            else if (IsHoverSettled(hover, input)) trigger = AutoImportTrigger.Hover;
+        }
+        if (trigger is not AutoImportTrigger.None)
         {
             foreach (var site in BothSites)
             {
@@ -167,7 +290,7 @@ public static class AutoImportCoordinator
                 input.RoleId));
         }
 
-        return new AutoImportFetch(fetch, null);
+        return new AutoImportFetch(fetch, null, trigger);
     }
 
     /// <summary>
@@ -498,6 +621,14 @@ public sealed class SiteAutoImportService
     private readonly IChampionDirectory _champions;
     private readonly ISiteAutoImportSink _sink;
     private AutoImportState _state = AutoImportState.Initial;
+    /// <summary>
+    /// The running hover observation (2.2.1). Only ever touched inside the
+    /// single flight, like <see cref="_state"/>. NOT rolled back by a
+    /// cancelled run: it records what champ select showed, not what this
+    /// service did about it, and champ-select end clears it anyway (a null
+    /// context tracks to null).
+    /// </summary>
+    private AutoImportHover? _hover;
     private int _active;
     private string? _lastSkipNote;
     /// <summary>
@@ -555,6 +686,9 @@ public sealed class SiteAutoImportService
     /// <summary>The committed debounce state, for tests.</summary>
     internal AutoImportState State => _state;
 
+    /// <summary>The running hover observation, for tests.</summary>
+    internal AutoImportHover? Hover => _hover;
+
     /// <summary>True while a run holds the single flight, for tests and for the window's linger.</summary>
     internal bool IsRunning => Volatile.Read(ref _active) != 0;
 
@@ -605,7 +739,8 @@ public sealed class SiteAutoImportService
     {
         if (input.LcuConnected) _disconnectedEvaluations = 0;
         else if (_disconnectedEvaluations < int.MaxValue) _disconnectedEvaluations++;
-        var evaluation = AutoImportCoordinator.Evaluate(_state, input);
+        _hover = AutoImportCoordinator.TrackHover(_hover, input);
+        var evaluation = AutoImportCoordinator.Evaluate(_state, input, _hover);
         var fetch = evaluation.Fetch.ToList();
         if (fetch.Count == 0)
         {
@@ -623,6 +758,20 @@ public sealed class SiteAutoImportService
 
         if (input.ChampionId is not > 0 || string.IsNullOrWhiteSpace(input.ChampionName))
             return;
+
+        // WHICH trigger armed this run, in the log, before any fetch line. The
+        // field bug it exists for (2026-09-09) was diagnosed from the ABSENCE
+        // of auto-import lines, so "an import ran, and the hover is why" has to
+        // be readable without inferring it from the lock timing.
+        if (evaluation.Trigger is not AutoImportTrigger.None)
+        {
+            var who = SiteDeepLink.RoleLabel(input.RoleId) is { } role
+                ? $"{input.ChampionName} {role}"
+                : input.ChampionName;
+            _sink.LogInfo(evaluation.Trigger is AutoImportTrigger.Hover
+                ? $"auto-import: {who} hovered and held -- importing now (trigger: hover)"
+                : $"auto-import: {who} locked in -- importing now (trigger: lock)");
+        }
 
         // The debounce state before this run: restored verbatim if the run
         // is cancelled, so a half-run never counts as attempted.

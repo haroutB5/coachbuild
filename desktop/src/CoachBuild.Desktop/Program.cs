@@ -9,14 +9,23 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        // FIRST, before Velopack or any window: orphan containment (2.1.2).
-        // The job must own the process before its first child is spawned so
-        // the WebView2 tree inherits it; best effort and never throwing, so
-        // a failure degrades to the pre-2.1.2 disposal paths, never to a
-        // failed launch. See ProcessJobObject for the mechanism and its
-        // honestly-documented residual gap.
-        ProcessJobObject.EnsureKillOnClose();
+        // Velopack MUST run before the orphan-containment job is created.
+        // On an auto-apply launch VelopackApp.Run spawns Update.exe (to swap in
+        // the newer local package) and then exits this process — so nothing
+        // below runs on that path. If the KILL_ON_JOB_CLOSE job existed first,
+        // Update.exe would be spawned as a child inside it and get killed
+        // mid-apply the instant this process exits, leaving the update
+        // half-applied and the app relaunching the OLD version forever
+        // (the 2.2.0 field regression: apply loop, window never opens).
         VelopackApp.Build().Run();
+
+        // Orphan containment (2.1.2), now AFTER the update handoff so the
+        // updater's Update.exe is never a job member. On a normal launch the
+        // first WebView2 child is spawned much later (a tab opening), so the
+        // whole browser tree still inherits the job and dies with the app.
+        // Best effort and never throwing, so a failure degrades to the
+        // pre-2.1.2 disposal paths, never to a failed launch.
+        ProcessJobObject.EnsureKillOnClose();
         EnablePerMonitorDpiAwareness();
         var options = CommandLineOptions.Parse(args);
         if (options.SelfTest)

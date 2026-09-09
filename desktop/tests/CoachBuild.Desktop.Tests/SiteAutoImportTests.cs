@@ -145,11 +145,26 @@ public sealed class SiteAutoImportTests
         return payload!;
     }
 
+    /// <summary>
+    /// The scripted clock's zero. Every input stamps a time relative to this,
+    /// so the hover settle is exercised with no real clock anywhere in the
+    /// suite (the service never reads one either -- the window supplies it).
+    /// </summary>
+    private static readonly DateTimeOffset T0 = new(2026, 9, 9, 12, 18, 30, TimeSpan.Zero);
+
     private static AutoImportInput LockedAhri(
         CompanionTab visible = CompanionTab.Companion,
         string? url = null,
-        bool lcu = true) =>
-        new(103, "Ahri", "Ahri", 2, true, visible, url, lcu);
+        bool lcu = true,
+        double atSeconds = 0) =>
+        new(103, "Ahri", "Ahri", 2, true, visible, url, lcu, T0.AddSeconds(atSeconds));
+
+    /// <summary>Ahri HOVERED (pick intent, not locked) at <paramref name="atSeconds"/>.</summary>
+    private static AutoImportInput HoveredAhri(
+        double atSeconds = 0,
+        CompanionTab visible = CompanionTab.Companion,
+        string? url = null) =>
+        LockedAhri(visible, url, atSeconds: atSeconds) with { Locked = false };
 
     private static readonly Uri AhriUggDeepLink = new("https://u.gg/lol/champions/ahri/build/mid");
     private static readonly Uri AhriCoachlessDeepLink = new("https://coachless.gg/builds/ahri?role=mid");
@@ -210,7 +225,7 @@ public sealed class SiteAutoImportTests
         Assert.Equal(AhriUggDeepLink, SiteDeepLink.Build(CompanionTab.UGg, "Ahri", 2));
         Assert.Equal(AhriCoachlessDeepLink, SiteDeepLink.Build(CompanionTab.Coachless, "Ahri", 2));
 
-        var evaluation = AutoImportCoordinator.Evaluate(AutoImportState.Initial, LockedAhri());
+        var evaluation = AutoImportCoordinator.Evaluate(AutoImportState.Initial, LockedAhri(), hover: null);
 
         Assert.Null(evaluation.SkipReason);
         Assert.Equal(2, evaluation.Fetch.Count);
@@ -230,7 +245,7 @@ public sealed class SiteAutoImportTests
         // still goes through a worker.
         var uggVisible = AutoImportCoordinator.Evaluate(
             AutoImportState.Initial,
-            LockedAhri(CompanionTab.UGg, "https://u.gg/lol/champions/ahri/build/mid"));
+            LockedAhri(CompanionTab.UGg, "https://u.gg/lol/champions/ahri/build/mid"), hover: null);
         var ugg = Assert.Single(uggVisible.Fetch, plan => plan.Site == CompanionTab.UGg);
         Assert.True(ugg.ExtractInPlace);
         Assert.Equal("https://u.gg/lol/champions/ahri/build/mid", ugg.Url.ToString());
@@ -238,7 +253,7 @@ public sealed class SiteAutoImportTests
 
         var coachlessVisible = AutoImportCoordinator.Evaluate(
             AutoImportState.Initial,
-            LockedAhri(CompanionTab.Coachless, "https://coachless.gg/builds/ahri?role=mid"));
+            LockedAhri(CompanionTab.Coachless, "https://coachless.gg/builds/ahri?role=mid"), hover: null);
         Assert.True(Assert.Single(coachlessVisible.Fetch, plan => plan.Site == CompanionTab.Coachless).ExtractInPlace);
         Assert.False(Assert.Single(coachlessVisible.Fetch, plan => plan.Site == CompanionTab.UGg).ExtractInPlace);
     }
@@ -251,7 +266,7 @@ public sealed class SiteAutoImportTests
         // through workers and the visible page never moves.
         var evaluation = AutoImportCoordinator.Evaluate(
             AutoImportState.Initial,
-            LockedAhri(CompanionTab.UGg, "https://u.gg/lol/champions/ahri/build/top"));
+            LockedAhri(CompanionTab.UGg, "https://u.gg/lol/champions/ahri/build/top"), hover: null);
 
         Assert.Equal(2, evaluation.Fetch.Count);
         Assert.All(evaluation.Fetch, plan => Assert.False(plan.ExtractInPlace));
@@ -264,14 +279,14 @@ public sealed class SiteAutoImportTests
     public void Completed_lock_stays_quiet_until_something_changes()
     {
         var state = AutoImportState.Initial;
-        var first = AutoImportCoordinator.Evaluate(state, LockedAhri());
+        var first = AutoImportCoordinator.Evaluate(state, LockedAhri(), hover: null);
         Assert.Equal(2, first.Fetch.Count);
 
         state = AutoImportCoordinator.RecordCompleted(
             state, 103, 2, "Ahri",
             first.Fetch.Select(plan => new AutoImportOutcome(plan.Site, plan.Url.ToString(), null)).ToList());
 
-        var second = AutoImportCoordinator.Evaluate(state, LockedAhri());
+        var second = AutoImportCoordinator.Evaluate(state, LockedAhri(), hover: null);
         Assert.Empty(second.Fetch);
         Assert.Null(second.SkipReason);
     }
@@ -289,17 +304,179 @@ public sealed class SiteAutoImportTests
             [new AutoImportOutcome(CompanionTab.UGg, AhriUggDeepLink.ToString(), null)]);
 
         var evaluation = AutoImportCoordinator.Evaluate(
-            state, new AutoImportInput(championId, key, name, roleId, true, CompanionTab.Companion, null, true));
+            state,
+            new AutoImportInput(championId, key, name, roleId, true, CompanionTab.Companion, null, true, T0),
+            hover: null);
 
         Assert.Equal(2, evaluation.Fetch.Count);
     }
 
+    // -- Coordinator: the hover (pick-intent) trigger ------------------------
+    //
+    // The field bug of 2026-09-09: a whole champ select with a hovered Viktor
+    // and ZERO auto-import lines, because only a lock could arm the deep-link
+    // fetch. The five rows below are the trigger truth table that replaces it.
+
     [Fact]
-    public void Hover_never_fires_the_lock_path()
+    public void Hover_with_no_observation_yet_fires_nothing()
     {
-        var hovering = LockedAhri() with { Locked = false };
-        var evaluation = AutoImportCoordinator.Evaluate(AutoImportState.Initial, hovering);
+        // The first tick of a hover: TrackHover has only just stamped it, so
+        // nothing has settled and nothing may fetch.
+        var hovering = HoveredAhri();
+        var hover = AutoImportCoordinator.TrackHover(null, hovering);
+
+        var evaluation = AutoImportCoordinator.Evaluate(AutoImportState.Initial, hovering, hover);
+
         Assert.Empty(evaluation.Fetch);
+        Assert.Equal(AutoImportTrigger.None, evaluation.Trigger);
+    }
+
+    [Fact]
+    public void Hover_still_inside_the_settle_fires_nothing()
+    {
+        var hover = AutoImportCoordinator.TrackHover(null, HoveredAhri(0));
+        var justShort = HoveredAhri(AutoImportCoordinator.HoverSettle.TotalSeconds - 0.1);
+
+        var evaluation = AutoImportCoordinator.Evaluate(AutoImportState.Initial, justShort, hover);
+
+        Assert.Empty(evaluation.Fetch);
+    }
+
+    [Fact]
+    public void Hover_held_past_the_settle_fires_both_sites_before_any_lock()
+    {
+        var hover = AutoImportCoordinator.TrackHover(null, HoveredAhri(0));
+        var settled = HoveredAhri(AutoImportCoordinator.HoverSettle.TotalSeconds);
+
+        var evaluation = AutoImportCoordinator.Evaluate(AutoImportState.Initial, settled, hover);
+
+        Assert.Equal(AutoImportTrigger.Hover, evaluation.Trigger);
+        Assert.Equal(2, evaluation.Fetch.Count);
+        Assert.Equal(
+            AhriUggDeepLink,
+            Assert.Single(evaluation.Fetch, plan => plan.Site == CompanionTab.UGg).Url);
+        Assert.Equal(
+            AhriCoachlessDeepLink,
+            Assert.Single(evaluation.Fetch, plan => plan.Site == CompanionTab.Coachless).Url);
+    }
+
+    [Fact]
+    public void Scrolling_the_picker_restamps_the_settle_instead_of_accruing_it()
+    {
+        // Ahri, then Lee Sin, then Ahri again, one tick apart. Nothing may
+        // fire: each change restarts the settle, which is the whole reason
+        // the hover trigger is safe to have at all.
+        var hover = AutoImportCoordinator.TrackHover(null, HoveredAhri(0));
+        var lee = new AutoImportInput(
+            64, "LeeSin", "Lee Sin", 2, false, CompanionTab.Companion, null, true, T0.AddSeconds(0.8));
+        hover = AutoImportCoordinator.TrackHover(hover, lee);
+        Assert.Equal(64, hover!.ChampionId);
+        Assert.Equal(T0.AddSeconds(0.8), hover.FirstSeenAt);
+
+        var backToAhri = HoveredAhri(1.6);
+        hover = AutoImportCoordinator.TrackHover(hover, backToAhri);
+        Assert.Equal(T0.AddSeconds(1.6), hover!.FirstSeenAt);
+
+        Assert.Empty(AutoImportCoordinator.Evaluate(AutoImportState.Initial, backToAhri, hover).Fetch);
+        // Holding it from there does settle, on the LATEST stamp.
+        Assert.Equal(
+            AutoImportTrigger.Hover,
+            AutoImportCoordinator.Evaluate(
+                AutoImportState.Initial,
+                backToAhri with { ObservedAt = hover.FirstSeenAt + AutoImportCoordinator.HoverSettle },
+                hover).Trigger);
+    }
+
+    [Fact]
+    public void A_hover_that_holds_still_keeps_its_first_stamp()
+    {
+        var first = AutoImportCoordinator.TrackHover(null, HoveredAhri(0));
+        var later = AutoImportCoordinator.TrackHover(first, HoveredAhri(2));
+        Assert.Same(first, later);
+        Assert.Equal(T0, later!.FirstSeenAt);
+    }
+
+    [Fact]
+    public void A_lock_or_a_lost_client_drops_the_hover_observation()
+    {
+        var hover = AutoImportCoordinator.TrackHover(null, HoveredAhri(0));
+        Assert.NotNull(hover);
+        Assert.Null(AutoImportCoordinator.TrackHover(hover, LockedAhri(atSeconds: 1)));
+        Assert.Null(AutoImportCoordinator.TrackHover(hover, HoveredAhri(1) with { LcuConnected = false }));
+        Assert.Null(AutoImportCoordinator.TrackHover(hover, HoveredAhri(1) with { ChampionId = null }));
+    }
+
+    [Fact]
+    public void A_lock_on_a_different_champion_fires_immediately_with_no_settle()
+    {
+        // Requirement 3: a lock is a decision already made, and the game
+        // starts seconds later -- there is nothing to settle.
+        var state = AutoImportCoordinator.RecordCompleted(
+            AutoImportState.Initial, 64, 2, "Lee Sin",
+            [new AutoImportOutcome(CompanionTab.UGg, "https://u.gg/lol/champions/leesin/build/mid", null)]);
+
+        var evaluation = AutoImportCoordinator.Evaluate(state, LockedAhri(), hover: null);
+
+        Assert.Equal(AutoImportTrigger.Lock, evaluation.Trigger);
+        Assert.Equal(2, evaluation.Fetch.Count);
+    }
+
+    [Fact]
+    public void A_lock_on_the_champion_already_imported_from_its_hover_re_imports_nothing()
+    {
+        // Requirement 4: the (champion, role) debounce is what makes the new
+        // trigger free -- the lock that follows a settled hover is the SAME
+        // key, so it costs nothing.
+        var hover = AutoImportCoordinator.TrackHover(null, HoveredAhri(0));
+        var settled = HoveredAhri(AutoImportCoordinator.HoverSettle.TotalSeconds);
+        var fromHover = AutoImportCoordinator.Evaluate(AutoImportState.Initial, settled, hover);
+        Assert.Equal(2, fromHover.Fetch.Count);
+
+        var state = AutoImportCoordinator.RecordCompleted(
+            AutoImportState.Initial, 103, 2, "Ahri",
+            fromHover.Fetch.Select(plan => new AutoImportOutcome(plan.Site, plan.Url.ToString(), null)).ToList());
+
+        var afterLock = AutoImportCoordinator.Evaluate(state, LockedAhri(atSeconds: 6), hover: null);
+
+        Assert.Empty(afterLock.Fetch);
+        Assert.Equal(AutoImportTrigger.None, afterLock.Trigger);
+    }
+
+    [Fact]
+    public void Re_hovering_a_different_champion_after_an_import_fires_again_once_settled()
+    {
+        // Row 5: the user changes their mind mid-select. The key changed, so
+        // the new champion's pages are fetched -- after its own settle.
+        var state = AutoImportCoordinator.RecordCompleted(
+            AutoImportState.Initial, 103, 2, "Ahri",
+            [new AutoImportOutcome(CompanionTab.UGg, AhriUggDeepLink.ToString(), null)]);
+        var lee = new AutoImportInput(
+            64, "LeeSin", "Lee Sin", 2, false, CompanionTab.Companion, null, true, T0.AddSeconds(10));
+        var hover = AutoImportCoordinator.TrackHover(null, lee);
+
+        Assert.Empty(AutoImportCoordinator.Evaluate(state, lee, hover).Fetch);
+
+        var settled = lee with { ObservedAt = T0.AddSeconds(10) + AutoImportCoordinator.HoverSettle };
+        var evaluation = AutoImportCoordinator.Evaluate(state, settled, hover);
+
+        Assert.Equal(AutoImportTrigger.Hover, evaluation.Trigger);
+        Assert.Equal(2, evaluation.Fetch.Count);
+        Assert.Equal(
+            SiteDeepLink.Build(CompanionTab.UGg, "LeeSin", 2),
+            Assert.Single(evaluation.Fetch, plan => plan.Site == CompanionTab.UGg).Url);
+    }
+
+    [Fact]
+    public void A_stale_hover_observation_cannot_settle_a_different_champion()
+    {
+        // Defensive: a caller that skipped a tick must not hand in Ahri's
+        // long-held observation and have it license Lee Sin's pages.
+        var ahriHover = AutoImportCoordinator.TrackHover(null, HoveredAhri(0));
+        var lee = new AutoImportInput(
+            64, "LeeSin", "Lee Sin", 2, false, CompanionTab.Companion, null, true, T0.AddSeconds(30));
+
+        Assert.False(AutoImportCoordinator.IsHoverSettled(ahriHover, lee));
+        Assert.Empty(AutoImportCoordinator.Evaluate(AutoImportState.Initial, lee, ahriHover).Fetch);
     }
 
     // -- Coordinator: the visible-page trigger ------------------------------
@@ -319,7 +496,7 @@ public sealed class SiteAutoImportTests
         const string filtered = "https://u.gg/lol/champions/ahri/build/mid?rank=emerald_plus";
 
         var evaluation = AutoImportCoordinator.Evaluate(
-            state, LockedAhri(CompanionTab.UGg, filtered));
+            state, LockedAhri(CompanionTab.UGg, filtered), hover: null);
 
         var only = Assert.Single(evaluation.Fetch);
         Assert.Equal(CompanionTab.UGg, only.Site);
@@ -335,7 +512,7 @@ public sealed class SiteAutoImportTests
             [new AutoImportOutcome(CompanionTab.UGg, AhriUggDeepLink.ToString(), null)]);
 
         var evaluation = AutoImportCoordinator.Evaluate(
-            state, LockedAhri(CompanionTab.UGg, "https://u.gg/lol/champions/jhin/build/adc"));
+            state, LockedAhri(CompanionTab.UGg, "https://u.gg/lol/champions/jhin/build/adc"), hover: null);
 
         Assert.Empty(evaluation.Fetch);
     }
@@ -350,7 +527,7 @@ public sealed class SiteAutoImportTests
             [new AutoImportOutcome(CompanionTab.UGg, AhriUggDeepLink.ToString(), null)]);
 
         var evaluation = AutoImportCoordinator.Evaluate(
-            state, LockedAhri(CompanionTab.UGg, "https://u.gg/"));
+            state, LockedAhri(CompanionTab.UGg, "https://u.gg/"), hover: null);
         Assert.Empty(evaluation.Fetch);
     }
 
@@ -359,7 +536,7 @@ public sealed class SiteAutoImportTests
     [Fact]
     public void No_client_skips_with_a_reason_and_no_targets()
     {
-        var evaluation = AutoImportCoordinator.Evaluate(AutoImportState.Initial, LockedAhri(lcu: false));
+        var evaluation = AutoImportCoordinator.Evaluate(AutoImportState.Initial, LockedAhri(lcu: false), hover: null);
         Assert.Empty(evaluation.Fetch);
         Assert.NotNull(evaluation.SkipReason);
     }
@@ -369,7 +546,8 @@ public sealed class SiteAutoImportTests
     {
         var evaluation = AutoImportCoordinator.Evaluate(
             AutoImportState.Initial,
-            new AutoImportInput(null, null, null, null, false, CompanionTab.Companion, null, true));
+            new AutoImportInput(null, null, null, null, false, CompanionTab.Companion, null, true, T0),
+            hover: null);
         Assert.Empty(evaluation.Fetch);
         Assert.Null(evaluation.SkipReason);
     }
@@ -694,6 +872,90 @@ public sealed class SiteAutoImportTests
         // the user, and the Coachless half still wrote.
         Assert.DoesNotContain(sink.Statuses, status => status.Contains("stage", StringComparison.Ordinal));
         Assert.Contains(sink.Statuses, status => status.Contains("Auto-imported", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The 2026-09-09 field bug, end to end and in the service's own terms:
+    /// a champion HOVERED in champ select and never locked must end up with
+    /// two rune pages in the client, because that is the whole point of the
+    /// feature ("create two rune pages in game, then I can just select the one
+    /// I want before going into game"). Before this, the ~70s hover produced
+    /// no <c>auto-import:</c> line at all.
+    ///
+    /// <para>Ticked the way the window ticks it -- one input per snapshot,
+    /// each with its own stamp -- so the settle is exercised through the
+    /// service's own hover tracking rather than by handing Evaluate a
+    /// hand-made observation.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_held_hover_imports_items_and_both_rune_pages_without_a_lock()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        // Two 750 ms ticks inside the settle: still nothing, and no lock has
+        // happened in this test at all.
+        await service.OnSnapshotAsync(HoveredAhri(0));
+        await service.OnSnapshotAsync(HoveredAhri(0.75));
+        Assert.Empty(executor.Calls);
+        Assert.Equal(T0, service.Hover!.FirstSeenAt);
+
+        // The tick past the settle imports.
+        await service.OnSnapshotAsync(HoveredAhri(AutoImportCoordinator.HoverSettle.TotalSeconds + 0.75));
+
+        Assert.Equal(
+            [$"worker:{CompanionTab.UGg}:{AhriUggDeepLink}",
+             $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}",
+             $"runes:{AhriCoachlessRunesLink}"],
+            executor.Calls);
+        var runeCreates = api.Calls.Where(call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages").ToArray();
+        Assert.Equal(2, runeCreates.Length);
+        // Requirement 5: the log says WHICH trigger fired.
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("Ahri Mid hovered and held", StringComparison.Ordinal) &&
+            line.Contains("(trigger: hover)", StringComparison.Ordinal));
+        Assert.DoesNotContain(sink.Logs, line =>
+            line.Contains("(trigger: lock)", StringComparison.Ordinal));
+
+        // The lock that follows costs nothing -- same key, already imported.
+        var calls = executor.Calls.Count;
+        var lcu = api.Calls.Count;
+        await service.OnSnapshotAsync(LockedAhri(atSeconds: 20));
+        Assert.Equal(calls, executor.Calls.Count);
+        Assert.Equal(lcu, api.Calls.Count);
+        Assert.Null(service.Hover);
+    }
+
+    /// <summary>
+    /// The lock's own line, and the control that a lock does NOT wait for a
+    /// settle: one tick, one import (see
+    /// <see cref="Lock_run_flushes_each_site_as_its_extraction_completes_without_rune_calls"/>
+    /// for the write detail).
+    /// </summary>
+    [Fact]
+    public async Task A_lock_imports_on_its_first_tick_and_names_the_lock_trigger()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.Equal(2, executor.Calls.Count);
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("Ahri Mid locked in", StringComparison.Ordinal) &&
+            line.Contains("(trigger: lock)", StringComparison.Ordinal));
     }
 
     // -- Service: the Coachless runes leg (2.1.0) -------------------------------
@@ -1090,7 +1352,7 @@ public sealed class SiteAutoImportTests
         var service = NewService(executor, api, sink);
         var hovering = new AutoImportInput(
             62, "MonkeyKing", "Wukong", 1, false,
-            CompanionTab.Coachless, "https://coachless.gg/builds/wukong?role=jungle", true);
+            CompanionTab.Coachless, "https://coachless.gg/builds/wukong?role=jungle", true, T0);
 
         await service.OnSnapshotAsync(hovering);
 
@@ -1194,7 +1456,7 @@ public sealed class SiteAutoImportTests
 
         // One CONNECTED tick with no champion: fetches nothing, but re-arms.
         await service.OnSnapshotAsync(new AutoImportInput(
-            null, null, null, null, false, CompanionTab.Companion, null, LcuConnected: true));
+            null, null, null, null, false, CompanionTab.Companion, null, LcuConnected: true, T0));
         Assert.Empty(sink.Logs);
 
         for (var tick = 0; tick < SiteAutoImportService.DisconnectedNoteAfterEvaluations - 1; tick++)
