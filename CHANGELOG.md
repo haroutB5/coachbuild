@@ -1,5 +1,31 @@
 # Changelog
 
+## Desktop 2.2.2 (2026-09-09)
+
+- The two automatic rune pages no longer delete each other. Field evidence
+  (`companion.log` 2026-09-09 13:11:22, Viktor hovered): `runes: wrote Coachless
+  Viktor` immediately followed by `apply-runes: pruned 1 superseded CoachBuild
+  rune page(s), keeping 1`, and the user was left holding one page instead of
+  the pair. Since 2.2.1 imports on stable hover, a run can carry only one site's
+  rune build, and that run's prune treated the OTHER site's fresh page for the
+  same champion as just another owned page. The prune now groups pages by the
+  champion in their title (`u.gg Viktor` and `Coachless Viktor` are one pair,
+  including the legacy `CoachBuild import:` titles) and never prunes the
+  champion in hand -- only other champions' pages. Foreign and undeletable
+  pages are still never touched, and the cap is unchanged at two pages.
+- The Coachless ITEMS read now settles instead of firing once. Field evidence
+  (same run, 13:11:17): `Coachless extraction failed (every item slot on the
+  page was empty (0 tables on the page, 0 with a slot title, 0 data rows))` --
+  zero tables on a page that renders six, because the read fired at
+  NavigationCompleted and the site paints client-side seconds later. The runes
+  leg of that same run succeeded precisely because it kept its settle probe
+  (`settled ... over 4 reads in 1200ms`). A whole-page emptiness with no
+  rendered rows is now marked retryable and re-read for up to 8s; a page that
+  HAS rendered rows but yields no items still fails immediately with its typed
+  census, so a real absence is never hidden behind a wait. u.gg's read is
+  unaffected -- its extractor marks nothing retryable, so it still costs one
+  read.
+
 ## Desktop 2.2.1 (2026-09-09)
 
 - Automatic import now fires on the HOVERED champion, not only on the locked

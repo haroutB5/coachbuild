@@ -38,6 +38,17 @@ public sealed class RuneApplyService
     public const string UGgOwnedPagePrefix = "u.gg ";
     public const string CoachlessOwnedPagePrefix = "Coachless ";
 
+    /// <summary>The pre-2.2.0 shared title, still ours for prune and reuse.</summary>
+    public const string LegacyImportPrefix = "CoachBuild import: ";
+
+    /// <summary>
+    /// The role words a title may carry BARE, which is only the legacy
+    /// <c>CoachBuild import: Viktor Mid (u.gg)</c> shape. Exactly the labels
+    /// <c>SiteImportValidator.RoleLabel</c> emits for a champ-select role, so a
+    /// champion whose NAME ends in one of these words cannot exist here.
+    /// </summary>
+    private static readonly string[] RoleWords = ["Top", "Jungle", "Mid", "ADC", "Support"];
+
     /// <summary>
     /// How many app-owned rune pages may survive a write,
     /// counting the one just written. The one place this number lives.
@@ -65,6 +76,51 @@ public sealed class RuneApplyService
         (name.StartsWith(UGgOwnedPagePrefix, StringComparison.Ordinal) ||
          name.StartsWith(CoachlessOwnedPagePrefix, StringComparison.Ordinal) ||
          name.StartsWith(OwnedPagePrefix, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Which CHAMPION an owned rune page is for, or null when the title is not
+    /// one of ours. This is a grouping key, not a display name: the only
+    /// property it has to have is that <c>u.gg Viktor (Mid)</c> and
+    /// <c>Coachless Viktor (Mid)</c> answer the SAME thing and a different
+    /// champion answers something else.
+    ///
+    /// <para>WHY IT EXISTS. Field log 2026-09-09 13:11:22, Viktor hovered:
+    /// <c>runes: wrote Coachless Viktor</c> followed immediately by
+    /// <c>apply-runes: pruned 1 superseded CoachBuild rune page(s), keeping
+    /// 1</c> — and the user was left with one page. The two sites import
+    /// independently (2.2.1 imports on stable hover, so a run can carry only
+    /// one of them), and the second write's prune saw the first write's fresh
+    /// page as just another owned page and deleted it. The PAIR for the
+    /// champion in hand is the product; its two halves must never be able to
+    /// delete each other, whichever one is written second.</para>
+    ///
+    /// <para>Strip the site prefix, then a trailing parenthetical (a role on a
+    /// 2.2.0 title, a source on a legacy one), then a bare trailing role word
+    /// (legacy only). What is left is the champion.</para>
+    /// </summary>
+    public static string? ChampionOfOwnedPage(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        var rest = name.Trim();
+        if (rest.StartsWith(UGgOwnedPagePrefix, StringComparison.Ordinal))
+            rest = rest[UGgOwnedPagePrefix.Length..];
+        else if (rest.StartsWith(CoachlessOwnedPagePrefix, StringComparison.Ordinal))
+            rest = rest[CoachlessOwnedPagePrefix.Length..];
+        else if (rest.StartsWith(LegacyImportPrefix, StringComparison.Ordinal))
+            rest = rest[LegacyImportPrefix.Length..];
+        else if (rest.StartsWith(OwnedPagePrefix, StringComparison.Ordinal))
+            rest = rest[OwnedPagePrefix.Length..];
+        else
+            return null;
+        rest = rest.Trim();
+        var open = rest.LastIndexOf('(');
+        if (open > 0 && rest.EndsWith(')')) rest = rest[..open].TrimEnd();
+        var space = rest.LastIndexOf(' ');
+        if (space > 0 &&
+            RoleWords.Contains(rest[(space + 1)..], StringComparer.OrdinalIgnoreCase))
+            rest = rest[..space].TrimEnd();
+        return rest.Length == 0 ? null : rest;
+    }
 
     public async Task<ApplyRunesResult> ApplyAsync(
         ApplyRunesRequest? request,
@@ -300,6 +356,20 @@ public sealed class RuneApplyService
             targets[index] = exact;
             assigned.Add(exact.Id);
         }
+        // The champions this batch is for. A page already holding one of them
+        // is the OTHER HALF OF THE PAIR, and reusing it destroys the pair just
+        // as surely as pruning it does (2.2.2): a Coachless-only hover run whose
+        // only owned page was `u.gg Viktor` used to overwrite it and leave the
+        // user with one page. So the sibling is the reuse candidate of LAST
+        // resort — after same-site pages, after every other champion's page,
+        // and only when there is no free slot to create into instead.
+        var batchChampions = desired
+            .Select(request => ChampionOfOwnedPage(request.Name))
+            .Where(champion => champion is not null)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase)!;
+        bool IsSibling(LcuPage page) =>
+            ChampionOfOwnedPage(page.Name) is { } champion && batchChampions.Contains(champion);
+        var creatable = freeSlots;
         for (var index = 0; index < writableCount; index++)
         {
             if (targets[index] is not null) continue;
@@ -307,8 +377,14 @@ public sealed class RuneApplyService
             var reusable = owned.FirstOrDefault(page =>
                     !assigned.Contains(page.Id) &&
                     string.Equals(PageFamily(page.Name), family, StringComparison.Ordinal))
-                ?? owned.FirstOrDefault(page => !assigned.Contains(page.Id));
-            if (reusable is null) continue;
+                ?? owned.FirstOrDefault(page => !assigned.Contains(page.Id) && !IsSibling(page))
+                ?? (creatable > 0 ? null : owned.FirstOrDefault(page => !assigned.Contains(page.Id)));
+            if (reusable is null)
+            {
+                // Left for the create below, which consumes a free slot.
+                if (creatable > 0) creatable--;
+                continue;
+            }
             targets[index] = reusable;
             assigned.Add(reusable.Id);
         }
@@ -392,7 +468,10 @@ public sealed class RuneApplyService
                 results[0] = results[0] with { Result = first with { Selected = true } };
         }
 
-        await PruneOwnedPagesExceptAsync(successfulIds, cancellationToken).ConfigureAwait(false);
+        await PruneOwnedPagesExceptAsync(
+            successfulIds,
+            desired.Select(request => request.Name!).ToArray(),
+            cancellationToken).ConfigureAwait(false);
         return new AutoRunePagesResult(results, onlyOne);
     }
 
@@ -409,27 +488,83 @@ public sealed class RuneApplyService
     ///   <item>An undeletable page is never returned (the client owns those).</item>
     ///   <item><paramref name="keepId"/> — the page just written — is never
     ///   returned, even if it is somehow not the newest.</item>
-    ///   <item>Of the rest, the newest <see cref="MaxOwnedPages"/>-1 survive.
+    ///   <item>The current champion's SIBLING page — the other site's page for
+    ///   the same champion — takes the survivor slot ahead of any other
+    ///   champion's page, however new that other page is. The pair is the
+    ///   product; the two halves are never each other's competition.</item>
+    ///   <item>Of the rest, the newest fill whatever survivor slots remain.
     ///   "Newest" is page id: the LCU issues them ascending and there is no
     ///   timestamp on the resource, so the id IS the age order.</item>
     /// </list>
     /// </summary>
-    public static IReadOnlyList<int> PagesToPrune(IEnumerable<LcuPage>? pages, int keepId)
+    public static IReadOnlyList<int> PagesToPrune(IEnumerable<LcuPage>? pages, int keepId) =>
+        PruneCore(pages, [keepId], null, siblingsOnly: false);
+
+    /// <summary>
+    /// The prune after an automatic batch write (<see
+    /// cref="ApplyOwnedPagesAsync"/>): every owned page that is neither one of
+    /// the pages just written nor a surviving SIBLING of the champion in hand.
+    ///
+    /// <para>Unlike <see cref="PagesToPrune"/> this deliberately does NOT let
+    /// another champion's page take a spare slot — the batch is the authority
+    /// on what the current champion needs, and a page it did not write for this
+    /// champion is superseded. The only thing 2.2.2 adds is that the current
+    /// champion's other-site page counts as ours to KEEP, up to
+    /// <see cref="MaxOwnedPages"/> in total.</para>
+    ///
+    /// <para><paramref name="writtenNames"/> is every name the batch ASKED for,
+    /// not only the ones that succeeded: a u.gg write that failed this run must
+    /// not cost the user the u.gg page a previous run left behind.</para>
+    /// </summary>
+    public static IReadOnlyList<int> PagesToPruneAfterBatch(
+        IEnumerable<LcuPage>? pages,
+        IReadOnlyCollection<int> keepIds,
+        IEnumerable<string>? writtenNames = null) =>
+        keepIds.Count == 0 ? [] : PruneCore(pages, keepIds, writtenNames, siblingsOnly: true);
+
+    private static IReadOnlyList<int> PruneCore(
+        IEnumerable<LcuPage>? pages,
+        IReadOnlyCollection<int> keepIds,
+        IEnumerable<string>? writtenNames,
+        bool siblingsOnly)
     {
         if (pages is null) return [];
+        var kept = keepIds.ToHashSet();
         var ours = pages
             .Where(page =>
                 page is not null &&
-                page.Id != keepId &&
                 page.IsDeletable &&
                 page.Name is not null &&
                 IsOwnedPageName(page.Name))
+            .ToArray();
+
+        // The champion in hand, named by the write itself and by the pages it
+        // produced. Both, because a write can fail after its page exists and a
+        // page can exist that the read did not return.
+        var champions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in writtenNames ?? [])
+            if (ChampionOfOwnedPage(name) is { } asked) champions.Add(asked);
+        foreach (var page in ours)
+            if (kept.Contains(page.Id) && ChampionOfOwnedPage(page.Name) is { } written)
+                champions.Add(written);
+
+        var others = ours
+            .Where(page => !kept.Contains(page.Id))
             .OrderByDescending(page => page.Id)
             .ToArray();
-        // The written page occupies one slot of the cap, so the survivors
-        // among the others are one fewer.
-        var survivors = Math.Max(0, MaxOwnedPages - 1);
-        return ours.Skip(survivors).Select(page => page.Id).ToArray();
+        var siblingIds = others
+            .Where(page => ChampionOfOwnedPage(page.Name) is { } champion && champions.Contains(champion))
+            .Select(page => page.Id)
+            .ToHashSet();
+        var siblings = others.Where(page => siblingIds.Contains(page.Id));
+        var strangers = others.Where(page => !siblingIds.Contains(page.Id));
+        // The pages just written already occupy their slots of the cap.
+        var budget = Math.Max(0, MaxOwnedPages - kept.Count);
+        var survivors = (siblingsOnly ? siblings : siblings.Concat(strangers))
+            .Take(budget)
+            .Select(page => page.Id)
+            .ToHashSet();
+        return others.Where(page => !survivors.Contains(page.Id)).Select(page => page.Id).ToArray();
     }
 
     public void ClearForChampSelect() => _ledger.Clear();
@@ -533,8 +668,16 @@ public sealed class RuneApplyService
         }
     }
 
+    /// <summary>
+    /// The automatic batch's cleanup. Deletes every owned page the batch did
+    /// not write EXCEPT the current champion's other-site page, which
+    /// <see cref="PagesToPruneAfterBatch"/> spares — the 2.2.2 fix for the
+    /// sibling-eats-sibling field bug. Fail-soft like every prune: both writes
+    /// already landed and cleanup may not undo them.
+    /// </summary>
     private async Task PruneOwnedPagesExceptAsync(
         IReadOnlyCollection<int> keepIds,
+        IReadOnlyCollection<string> writtenNames,
         CancellationToken cancellationToken)
     {
         if (keepIds.Count == 0) return;
@@ -545,11 +688,9 @@ public sealed class RuneApplyService
                 "/lol-perks/v1/pages",
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             if (!pagesResponse.Ok) return;
-            var keep = keepIds.ToHashSet();
-            var doomed = ReadPages(pagesResponse.Content)
-                .Where(page => page.IsDeletable && IsOwnedPageName(page.Name) && !keep.Contains(page.Id))
-                .Select(page => page.Id)
-                .ToArray();
+            var all = ReadPages(pagesResponse.Content);
+            var doomed = PagesToPruneAfterBatch(all, keepIds, writtenNames);
+            var surviving = all.Count(page => page.IsDeletable && IsOwnedPageName(page.Name)) - doomed.Count;
             var removed = 0;
             foreach (var id in doomed)
             {
@@ -566,7 +707,7 @@ public sealed class RuneApplyService
                 }
             }
             if (removed > 0)
-                _log?.Info($"apply-runes: pruned {removed} superseded CoachBuild rune page(s), keeping {keep.Count}");
+                _log?.Info($"apply-runes: pruned {removed} superseded CoachBuild rune page(s), keeping {surviving}");
         }
         catch
         {

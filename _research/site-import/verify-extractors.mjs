@@ -305,6 +305,36 @@ const clEmpty = runOnDocument(clItemsJs, makeDocument('<html><body><table></tabl
 check('coachless recognized page without slots reports empty',
   typeof clEmpty.error === 'string' && clEmpty.error.includes('every item slot'), JSON.stringify(clEmpty));
 
+// ---- 2.2.2: the ITEMS read settles, it does not fire once -------------------
+// Field log 2026-09-09 13:11:17, Viktor mid: 'Coachless extraction failed
+// (every item slot on the page was empty (0 tables on the page, 0 with a slot
+// title, 0 data rows))' -- ZERO tables, off a page that renders six. The read
+// fired at NavigationCompleted and the Angular app painted seconds later; the
+// RUNES leg of the same run settled over 4 reads in 1200ms and succeeded.
+// The C# half (RunesSettleProbe/ReadWithSettleAsync) re-reads only while the
+// EXTRACTOR marks its own absence retryable, so this is the decision that
+// makes the loop run. Both halves must be right:
+//   pre-hydration (no rendered rows) -> retryable, wait
+//   rendered but yields nothing      -> a verdict, now, with its census
+const clNotYet = runOnDocument(clItemsJs,
+  makeDocument('<html><body><div>loading</div></body></html>'),
+  'https://coachless.gg/builds/jhin?role=adc');
+check('an un-rendered builds page is a RETRYABLE failure, not a verdict',
+  typeof clNotYet.error === 'string' && clNotYet.retryable === true, JSON.stringify(clNotYet));
+check('and it still names the census that made it wait',
+  typeof clNotYet.error === 'string' && clNotYet.error.includes('0 tables on the page') &&
+  clNotYet.error.includes('0 data rows'), clNotYet.error);
+check('the field census (tables present, none titled, no rows) is retryable too',
+  clEmpty.retryable === true, JSON.stringify(clEmpty));
+// The control that makes the pair mean something: a page that HAS rendered is
+// never retryable, so a real empty build fails immediately instead of costing
+// the user eight seconds of champ select.
+check('control: a successful items read carries no retry marker',
+  payload.retryable === undefined && payload.error === undefined,
+  JSON.stringify(payload).slice(0, 120));
+// A URL that is not a builds page can never become one by waiting.
+check('a non-builds url is NOT retryable', clWrong.retryable === undefined, JSON.stringify(clWrong));
+
 // ---- 2.1.0 field fixes: the Nasus TOP pages --------------------------------
 // Captured live 2026-09-08 from the two pages that produced the field failures
 // "u.gg yielded no item build -- ignored" and 'Coachless extraction failed
@@ -481,6 +511,15 @@ check('a page where no slot yields items is still a typed failure',
   typeof clDead.error === 'string' && clDead.error.includes('every item slot'), JSON.stringify(clDead).slice(0, 300));
 check('and that reason does not say "no build" (which would collapse the detail)',
   typeof clDead.error === 'string' && !clDead.error.toLowerCase().includes('no build'), clDead.error);
+// 2.2.2, and this is the half that keeps the settle loop honest: this page IS
+// rendered -- six titled slot tables, rows in all of them -- it simply carries
+// no readable item icons. Waiting cannot change that, so it must NOT be marked
+// retryable. Without this the settle loop would turn every genuinely empty
+// build into an 8-second stall before the same failure.
+check('a RENDERED page that yields no items is a verdict, not a wait',
+  clDead.retryable === undefined, JSON.stringify(clDead).slice(0, 200));
+check('and the mutant really is a rendered page (rows, just no icons)',
+  typeof clDead.error === 'string' && !clDead.error.includes(', 0 data rows'), clDead.error);
 
 // ---- 2.1.0: the Coachless RUNES page ---------------------------------------
 // Runs the shipped CoachlessRunesTemplate verbatim against the real rendered

@@ -1043,11 +1043,28 @@ public sealed class SiteAutoImportService
 
         var assignedRole = SiteDeepLink.RoleToken(input.RoleId);
         var requests = new List<ApplyRunesRequest>(2);
-        if (TryBuildRuneRequest(uggPayload, input.ChampionName, assignedRole, out var uggRequest))
-            requests.Add(uggRequest);
-        if (TryBuildRuneRequest(coachlessPayload, input.ChampionName, assignedRole, out var coachlessRequest))
-            requests.Add(coachlessRequest);
+        // A DROPPED HALF IS A LOG LINE, NOT A SILENCE (2.2.2). Field log
+        // 2026-09-09 13:11, Viktor: the u.gg fetch succeeded and was never
+        // mentioned again -- no "wrote u.gg Viktor", no "yielded no rune
+        // build", nothing. A payload that arrives and then fails to become a
+        // request left no trace at all, so a one-page champ select was
+        // indistinguishable from a two-page one that got pruned.
+        AddRuneRequest(CompanionTab.UGg, uggPayload);
+        AddRuneRequest(CompanionTab.Coachless, coachlessPayload);
         if (requests.Count == 0) return;
+
+        void AddRuneRequest(CompanionTab site, SiteImportPayload? payload)
+        {
+            if (payload is null) return;
+            if (TryBuildRuneRequest(payload, input.ChampionName, assignedRole, out var request))
+            {
+                requests.Add(request);
+                return;
+            }
+            _sink.LogInfo(
+                $"runes: {CompanionTabs.LabelFor(site)} yielded a page but no rune build to write " +
+                $"({SiteImportValidator.ValidateRunes(payload.Runes) ?? "the request failed payload validation"})");
+        }
 
         try
         {

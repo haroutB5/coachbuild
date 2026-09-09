@@ -232,6 +232,188 @@ public sealed class RunePagePruneTests
             call.Path.StartsWith("/lol-perks/v1/pages/", StringComparison.Ordinal));
     }
 
+    // ---- 2.2.2: the pair must survive its own sibling's write ---------------
+    // Field log 2026-09-09 13:11:22, Viktor hovered: `runes: wrote Coachless
+    // Viktor` and, in the same breath, `apply-runes: pruned 1 superseded
+    // CoachBuild rune page(s), keeping 1`. 2.2.1 imports on stable hover, so a
+    // single run can carry only one site's rune build; the second site's write
+    // then pruned the first site's FRESH page for the same champion. The pair
+    // is the product. These are the assertions that the halves cannot eat each
+    // other and that other champions are still cleaned up.
+
+    [Fact]
+    public void The_champion_is_read_out_of_every_title_shape_we_have_ever_written()
+    {
+        // The pair, 2.2.0 shapes, with and without an assigned role.
+        Assert.Equal("Viktor", RuneApplyService.ChampionOfOwnedPage("u.gg Viktor"));
+        Assert.Equal("Viktor", RuneApplyService.ChampionOfOwnedPage("Coachless Viktor"));
+        Assert.Equal("Viktor", RuneApplyService.ChampionOfOwnedPage("u.gg Viktor (Mid)"));
+        Assert.Equal("Viktor", RuneApplyService.ChampionOfOwnedPage("Coachless Viktor (Mid)"));
+        // Legacy titles: role bare, source parenthesised.
+        Assert.Equal("Viktor", RuneApplyService.ChampionOfOwnedPage("CoachBuild import: Viktor Mid (u.gg)"));
+        Assert.Equal("Nasus", RuneApplyService.ChampionOfOwnedPage("CoachBuild import: Nasus (Coachless)"));
+        // Two-word champions keep both words.
+        Assert.Equal("Lee Sin", RuneApplyService.ChampionOfOwnedPage("u.gg Lee Sin (Jungle)"));
+        Assert.Equal("Lee Sin", RuneApplyService.ChampionOfOwnedPage("CoachBuild import: Lee Sin Jungle (u.gg)"));
+        // A page that is not ours has no champion, so it can never be a sibling.
+        Assert.Null(RuneApplyService.ChampionOfOwnedPage("My Viktor page"));
+        Assert.Null(RuneApplyService.ChampionOfOwnedPage(null));
+        Assert.Null(RuneApplyService.ChampionOfOwnedPage(""));
+    }
+
+    [Fact]
+    public void A_sibling_site_page_for_the_same_champion_is_never_pruned()
+    {
+        var pages = new[]
+        {
+            Page(10, "u.gg Viktor"),
+            Page(11, "Coachless Viktor"),
+        };
+
+        // The batch wrote only the Coachless half this run (hover import).
+        var doomed = RuneApplyService.PagesToPruneAfterBatch(pages, [11], ["Coachless Viktor"]);
+
+        Assert.Empty(doomed);
+    }
+
+    [Fact]
+    public void The_sibling_survives_even_when_this_run_never_asked_for_it()
+    {
+        // The u.gg fetch failed, so its name is not in writtenNames either. The
+        // page still belongs to the champion in hand, so it stays.
+        var pages = new[] { Page(10, "u.gg Viktor (Mid)"), Page(11, "Coachless Viktor (Mid)") };
+        Assert.Empty(RuneApplyService.PagesToPruneAfterBatch(pages, [11], ["Coachless Viktor (Mid)"]));
+    }
+
+    [Fact]
+    public void Other_champions_pages_are_still_pruned_by_a_batch_write()
+    {
+        var pages = new[]
+        {
+            Page(4, "CoachBuild import: Nasus Top (u.gg)"),
+            Page(5, "u.gg Jhin (ADC)"),
+            Page(10, "u.gg Viktor (Mid)"),
+            Page(11, "Coachless Viktor (Mid)"),
+        };
+
+        var doomed = RuneApplyService.PagesToPruneAfterBatch(pages, [11], ["Coachless Viktor (Mid)"]);
+
+        Assert.Equal([5, 4], doomed);
+        Assert.DoesNotContain(10, doomed);
+    }
+
+    [Fact]
+    public void The_pair_takes_the_survivor_slot_ahead_of_a_newer_stranger()
+    {
+        // The single-write path. Id order says 12 is the newest, but 10 is the
+        // other half of the champion in hand, so 10 survives and 12 goes.
+        var pages = new[]
+        {
+            Page(10, "u.gg Viktor"),
+            Page(11, "Coachless Viktor"),
+            Page(12, "u.gg Jhin (ADC)"),
+        };
+
+        var doomed = RuneApplyService.PagesToPrune(pages, keepId: 11);
+
+        Assert.Equal([12], doomed);
+    }
+
+    [Fact]
+    public void A_batch_never_keeps_more_than_the_cap_even_with_stale_siblings()
+    {
+        // Three pages for the same champion (a roleless title left over from an
+        // earlier run). Both halves just written fill the cap, so the stale one
+        // is still pruned -- sparing siblings is not a licence to accumulate.
+        var pages = new[]
+        {
+            Page(9, "u.gg Viktor"),
+            Page(10, "u.gg Viktor (Mid)"),
+            Page(11, "Coachless Viktor (Mid)"),
+        };
+
+        var doomed = RuneApplyService.PagesToPruneAfterBatch(
+            pages, [10, 11], ["u.gg Viktor (Mid)", "Coachless Viktor (Mid)"]);
+
+        Assert.Equal([9], doomed);
+    }
+
+    [Fact]
+    public void A_foreign_page_for_the_same_champion_is_still_never_touched()
+    {
+        var pages = new[]
+        {
+            Page(1, "My Viktor page"),
+            Page(2, "u.gg Viktor", deletable: false),
+            Page(10, "u.gg Viktor"),
+            Page(11, "Coachless Viktor"),
+        };
+
+        var doomed = RuneApplyService.PagesToPruneAfterBatch(pages, [11], ["Coachless Viktor"]);
+
+        Assert.Empty(doomed);
+    }
+
+    /// <summary>
+    /// The wire proof of the field bug. The 2.2.1 hover import means a single
+    /// run can carry ONE site's rune build; here the u.gg half is already in
+    /// the client from the previous run and the Coachless half is written now.
+    /// The u.gg page must be neither overwritten nor deleted.
+    /// </summary>
+    [Fact]
+    public async Task A_coachless_only_run_leaves_the_ugg_half_of_the_pair_alone()
+    {
+        var api = new StubLcu();
+        api.Enqueue("[" + Wire(10, "u.gg Viktor (Mid)") + "]");   // 1. read pages
+        api.Enqueue("{}");                                        // 2. currentpage (foreign)
+        api.Enqueue("{\"ownedPageCount\":5}");                    // 3. inventory
+        api.Enqueue("{\"id\":11}");                               // 4. create
+        api.Enqueue("[" + Wire(10, "u.gg Viktor (Mid)") + "," +   // 5. the prune's re-read
+            Wire(11, "Coachless Viktor (Mid)") + "]");
+
+        var result = await new RuneApplyService(api).ApplyOwnedPagesAsync([CoachlessViktor()]);
+
+        Assert.True(Assert.Single(result.Pages).Result.Ok);
+        // Not deleted...
+        Assert.DoesNotContain(api.Calls, call => call.Method == HttpMethod.Delete);
+        // ...and not cannibalised for reuse either: the write CREATED.
+        Assert.Single(api.Calls, call => call.Method == HttpMethod.Post);
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Method == HttpMethod.Put && call.Path == "/lol-perks/v1/pages/10");
+    }
+
+    /// <summary>
+    /// And the prune still does its job: the champion BEFORE this one is
+    /// cleaned up in the same write that spares the current pair.
+    /// </summary>
+    [Fact]
+    public async Task The_same_write_still_prunes_the_previous_champion()
+    {
+        var api = new StubLcu();
+        api.Enqueue("[" + Wire(4, "u.gg Jhin (ADC)") + "," + Wire(5, "Coachless Jhin (ADC)") + "," +
+            Wire(10, "u.gg Viktor (Mid)") + "]");                 // 1. read pages
+        api.Enqueue("{}");                                        // 2. currentpage
+        api.Enqueue("{\"ownedPageCount\":5}");                    // 3. inventory
+        api.Enqueue("{}");                                        // 4. edit (reuses the Coachless-family page 5)
+        api.Enqueue("[" + Wire(4, "u.gg Jhin (ADC)") + "," +      // 5. the prune's re-read
+            Wire(5, "Coachless Viktor (Mid)") + "," + Wire(10, "u.gg Viktor (Mid)") + "]");
+        api.Enqueue("{}");                                        // 6. the delete
+
+        var result = await new RuneApplyService(api).ApplyOwnedPagesAsync([CoachlessViktor()]);
+
+        Assert.True(Assert.Single(result.Pages).Result.Ok);
+        var deletes = api.Calls
+            .Where(call => call.Method == HttpMethod.Delete)
+            .Select(call => call.Path)
+            .ToArray();
+        // Jhin's leftover goes; the Viktor pair survives whole.
+        Assert.Equal(["/lol-perks/v1/pages/4"], deletes);
+    }
+
+    private static ApplyRunesRequest CoachlessViktor() =>
+        new("Coachless Viktor (Mid)", 8000, 8400,
+            [8021, 8009, 9105, 8017, 8473, 8451, 5007, 5010, 5013], false, "auto");
+
     private static IReadOnlyList<ApplyRunesRequest> TwoRequests() =>
     [
         new("u.gg Nasus (Top)", 8000, 8400,

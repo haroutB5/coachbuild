@@ -444,10 +444,28 @@ public static class SiteImportExtractors
     /// <para>Item ids read numerically off the row's <c>clr-item-icon
     /// img</c> (<c>/img/item/{id}.webp</c>), skipping icons the page hid
     /// itself (<c>onerror="this.style.display='none'"</c>).</para>
+    ///
+    /// <para>THE READ SETTLES, IT IS NOT ONE SHOT (2.2.2). Field log
+    /// 2026-09-09 13:11:17, Viktor mid: <c>Coachless extraction failed (every
+    /// item slot on the page was empty (0 tables on the page, 0 with a slot
+    /// title, 0 data rows))</c> — zero TABLES, on a page that renders six. The
+    /// read fired at NavigationCompleted and Coachless is an Angular SPA that
+    /// paints seconds later; the RUNES leg succeeded in the same run because it
+    /// kept its settle probe (<c>settled ... over 4 reads in 1200ms</c>). So
+    /// the whole-page emptiness now carries <c>retryable: true</c> — the same
+    /// marker <see cref="RunesSettleProbe"/> reads — and the caller re-reads
+    /// until a titled slot table has rows or the settle window closes. A page
+    /// that HAS rendered rows but yields no items is NOT retryable: waiting
+    /// cannot change it, and the typed census stands immediately.</para>
     /// </summary>
     public const string CoachlessItemsTemplate = """
         (function () {
           function fail(message) { return JSON.stringify({ error: message }); }
+          // Same envelope the runes read has used since 2.1.0: an absence the
+          // caller should re-read rather than believe. The LAST read is what
+          // gets reported, so a genuinely empty page still fails with this
+          // very census -- just after the settle window instead of before it.
+          function failWait(message) { return JSON.stringify({ error: message, retryable: true }); }
           function slotTables() {
             var out = [];
             var tables = document.getElementsByTagName('table');
@@ -497,14 +515,19 @@ public static class SiteImportExtractors
           // (tables present, none titled) from a page still hydrating (tables
           // and titles present, no rows). Same degrade-with-a-census shape the
           // slot reads and the runes rows already use.
+          // How many data rows the page has actually painted across every
+          // titled slot table. Zero is the SPA's pre-hydration signature and
+          // the one thing waiting can fix; the census reports it either way.
+          function renderedRows() {
+            var titled = slotTables();
+            var rows = 0;
+            for (var t = 0; t < titled.length; t++) rows += dataRows(titled[t].table).length;
+            return rows;
+          }
           function pageCensus() {
             var all = document.getElementsByTagName('table');
             var titled = slotTables();
-            var rows = 0;
-            for (var t = 0; t < titled.length; t++) {
-              var listed = dataRows(titled[t].table);
-              rows += listed.length;
-            }
+            var rows = renderedRows();
             var titles = [];
             for (var n = 0; n < titled.length && n < 8; n++) titles.push(titled[n].title);
             return all.length + ' tables on the page, ' + titled.length +
@@ -589,8 +612,13 @@ public static class SiteImportExtractors
             }
             // Deliberately NOT the words "no build": preserve the per-slot
             // detail this branch carries into the log.
-          if (!blocks.length)
-            return fail('every item slot on the page was empty (' + pageCensus() + ') -- ' + notes.join('; ').slice(0, 240));
+          if (!blocks.length) {
+            var barren = 'every item slot on the page was empty (' + pageCensus() + ') -- ' +
+              notes.join('; ').slice(0, 240);
+            // Rows on the page mean the page rendered and simply has nothing
+            // we can read: a verdict. No rows mean it has not rendered yet.
+            return renderedRows() > 0 ? fail(barren) : failWait(barren);
+          }
           return JSON.stringify({
             source: 'coachless', championSlug: slug, role: role, runes: null,
             itemBlocks: blocks, meta: { notes: notes }

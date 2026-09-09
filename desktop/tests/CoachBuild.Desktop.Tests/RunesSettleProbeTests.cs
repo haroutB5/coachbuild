@@ -32,6 +32,27 @@ public sealed class RunesSettleProbeTests
         Assert.True(RunesSettleProbe.IsRetryable(wrapped));
     }
 
+    /// <summary>
+    /// 2.2.2: the ITEMS read uses this same probe. Field log 2026-09-09
+    /// 13:11:17, Viktor mid — the exact reason string, off a page that renders
+    /// six slot tables, five seconds before the runes leg of the SAME run
+    /// settled over 4 reads and succeeded.
+    /// </summary>
+    [Fact]
+    public void The_items_reads_pre_hydration_census_is_retryable_too()
+    {
+        const string notYet =
+            """{"error":"every item slot on the page was empty (0 tables on the page, 0 with a slot title, 0 data rows) -- coachless: slot Starter is not on the page -- omitted","retryable":true}""";
+        Assert.True(RunesSettleProbe.IsRetryable(notYet));
+        Assert.True(RunesSettleProbe.IsRetryable(System.Text.Json.JsonSerializer.Serialize(notYet)));
+
+        // ...and the same census WITHOUT the mark — a page that rendered its
+        // rows and simply has nothing readable — is answered, not waited on.
+        const string rendered =
+            """{"error":"every item slot on the page was empty (8 tables on the page, 8 with a slot title, 58 data rows)"}""";
+        Assert.False(RunesSettleProbe.IsRetryable(rendered));
+    }
+
     [Fact]
     public void A_successful_payload_is_not_retryable()
     {

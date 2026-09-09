@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using CoachBuild.Desktop.Web;
 using Xunit;
 
@@ -89,6 +90,35 @@ public sealed class SiteImportExtractorTests
         Assert.Contains("meta: { notes: notes }", read, StringComparison.Ordinal);
         // The pre-2.1.0 per-slot aborts are gone.
         Assert.DoesNotContain("return fail('slot \"' + SLOT_ORDER[b]", read, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 2.2.2 field fix. The items read must be able to say "not yet" as well as
+    /// "no": a whole-page emptiness with nothing rendered is retryable, and the
+    /// C# settle loop re-reads it. The BEHAVIOUR — which census is retryable and
+    /// which is a verdict — is proved against the real fixtures by
+    /// <c>_research/site-import/verify-extractors.mjs</c> (including both
+    /// mutants: always-fail and always-wait). This pins that the shipped string
+    /// is the one that oracle exercised, and that the decision is made on
+    /// RENDERED ROWS rather than merely on the absence of blocks.
+    /// </summary>
+    [Fact]
+    public void The_coachless_items_read_can_say_not_yet_as_well_as_no()
+    {
+        var read = SiteImportExtractors.CoachlessItemsScript;
+        // The same envelope the runes read uses, which RunesSettleProbe reads.
+        Assert.Contains("retryable: true", read, StringComparison.Ordinal);
+        Assert.Contains("function failWait(", read, StringComparison.Ordinal);
+        // The decision, not just the capability: rows on the page mean a verdict.
+        Assert.Contains("renderedRows() > 0 ? fail(barren) : failWait(barren)", read, StringComparison.Ordinal);
+        // And the census still travels on the failure either way.
+        Assert.Contains("every item slot on the page was empty", read, StringComparison.Ordinal);
+        // Only the whole-page branch may wait: a wrong URL can never become a
+        // builds page by waiting, and a per-slot absence is a note, not a wait.
+        // Two occurrences total: the definition and the single call site.
+        Assert.Equal(2, Regex.Matches(read, @"failWait\(").Count);
+        Assert.Equal(1, Regex.Matches(read, @"failWait\(barren\)").Count);
+        Assert.Contains("return fail('not a champion builds page')", read, StringComparison.Ordinal);
     }
 
     [Fact]

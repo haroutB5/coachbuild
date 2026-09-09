@@ -35,33 +35,90 @@ public sealed class SiteTabComplianceTests
         }
     }
 
+    /// <summary>
+    /// Every script this app runs on a third-party page is one of the shipped
+    /// consts, run from one of the named automatic reads. Nothing else.
+    ///
+    /// <para>2.2.2 added ONE indirection: <c>ReadWithSettleAsync</c>, the
+    /// re-read loop the runes leg has used since 2.1.0 and the items leg now
+    /// uses too, takes its script as a parameter. So the pin is in two halves —
+    /// the loop may only ever execute its own <c>script</c> argument, and every
+    /// caller of the loop must name a shipped const. An unnamed script cannot
+    /// reach a page through either half.</para>
+    /// </summary>
     [Fact]
     public void Site_scripts_are_limited_to_automatic_reads_and_consent()
     {
         var source = ReadSource(WindowSource);
-        var allowedSites = new HashSet<string>(
+        var namedReads = new HashSet<string>(
             [
                 "ExtractVisibleOnUiAsync", "FetchViaWorkerOnUiAsync",
                 "FetchCoachlessRunesOnUiAsync", "DismissConsentAsync",
-                "DismissMyStatsConsentAsync",
+                "DismissMyStatsConsentAsync", "ReadItemsWithSettleAsync",
             ],
             StringComparer.Ordinal);
-        foreach (var method in allowedSites) Assert.Contains(method, source, StringComparison.Ordinal);
+        foreach (var method in namedReads) Assert.Contains(method, source, StringComparison.Ordinal);
         Assert.DoesNotContain("RunCoachlessWalkAsync", source, StringComparison.Ordinal);
         Assert.DoesNotContain("CoachlessStepScript", source, StringComparison.Ordinal);
 
+        // Half one: who may call ExecuteScriptAsync at all, and with what.
+        var runners = new HashSet<string>(
+            ["ReadWithSettleAsync", "DismissConsentAsync", "DismissMyStatsConsentAsync"],
+            StringComparer.Ordinal);
         var invocations = Regex.Matches(source, @"\.\s*ExecuteScriptAsync\s*\(");
-        Assert.True(invocations.Count >= allowedSites.Count);
+        Assert.True(invocations.Count >= runners.Count, $"{invocations.Count} ExecuteScriptAsync calls");
         foreach (Match invocation in invocations)
         {
-            Assert.Contains(EnclosingMethod(source, invocation.Index), allowedSites);
+            var method = EnclosingMethod(source, invocation.Index);
+            Assert.Contains(method, runners);
             var callText = source.Substring(invocation.Index, Math.Min(600, source.Length - invocation.Index));
+            // The settle loop runs the script it was HANDED and never picks one.
+            var allowed = method == "ReadWithSettleAsync"
+                ? callText.Contains("ExecuteScriptAsync(script)", StringComparison.Ordinal)
+                : callText.Contains("ConsentDismissScript", StringComparison.Ordinal);
+            Assert.True(allowed, method + " :: " + callText[..Math.Min(80, callText.Length)]);
+        }
+
+        // Half two: every hand-off into the settle loop names a shipped const,
+        // and every such call site is one of the named automatic reads.
+        var settleCalls = Regex.Matches(source, @"ReadWithSettleAsync\s*\(\s*\n?\s*core,");
+        Assert.True(settleCalls.Count >= 2, $"{settleCalls.Count} settle hand-offs");
+        foreach (Match call in settleCalls)
+        {
+            Assert.Contains(EnclosingMethod(source, call.Index), namedReads);
+            var callText = source.Substring(call.Index, Math.Min(600, source.Length - call.Index));
             Assert.True(
                 callText.Contains("UGgScript", StringComparison.Ordinal) ||
                 callText.Contains("CoachlessItemsScript", StringComparison.Ordinal) ||
-                callText.Contains("CoachlessRunesScript", StringComparison.Ordinal) ||
-                callText.Contains("ConsentDismissScript", StringComparison.Ordinal));
+                callText.Contains("CoachlessRunesScript", StringComparison.Ordinal),
+                callText[..Math.Min(120, callText.Length)]);
         }
+    }
+
+    /// <summary>
+    /// 2.2.2. BOTH item reads settle, not just the runes one. Field log
+    /// 2026-09-09 13:11:17: the worker's one-shot Coachless items read returned
+    /// <c>0 tables on the page</c> off a page that renders six, while the runes
+    /// leg of the same run settled over 4 reads and succeeded. Neither items
+    /// read may execute a script on its own any more.
+    /// </summary>
+    [Fact]
+    public void Both_item_reads_go_through_the_settle_loop()
+    {
+        var source = ReadSource(WindowSource);
+        foreach (var reader in new[] { "ExtractVisibleOnUiAsync", "FetchViaWorkerOnUiAsync" })
+        {
+            var start = source.IndexOf("private async Task<string?> " + reader, StringComparison.Ordinal);
+            Assert.True(start > 0, reader + " not found");
+            var end = source.IndexOf("\n    }", start, StringComparison.Ordinal);
+            Assert.True(end > start, reader + " body not bounded");
+            var body = source[start..end];
+            Assert.Contains("ReadItemsWithSettleAsync(", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("ExecuteScriptAsync", body, StringComparison.Ordinal);
+        }
+        // The runes read keeps the loop it has had since 2.1.0 — one loop now.
+        Assert.Contains("ReadWithSettleAsync(", source, StringComparison.Ordinal);
+        Assert.Equal(1, Regex.Matches(source, @"private async Task<string\?> ReadWithSettleAsync").Count);
     }
 
     [Fact]

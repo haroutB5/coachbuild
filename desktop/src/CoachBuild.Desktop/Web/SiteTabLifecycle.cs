@@ -131,6 +131,14 @@ public sealed record ConsentDismissal(bool Dismissed, string Reason)
 /// C# half that recognizes the mark, so the window settle-polls instead of
 /// reporting a first-paint read as the answer.</para>
 ///
+/// <para>NOT ONLY RUNES SINCE 2.2.2. The name is historical: the Coachless
+/// ITEMS read has the same defect and now uses the same mark. Field log
+/// 2026-09-09 13:11:17, Viktor mid: <c>every item slot on the page was empty
+/// (0 tables on the page, 0 with a slot title, 0 data rows)</c> from a one-shot
+/// read at NavigationCompleted, 5 seconds before the runes leg of the SAME run
+/// settled and succeeded. This probe is site- and page-agnostic: it reads the
+/// extractor's own claim, nothing else.</para>
+///
 /// <para>Fails CLOSED: anything unparseable, or any failure without the mark,
 /// is NOT retryable — an honest typed failure must still reach the log on its
 /// first occurrence rather than being swallowed by an eight-second wait.</para>

@@ -1463,11 +1463,31 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (core is null) return null;
         await DismissConsentAsync(core, site, cancellationToken).ConfigureAwait(true);
         if (_disposed) return null;
-        return await core.ExecuteScriptAsync(
+        return await ReadItemsWithSettleAsync(core, site, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// The ITEMS read, settled (2.2.2). Field log 2026-09-09 13:11:17 read
+    /// Coachless exactly once at NavigationCompleted and got <c>every item slot
+    /// on the page was empty (0 tables on the page, 0 with a slot title, 0 data
+    /// rows)</c> off a page that renders six tables -- while the RUNES leg in
+    /// the same run settled over 4 reads in 1200ms and succeeded. Same probe,
+    /// same machinery. u.gg's script marks nothing retryable, so a u.gg read
+    /// still costs exactly one call and logs nothing.
+    /// </summary>
+    private Task<string?> ReadItemsWithSettleAsync(
+        CoreWebView2 core,
+        CompanionTab site,
+        CancellationToken cancellationToken) =>
+        ReadWithSettleAsync(
+            core,
             site == CompanionTab.Coachless
                 ? SiteImportExtractors.CoachlessItemsScript
-                : SiteImportExtractors.UGgScript).ConfigureAwait(true);
-    }
+                : SiteImportExtractors.UGgScript,
+            $"items: settled the {CompanionTabs.LabelFor(site)} items page",
+            "-- slot rows arrived",
+            "-- still no slot rows",
+            cancellationToken);
 
     /// <summary>
     /// How long the import waits after accepting a consent dialog before it
@@ -1629,31 +1649,55 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         await DismissConsentAsync(core, CompanionTab.Coachless, cancellationToken).ConfigureAwait(true);
         if (_disposed) return null;
 
-        // SETTLE-POLL, do not read once (2.1.0 round 2). NavigationCompleted
-        // means the document arrived, not that the WPA numbers did: the page
-        // is Angular and paints its rune cards first, which is how a page that
-        // reads perfectly as a fixture produced "no keystone on the runes page
-        // carried a WPA reading" live. Re-read while the extractor says the
-        // absence is still growable; the LAST result is what is reported, so a
-        // timed-out settle returns the extractor's own typed failure with its
-        // per-row census rather than a bare "timed out".
+        return await ReadWithSettleAsync(
+            core,
+            SiteImportExtractors.CoachlessRunesScript,
+            "runes: settled the Coachless runes page",
+            "-- readings arrived",
+            "-- still no WPA readings",
+            cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// One extractor read that SETTLES rather than firing once (2.1.0 round 2
+    /// for runes, 2.2.2 for items). NavigationCompleted means the document
+    /// arrived, not that the site's client-rendered content did: both Coachless
+    /// pages are Angular and paint after the load event, which is how pages
+    /// that read perfectly as fixtures produced "no keystone ... carried a WPA
+    /// reading" and "0 tables on the page" live.
+    ///
+    /// <para>Re-reads while the EXTRACTOR says its own absence is still
+    /// growable (<see cref="RunesSettleProbe.IsRetryable"/>) — never on a
+    /// timer's opinion. The LAST result is what is returned, so a timed-out
+    /// settle reports the extractor's typed failure and its census rather than
+    /// a bare "timed out". A script that never marks anything retryable (u.gg)
+    /// costs exactly one read and logs nothing.</para>
+    /// </summary>
+    private async Task<string?> ReadWithSettleAsync(
+        CoreWebView2 core,
+        string script,
+        string settledLabel,
+        string arrivedSuffix,
+        string missingSuffix,
+        CancellationToken cancellationToken)
+    {
         var deadline = RunesSettleProbe.SettleTimeoutMs;
         var waited = 0;
-        var raw = await core.ExecuteScriptAsync(SiteImportExtractors.CoachlessRunesScript).ConfigureAwait(true);
+        var raw = await core.ExecuteScriptAsync(script).ConfigureAwait(true);
         var reads = 1;
         while (!_disposed && RunesSettleProbe.IsRetryable(raw) && waited < deadline)
         {
             await Task.Delay(RunesSettleProbe.SettleDelayMs, cancellationToken).ConfigureAwait(true);
             if (_disposed) return raw;
             waited += RunesSettleProbe.SettleDelayMs;
-            raw = await core.ExecuteScriptAsync(SiteImportExtractors.CoachlessRunesScript).ConfigureAwait(true);
+            raw = await core.ExecuteScriptAsync(script).ConfigureAwait(true);
             reads++;
         }
         if (reads > 1)
         {
             LogLifecycle(
-                $"runes: settled the Coachless runes page over {reads} reads in {waited}ms " +
-                (RunesSettleProbe.IsRetryable(raw) ? "-- still no WPA readings" : "-- readings arrived"));
+                $"{settledLabel} over {reads} reads in {waited}ms " +
+                (RunesSettleProbe.IsRetryable(raw) ? missingSuffix : arrivedSuffix));
         }
         return raw;
     }
@@ -1716,10 +1760,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (_disposed) return null;
         await DismissConsentAsync(core, site, cancellationToken).ConfigureAwait(true);
         if (_disposed) return null;
-        return await core.ExecuteScriptAsync(
-            site == CompanionTab.Coachless
-                ? SiteImportExtractors.CoachlessItemsScript
-                : SiteImportExtractors.UGgScript).ConfigureAwait(true);
+        return await ReadItemsWithSettleAsync(core, site, cancellationToken).ConfigureAwait(true);
     }
 
     /// <summary>
