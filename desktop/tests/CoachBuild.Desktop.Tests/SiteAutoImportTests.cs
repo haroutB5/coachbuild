@@ -9,7 +9,7 @@ namespace CoachBuild.Desktop.Tests;
 /// <summary>
 /// The automatic item import: the coordinator's debounce/trigger matrix
 /// (pure), the service orchestration against fakes (single-flight, executor
-/// routing, items-only batched writes), and the runes button's pure state.
+/// routing, items-only batched writes), and automatic dual rune-page writes.
 /// Browser behavior itself (loads, clicks, focus) is NOT assertable here --
 /// the orchestrator live-verifies it -- but every DECISION the browser code
 /// must honor is pinned: which site, which URL, in-place vs worker, and the
@@ -171,6 +171,14 @@ public sealed class SiteAutoImportTests
                   "perkIds":[8214,8226,8210,8237,9111,9105],
                   "shardIds":[5008,5008,5011]},
          "itemBlocks":[]}
+        """;
+
+    private const string AhriUggRunesJson = """
+        {"source":"u.gg","championSlug":"ahri","role":"mid",
+         "runes":{"primaryStyleId":8200,"subStyleId":8100,
+                  "perkIds":[8214,8226,8210,8237,8139,8137],
+                  "shardIds":[5008,5008,5001]},
+         "itemBlocks":[{"title":"Core","itemIds":[3157,3089]}]}
         """;
 
     private static readonly Uri AhriCoachlessRunesLink =
@@ -478,7 +486,7 @@ public sealed class SiteAutoImportTests
         var api = new StubLcu();
         var executor = new FakeExecutor
         {
-            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
         };
         var sink = new FakeSink();
         var service = NewService(executor, api, sink);
@@ -696,7 +704,7 @@ public sealed class SiteAutoImportTests
         var api = new StubLcu();
         var executor = new FakeExecutor
         {
-            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
             Runes = _ => AhriCoachlessRunesJson,
         };
         var sink = new FakeSink();
@@ -711,11 +719,16 @@ public sealed class SiteAutoImportTests
              $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}",
              $"runes:{AhriCoachlessRunesLink}"],
             executor.Calls);
-        // ...and a rune page was actually written.
-        Assert.Contains(api.Calls, call =>
-            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages");
+        // ...and both source-named rune pages were actually written.
+        var runeCreates = api.Calls.Where(call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages").ToArray();
+        Assert.Equal(2, runeCreates.Length);
+        Assert.Contains(runeCreates, call => JsonSerializer.Serialize(call.Body).Contains("u.gg Ahri (Mid)"));
+        Assert.Contains(runeCreates, call => JsonSerializer.Serialize(call.Body).Contains("Coachless Ahri (Mid)"));
         Assert.Contains(sink.Logs, line =>
-            line.Contains("Imported runes for Ahri (Mid)", StringComparison.Ordinal));
+            line.Contains("runes: wrote u.gg Ahri (Mid)", StringComparison.Ordinal));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("runes: wrote Coachless Ahri (Mid)", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -743,16 +756,16 @@ public sealed class SiteAutoImportTests
     }
 
     /// <summary>
-    /// A u.gg-only trigger must not navigate a Coachless runes page: the leg
-    /// rides a run that already touched Coachless, never one that did not.
+    /// A u.gg-only visible trigger still imports both source pages; the u.gg
+    /// payload is reused and only Coachless needs another navigation.
     /// </summary>
     [Fact]
-    public async Task A_ugg_only_refresh_does_not_fetch_coachless_runes()
+    public async Task A_ugg_only_refresh_still_fetches_coachless_runes()
     {
         var api = new StubLcu();
         var executor = new FakeExecutor
         {
-            Visible = _ => AhriUggJson,
+            Visible = _ => AhriUggRunesJson,
             Runes = _ => AhriCoachlessRunesJson,
         };
         var service = NewService(executor, api, new FakeSink(), withRunes: true);
@@ -765,7 +778,67 @@ public sealed class SiteAutoImportTests
             VisibleUrl = AhriUggDeepLink.ToString(),
         });
 
-        Assert.Equal([$"visible:{CompanionTab.UGg}"], executor.Calls);
+        Assert.Equal(
+            [$"visible:{CompanionTab.UGg}", $"runes:{AhriCoachlessRunesLink}"],
+            executor.Calls);
+    }
+
+    [Fact]
+    public async Task One_available_rune_slot_logs_the_exact_ugg_only_verdict()
+    {
+        var api = new StubLcu
+        {
+            PagesJson = """
+                [{"id":1,"name":"Mine 1","isDeletable":true},
+                 {"id":2,"name":"Mine 2","isDeletable":true},
+                 {"id":3,"name":"Mine 3","isDeletable":true},
+                 {"id":4,"name":"Mine 4","isDeletable":true}]
+                """,
+        };
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.Contains("runes: only one editable page slot -- wrote u.gg only", sink.Logs);
+        var create = Assert.Single(api.Calls, call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages");
+        Assert.Contains("u.gg Ahri (Mid)", JsonSerializer.Serialize(create.Body), StringComparison.Ordinal);
+        Assert.DoesNotContain(api.Calls, call => call.Method == HttpMethod.Delete);
+    }
+
+    [Fact]
+    public async Task No_available_rune_slots_leave_every_foreign_page_untouched()
+    {
+        var api = new StubLcu
+        {
+            PagesJson = """
+                [{"id":1,"name":"Mine 1","isDeletable":true},
+                 {"id":2,"name":"Mine 2","isDeletable":true},
+                 {"id":3,"name":"Mine 3","isDeletable":true},
+                 {"id":4,"name":"Mine 4","isDeletable":true},
+                 {"id":5,"name":"Mine 5","isDeletable":true}]
+                """,
+        };
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.Contains("runes: no editable page slots -- wrote no rune pages", sink.Logs);
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Path.Contains("/lol-perks/v1/pages", StringComparison.Ordinal) &&
+            call.Method != HttpMethod.Get);
     }
 
     /// <summary>
@@ -808,14 +881,17 @@ public sealed class SiteAutoImportTests
         var api = new StubLcu
         {
             PagesJson = """
-                [{"id":9001,"name":"CoachBuild import: Ahri Mid (Coachless)","isDeletable":true,
+                [{"id":9001,"name":"u.gg Ahri (Mid)","isDeletable":true,
+                  "primaryStyleId":8200,"subStyleId":8100,
+                  "selectedPerkIds":[8214,8226,8210,8237,8139,8137,5008,5008,5001],"current":true},
+                 {"id":9002,"name":"Coachless Ahri (Mid)","isDeletable":true,
                   "primaryStyleId":8200,"subStyleId":8000,
-                  "selectedPerkIds":[8214,8226,8210,8237,9111,9105,5008,5008,5011],"current":true}]
+                  "selectedPerkIds":[8214,8226,8210,8237,9111,9105,5008,5008,5011],"current":false}]
                 """,
         };
         var executor = new FakeExecutor
         {
-            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
             Runes = _ => AhriCoachlessRunesJson,
         };
         var sink = new FakeSink();
@@ -823,12 +899,16 @@ public sealed class SiteAutoImportTests
 
         await service.OnSnapshotAsync(LockedAhri());
 
-        // No write at all on the rune endpoints: no edit, no create, no
-        // re-select of an already-selected page.
+        // No page edit or create: both exact pages already match. Because
+        // current was CoachBuild-owned, u.gg is explicitly kept current.
         Assert.DoesNotContain(api.Calls, call =>
-            call.Method != HttpMethod.Get && call.Path.Contains("perks", StringComparison.Ordinal));
+            (call.Method == HttpMethod.Post || call.Path.StartsWith("/lol-perks/v1/pages/", StringComparison.Ordinal)));
+        Assert.Contains(api.Calls, call =>
+            call.Method == HttpMethod.Put && call.Path == "/lol-perks/v1/currentpage");
         Assert.Contains(sink.Logs, line =>
-            line.Contains("Runes already current for Ahri (Mid)", StringComparison.Ordinal));
+            line.Contains("u.gg Ahri (Mid) already matches", StringComparison.Ordinal));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("Coachless Ahri (Mid) already matches", StringComparison.Ordinal));
         // The items still landed through the per-site flushes.
         Assert.Equal(2, LastPutSets(api).GetArrayLength());
     }
@@ -851,6 +931,24 @@ public sealed class SiteAutoImportTests
             call.Path.Contains("perks", StringComparison.Ordinal));
         Assert.Contains(sink.Logs, line =>
             line.Contains("not the selected champion", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Roleless_coachless_fetch_uses_the_role_discovered_by_ugg()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+        };
+        var service = NewService(executor, api, new FakeSink());
+
+        await service.OnSnapshotAsync(LockedAhri() with { RoleId = null });
+
+        Assert.Equal(
+            [$"worker:{CompanionTab.UGg}:https://u.gg/lol/champions/ahri/build",
+             $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}"],
+            executor.Calls);
     }
 
     // -- Service: worker teardown (2.1.0 memory fix) ----------------------------
@@ -1139,113 +1237,6 @@ public sealed class SiteAutoImportTests
         Assert.Equal(2, executor.Calls.Count);
     }
 
-    // -- The runes button's pure state ------------------------------------------
-
-    [Theory]
-    [InlineData(CompanionTab.UGg, "https://u.gg/lol/champions/jhin/build/adc", true, false, true, true)]
-    [InlineData(CompanionTab.UGg, "https://u.gg/lol/champions/jhin/build", true, false, true, true)]
-    public void Runes_button_enables_on_a_u_gg_build_page_with_client(
-        CompanionTab tab, string? url, bool host, bool running, bool lcu, bool enabled)
-    {
-        var state = WebView2Window.RunesButtonFor(tab, url, host, running, lcu);
-        Assert.True(state.Visible);
-        Assert.Equal(enabled, state.Enabled);
-        Assert.Contains("rune", state.Tooltip, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// 2.1.1: the button also shows on Coachless, on either page that can aim
-    /// a runes import — the builds overview and the runes page itself. It was
-    /// u.gg-only because Coachless had no rune source when the button was
-    /// built; the per-slot WPA runes page landed in 2.1.0 round 2.
-    /// </summary>
-    [Theory]
-    [InlineData("https://coachless.gg/builds/jhin?role=adc")]
-    [InlineData("https://coachless.gg/builds/jhin")]
-    [InlineData("https://coachless.gg/runes/tree/jhin/precision/domination?role=adc")]
-    [InlineData("https://www.coachless.gg/runes/tree/nasus/precision/resolve?role=top")]
-    public void Runes_button_enables_on_a_coachless_page_with_client(string url)
-    {
-        var state = WebView2Window.RunesButtonFor(CompanionTab.Coachless, url, true, false, true);
-        Assert.True(state.Visible);
-        Assert.True(state.Enabled);
-    }
-
-    /// <summary>
-    /// A visible button always has a target: visibility and the click's URL
-    /// come from the SAME call, so these two can never disagree.
-    /// </summary>
-    [Theory]
-    [InlineData("https://coachless.gg/builds/jhin?role=adc")]
-    [InlineData("https://coachless.gg/runes/tree/jhin/precision/domination?role=adc")]
-    [InlineData("https://coachless.gg/builds/creator")]
-    [InlineData("https://coachless.gg/")]
-    [InlineData("https://u.gg/lol/champions/jhin/build/adc")]
-    public void The_coachless_runes_button_is_visible_exactly_when_it_has_a_target(string url)
-    {
-        var hasTarget = SiteDeepLink.CoachlessRunesUrlForPage(url) is not null;
-        var state = WebView2Window.RunesButtonFor(CompanionTab.Coachless, url, true, false, true);
-        Assert.Equal(hasTarget, state.Visible);
-    }
-
-    [Theory]
-    // Companion is never scraped, whatever the URL; and neither site's button
-    // shows on a page of the OTHER site or on a non-champion page.
-    [InlineData(CompanionTab.Companion, "https://u.gg/lol/champions/jhin/build/adc")]
-    [InlineData(CompanionTab.Companion, "https://coachless.gg/builds/jhin?role=adc")]
-    [InlineData(CompanionTab.Coachless, "https://u.gg/lol/champions/jhin/build/adc")]
-    [InlineData(CompanionTab.Coachless, "https://coachless.gg/")]
-    [InlineData(CompanionTab.Coachless, "https://coachless.gg/builds/creator")]
-    [InlineData(CompanionTab.Coachless, null)]
-    [InlineData(CompanionTab.UGg, "https://coachless.gg/builds/jhin?role=adc")]
-    [InlineData(CompanionTab.UGg, "https://u.gg/")]
-    [InlineData(CompanionTab.UGg, null)]
-    public void Runes_button_hides_off_an_importable_page(CompanionTab tab, string? url)
-    {
-        var state = WebView2Window.RunesButtonFor(tab, url, true, false, true);
-        Assert.False(state.Visible);
-        Assert.False(state.Enabled);
-    }
-
-    // -- The Coachless runes deep link the button imports from ------------------
-
-    /// <summary>
-    /// The target is REBUILT from slug+role, never carried from the page: the
-    /// import's allowlist compares against exactly what
-    /// <see cref="SiteDeepLink.CoachlessRunesUrl"/> produces, and the tree pair
-    /// in a rendered runes URL is the site's own snap of a probe pair.
-    /// </summary>
-    [Theory]
-    [InlineData("https://coachless.gg/builds/jhin?role=adc", "jhin", 3)]
-    [InlineData("https://coachless.gg/builds/nasus?role=top", "nasus", 0)]
-    [InlineData("https://coachless.gg/runes/tree/nasus/precision/resolve?role=top", "nasus", 0)]
-    [InlineData("https://coachless.gg/runes/tree/leesin/precision/resolve?role=jungle", "leesin", 1)]
-    public void The_coachless_runes_target_is_rebuilt_from_the_page(
-        string pageUrl, string slug, int roleId)
-    {
-        var built = SiteDeepLink.CoachlessRunesUrlForPage(pageUrl);
-        Assert.NotNull(built);
-        Assert.Equal(SiteDeepLink.CoachlessRunesUrl(slug, roleId), built);
-        // The rebuilt link is what the import allowlist accepts. A URL carried
-        // straight off the page would be refused.
-        Assert.True(AutoImportCoordinator.IsAllowedRunesTarget(built, slug, roleId));
-        Assert.Contains(SiteDeepLink.RunesProbeSecondary, built!.ToString(), StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// A page with no role yields a ROLELESS link rather than a guessed role —
-    /// the site then answers with the champion's main role, and the import
-    /// reports without one.
-    /// </summary>
-    [Fact]
-    public void A_roleless_coachless_page_builds_a_roleless_target()
-    {
-        var built = SiteDeepLink.CoachlessRunesUrlForPage("https://coachless.gg/builds/jhin");
-        Assert.NotNull(built);
-        Assert.DoesNotContain("role=", built!.ToString(), StringComparison.Ordinal);
-        Assert.Equal(SiteDeepLink.CoachlessRunesUrl("jhin", null), built);
-    }
-
     [Theory]
     [InlineData("top", 0)]
     [InlineData("jungle", 1)]
@@ -1334,17 +1325,4 @@ public sealed class SiteAutoImportTests
             UggTarget(inPlace: true), UggPayload(SiteImportPayload.StageUrlRecognized, blocks: 1)));
     }
 
-    [Theory]
-    [InlineData(false, false, true, "unavailable")]
-    [InlineData(true, true, true, "already running")]
-    [InlineData(true, false, false, "League client")]
-    public void Runes_button_tooltip_names_the_reason(
-        bool host, bool running, bool lcu, string fragment)
-    {
-        var state = WebView2Window.RunesButtonFor(
-            CompanionTab.UGg, "https://u.gg/lol/champions/jhin/build/adc", host, running, lcu);
-        Assert.True(state.Visible);
-        Assert.False(state.Enabled);
-        Assert.Contains(fragment, state.Tooltip, StringComparison.Ordinal);
-    }
 }

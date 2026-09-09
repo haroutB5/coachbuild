@@ -247,14 +247,12 @@ function check(name, cond, extra) {
 const uggHtml = readFileSync(join(dir, 'ugg-jhin-adc.html'), 'utf8');
 const clHtml = readFileSync(join(dir, 'coachless-jhin-adc.html'), 'utf8');
 const uggJs = buildScript('UGgTemplate');
-function buildCoachlessStep(action) {
-  return rawBlock('CoachlessStepTemplate').replace('__COACHLESS_STEP_JSON__', JSON.stringify(action));
-}
-const clInspectJs = buildCoachlessStep({ action: 'inspect' });
+const clItemsJs = rawBlock('CoachlessItemsTemplate');
 
 check('ugg template has injected perk map', uggJs.includes('"electrocute":8112'));
 check('ugg template has injected shard map', uggJs.includes('"adaptiveforce":5008'));
-check('coachless step has no leftover token', !clInspectJs.includes('__COACHLESS_STEP_JSON__'));
+check('coachless items read has no interaction',
+  !clItemsJs.includes('dispatchEvent') && !clItemsJs.includes('.click(') && !clItemsJs.includes('fetch('));
 
 const ugg = runExtractor(uggJs, uggHtml, 'https://u.gg/lol/champions/jhin/build/adc');
 console.log('ugg payload: ' + JSON.stringify(ugg).slice(0, 600));
@@ -272,87 +270,40 @@ check('ugg starting', titles.includes('Starting Items=1120,2003'), titles);
 check('ugg core', titles.includes('Core Items=6697,3009,3046'), titles);
 
 const clUrl = 'https://coachless.gg/builds/jhin?role=adc';
-// The walk runs against ONE live document: clicks mark rows active the way
-// the site would (the harness cannot recompute downstream tables, so the
-// selected rows stay the fixture's unconditioned tops — the recompute
-// itself is live-verified in a browser, not here).
+// One immutable document, one read: the initial top-WPA row in each item slot.
 const clDoc = makeDocument(clHtml);
-const inspected = runOnDocument(clInspectJs, clDoc, clUrl);
-console.log('coachless slots: ' + JSON.stringify(inspected.slots.map((s) => s.title)));
-check('coachless inspect stage', inspected.stage === 'state', inspected.stage);
-check('coachless slot order follows the DOM',
-  JSON.stringify(inspected.slots.map((s) => s.title)) === JSON.stringify(
-    ['Keystone', 'Starter', '1st Item', '2nd Item', 'Spell', 'Boots', '3rd Item', '4th+ Item']),
-  JSON.stringify(inspected.slots.map((s) => s.title)));
-check('coachless fixture starts with nothing selected',
-  inspected.slots.every((s) => s.topSelected === false),
-  JSON.stringify(inspected.slots));
-check('coachless inspect carries a settle hash', typeof inspected.hash === 'string' && inspected.hash.length > 0, inspected.hash);
-
-const readJs = buildCoachlessStep({ action: 'read' });
-const clEarly = runOnDocument(readJs, clDoc, clUrl);
-// A read before any selection does NOT fail: since 2.0.0 the read falls back
-// to each slot's (by then conditioned) top row and marks it selected:false,
-// which is what lets a page that grants no selections at all still yield the
-// site's own recommendations. (This check used to expect a 'no selected row'
-// error, which that change removed.)
-check('coachless read before any selection falls back to top rows',
-  clEarly.stage === 'done' &&
-  (clEarly.payload.itemBlocks || []).length === 6 &&
-  (clEarly.payload.itemBlocks || []).every((b) => b.selected === false),
+const clEarly = runOnDocument(clItemsJs, clDoc, clUrl);
+check('coachless one-shot read returns every initial top row',
+  (clEarly.itemBlocks || []).length === 6 &&
+  (clEarly.itemBlocks || []).every((b) => !Object.hasOwn(b, 'selected')),
   JSON.stringify(clEarly).slice(0, 300));
 
-// The site grants `selectable` only to a capped depth -- for Jhin ADC that is
-// Keystone/Starter/1st/2nd, and Spell/Boots/3rd/4th+ are READ-ONLY. So the
-// expectation is per slot, not uniform: a selectable slot clicks and then
-// re-clicks idempotently; a read-only one reports `read-only` and is never
-// clicked at all. (This loop used to expect every slot to click, which
-// predates the selectable gating and had been failing for four slots.)
-for (const slot of inspected.slots) {
-  const title = slot.title;
-  const first = runOnDocument(buildCoachlessStep({ action: 'click', slot: title }), clDoc, clUrl);
-  if (!slot.topSelectable) {
-    check('coachless read-only slot ' + title + ' is never clicked',
-      first.stage === 'read-only' && first.clickedSlot === title, JSON.stringify(first));
-    continue;
-  }
-  check('coachless click ' + title, first.stage === 'clicked' && first.clickedSlot === title, JSON.stringify(first));
-  const again = runOnDocument(buildCoachlessStep({ action: 'click', slot: title }), clDoc, clUrl);
-  check('coachless re-click ' + title + ' is idempotent',
-    again.stage === 'already-selected' && again.clickedSlot === title, JSON.stringify(again));
-}
-check('the fixture really does have both kinds of slot',
-  inspected.slots.some((s) => s.topSelectable) && inspected.slots.some((s) => !s.topSelectable),
-  JSON.stringify(inspected.slots.map((s) => s.title + ':' + s.topSelectable)));
-const clMissing = runOnDocument(buildCoachlessStep({ action: 'click', slot: 'Nope' }), clDoc, clUrl);
-check('coachless click of a missing slot is typed',
-  typeof clMissing.error === 'string' && clMissing.error.includes('"Nope"'), JSON.stringify(clMissing));
-
-const cl = runOnDocument(readJs, clDoc, clUrl);
-console.log('coachless payload: ' + JSON.stringify(cl.payload).slice(0, 600));
-check('coachless read stage', cl.stage === 'done', cl.stage);
-const payload = cl.payload || {};
+const payload = clEarly;
+console.log('coachless payload: ' + JSON.stringify(payload).slice(0, 600));
 check('coachless source', payload.source === 'coachless', payload.source);
 check('coachless slug/role', payload.championSlug === 'jhin' && payload.role === 'adc', payload.championSlug + '/' + payload.role);
 check('coachless runes absent (page has no rune page)', payload.runes === null || payload.runes === undefined, JSON.stringify(payload.runes));
 check('coachless has slot blocks', (payload.itemBlocks || []).length === 6, (payload.itemBlocks || []).length);
-// Static fixture: no recompute happens here, so the selected rows are the
-// unconditioned tops — Stormrazor first, Phantom Dancer second. The live
-// walk must show the conditioned values instead (Stormrazor +3.79 first,
-// Phantom Dancer +2.69 second per the user's screenshots).
 const blockOf = (title) => (payload.itemBlocks || []).find((b) => b.title === title);
-check('coachless starter selected', JSON.stringify(blockOf('Starter').itemIds) === JSON.stringify([1120]), JSON.stringify(blockOf('Starter')));
-check('coachless 1st selected', JSON.stringify(blockOf('1st Item').itemIds) === JSON.stringify([3095]), JSON.stringify(blockOf('1st Item')));
-check('coachless 2nd selected', JSON.stringify(blockOf('2nd Item').itemIds) === JSON.stringify([3046]), JSON.stringify(blockOf('2nd Item')));
+check('coachless Starter initial top row', JSON.stringify(blockOf('Starter').itemIds) === JSON.stringify([1120]), JSON.stringify(blockOf('Starter')));
+check('coachless 1st initial top row', JSON.stringify(blockOf('1st Item').itemIds) === JSON.stringify([3095]), JSON.stringify(blockOf('1st Item')));
+check('coachless 2nd initial top row', JSON.stringify(blockOf('2nd Item').itemIds) === JSON.stringify([3046]), JSON.stringify(blockOf('2nd Item')));
+check('coachless every block is top-row data without selection provenance',
+  payload.itemBlocks.every((b) => !Object.hasOwn(b, 'selected')), JSON.stringify(payload.itemBlocks));
+
+const rolelessCoachless = runExtractor(clItemsJs, clHtml, 'https://coachless.gg/builds/jhin');
+check('coachless roleless page uses its rendered active role', rolelessCoachless.role === 'adc', rolelessCoachless.role);
+check('coachless roleless page records the active-role source',
+  rolelessCoachless.meta.notes.some((note) => note.includes('active role "adc"')), JSON.stringify(rolelessCoachless.meta));
 
 // typed failures, never silent
 const uggWrong = runExtractor(uggJs, uggHtml, 'https://u.gg/lol/champions/jhin');
 check('ugg non-build url is a typed failure', typeof uggWrong.error === 'string', JSON.stringify(uggWrong));
-const clWrong = runOnDocument(readJs, clDoc, 'https://coachless.gg/');
+const clWrong = runOnDocument(clItemsJs, clDoc, 'https://coachless.gg/');
 check('coachless homepage is a typed failure', typeof clWrong.error === 'string', JSON.stringify(clWrong));
-const clEmpty = runOnDocument(clInspectJs, makeDocument('<html><body><table></table></body></html>'), 'https://coachless.gg/builds/jhin?role=adc');
+const clEmpty = runOnDocument(clItemsJs, makeDocument('<html><body><table></table></body></html>'), 'https://coachless.gg/builds/jhin?role=adc');
 check('coachless recognized page without slots reports empty',
-  clEmpty.stage === 'state' && clEmpty.slots.length === 0, JSON.stringify(clEmpty));
+  typeof clEmpty.error === 'string' && clEmpty.error.includes('every item slot'), JSON.stringify(clEmpty));
 
 // ---- 2.1.0 field fixes: the Nasus TOP pages --------------------------------
 // Captured live 2026-09-08 from the two pages that produced the field failures
@@ -484,11 +435,11 @@ check('and a role-bearing url adds no discovery note',
 const clNasusHtml = readFileSync(join(dir, 'coachless-nasus-top.html'), 'utf8');
 const clNasusUrl = 'https://coachless.gg/builds/nasus?role=top';
 const clNasusDoc = makeDocument(clNasusHtml);
-const clNasusRead = runOnDocument(readJs, clNasusDoc, clNasusUrl);
-console.log('coachless nasus: ' + JSON.stringify(clNasusRead.payload).slice(0, 400));
+const clNasusRead = runOnDocument(clItemsJs, clNasusDoc, clNasusUrl);
+console.log('coachless nasus: ' + JSON.stringify(clNasusRead).slice(0, 400));
 check('coachless nasus reads every slot including Starter',
-  clNasusRead.stage === 'done' && (clNasusRead.payload.itemBlocks || []).length === 6 &&
-  (clNasusRead.payload.itemBlocks || []).some((b) => b.title === 'Starter' && b.itemIds.length > 0),
+  (clNasusRead.itemBlocks || []).length === 6 &&
+  (clNasusRead.itemBlocks || []).some((b) => b.title === 'Starter' && b.itemIds.length > 0),
   JSON.stringify(clNasusRead).slice(0, 300));
 
 // THE ACTUAL FIX. Strip the Starter table's item icons -- the live shape that
@@ -507,16 +458,16 @@ function stripStarterIcons(html) {
 const clNoStarter = stripStarterIcons(clNasusHtml);
 check('the mutant really did strip Starter item icons',
   (clNoStarter.match(/\/img\/gone\//g) || []).length > 0);
-const clDegraded = runOnDocument(readJs, makeDocument(clNoStarter), clNasusUrl);
-const degradedTitles = ((clDegraded.payload || {}).itemBlocks || []).map((b) => b.title);
-const degradedNotes = (((clDegraded.payload || {}).meta || {}).notes) || [];
+const clDegraded = runOnDocument(clItemsJs, makeDocument(clNoStarter), clNasusUrl);
+const degradedTitles = (clDegraded.itemBlocks || []).map((b) => b.title);
+const degradedNotes = ((clDegraded.meta || {}).notes) || [];
 console.log('coachless degraded: ' + JSON.stringify(degradedTitles) + ' notes ' + JSON.stringify(degradedNotes));
 check('an empty Starter omits its block instead of failing the import',
-  clDegraded.stage === 'done' && degradedTitles.length === 5 && !degradedTitles.includes('Starter'),
+  degradedTitles.length === 5 && !degradedTitles.includes('Starter'),
   JSON.stringify(clDegraded).slice(0, 300));
 check('and the other five slots still carry their items',
-  ((clDegraded.payload || {}).itemBlocks || []).every((b) => b.itemIds.length > 0),
-  JSON.stringify((clDegraded.payload || {}).itemBlocks));
+  (clDegraded.itemBlocks || []).every((b) => b.itemIds.length > 0),
+  JSON.stringify(clDegraded.itemBlocks));
 check('and the omission is named in meta.notes with the row census',
   degradedNotes.some((n) => n.includes('"Starter"') && n.includes('yielded no items') && n.includes('rows')),
   JSON.stringify(degradedNotes));
@@ -525,7 +476,7 @@ check('and the omission is named in meta.notes with the row census',
 // the reason must survive MapStepError (which collapses anything saying "no
 // build" to the generic reason and would throw the per-slot detail away).
 const clAllEmpty = clNasusHtml.replace(/\/img\/item\//g, '/img/gone/');
-const clDead = runOnDocument(readJs, makeDocument(clAllEmpty), clNasusUrl);
+const clDead = runOnDocument(clItemsJs, makeDocument(clAllEmpty), clNasusUrl);
 check('a page where no slot yields items is still a typed failure',
   typeof clDead.error === 'string' && clDead.error.includes('every item slot'), JSON.stringify(clDead).slice(0, 300));
 check('and that reason does not say "no build" (which would collapse the detail)',
@@ -549,7 +500,7 @@ console.log('runes payload: ' + JSON.stringify(runes).slice(0, 600));
 check('runes source', runes.source === 'coachless', runes.source);
 check('runes slug/role', runes.championSlug === 'nasus' && runes.role === 'top',
   runes.championSlug + '/' + runes.role);
-check('runes carries no items (that is the walk\'s job)',
+check('runes carries no items (the builds-page read owns those)',
   Array.isArray(runes.itemBlocks) && runes.itemBlocks.length === 0, JSON.stringify(runes.itemBlocks));
 
 // The trees come from the rendered perk icons, NOT from the URL: this URL
@@ -759,12 +710,11 @@ for (const champ of champs) {
     bad.join('; ') + ' :: ' + JSON.stringify(r.shardIds));
 }
 
-// -- The Coachless walk's final read on every sweep builds page --
-const clReadJs = buildCoachlessStep({ action: 'read' });
+// -- The Coachless one-shot initial top-row read on every sweep builds page --
 for (const champ of champs) {
   const role = URL_ROLE[ROLES[champ]];
   const html = readFileSync(join(sweepDir, `coachless-${champ}-${ROLES[champ]}.html`), 'utf8');
-  const out = runExtractor(clReadJs, html, `https://coachless.gg/builds/${champ}?role=${role}`);
+  const out = runExtractor(clItemsJs, html, `https://coachless.gg/builds/${champ}?role=${role}`);
   if (out.error) {
     // A typed failure is acceptable, but it must CARRY ITS DETAIL -- the
     // generic "no build on page" is the one phrase this branch must never
@@ -773,9 +723,9 @@ for (const champ of champs) {
       out.error.length > 24 && !/^no build on page$/.test(out.error), out.error);
     continue;
   }
-  const blocks = (out.payload && out.payload.itemBlocks) || [];
+  const blocks = out.itemBlocks || [];
   check(`sweep coachless ${champ} yields item blocks`,
-    out.stage === 'done' && blocks.length > 0 && blocks.every(b => b.itemIds.length > 0),
+    blocks.length === 6 && blocks.every(b => b.itemIds.length > 0 && !Object.hasOwn(b, 'selected')),
     JSON.stringify(blocks).slice(0, 240));
 }
 
@@ -793,6 +743,7 @@ for (const champ of champs) {
   const html = readFileSync(join(sweepDir, `ugg-${champ}-${ROLES[champ]}.html`), 'utf8');
   if (html.includes('<title>Just a moment...</title>') && html.includes('challenges.cloudflare.com')) {
     uggChallenged++;
+    check(`sweep ugg ${champ} challenge shell is recognized`, true);
     continue;
   }
   uggReal++;

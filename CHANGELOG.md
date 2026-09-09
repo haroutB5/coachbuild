@@ -1,5 +1,22 @@
 # Changelog
 
+## Desktop 2.2.0 — automatic dual runes, complete Coachless items, quieter sites (2026-09-09)
+
+- Coachless item import no longer clicks through a select-and-recompute walk.
+  It reads the initial top-WPA row once for Starter, 1st, 2nd, 3rd, 4th+ and
+  Boots, while retaining per-slot omit-and-note behavior. Roleless imports use
+  u.gg's discovered active role for the Coachless target, and the Coachless
+  extractor can independently read its rendered active role control.
+- Lock/build-page auto import now writes both `u.gg {Champ}` and
+  `Coachless {Champ}` rune pages, adding `(Role)` only when champ select assigned
+  one. Exact/source-prefix and legacy `CoachBuild import:` pages are reusable;
+  foreign pages are untouched. With one editable/reusable slot, u.gg wins and
+  the log states that only u.gg was written. The old offer bar and manual rune
+  buttons are removed.
+- u.gg, Coachless and op.gg WebViews, including import workers, now block a
+  maintained adtech-domain list at request time. Draft, first-party/CDN hosts,
+  and consent providers remain unfiltered.
+
 ## Desktop 2.1.2 — polish: never-silent runes, instalock-proof item sets, no orphans (2026-09-09)
 
 Three findings from live pass 3 and the fan-cleanup session. Evidence:

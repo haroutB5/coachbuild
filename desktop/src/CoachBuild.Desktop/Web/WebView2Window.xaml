@@ -21,7 +21,6 @@
         <SolidColorBrush x:Key="TextBrush" Color="#F5F7FA" />
         <SolidColorBrush x:Key="MutedTextBrush" Color="#91A4BB" />
         <SolidColorBrush x:Key="GoldBrush" Color="#E5B85C" />
-        <SolidColorBrush x:Key="GoldBrightBrush" Color="#F2CA70" />
         <SolidColorBrush x:Key="SiteCanvasBrush" Color="#F4F7FA" />
 
         <Style x:Key="IconButton" TargetType="Button">
@@ -112,25 +111,6 @@
             </Setter>
         </Style>
 
-        <Style x:Key="PrimaryOfferButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
-            <Setter Property="Background" Value="#D8A64E" />
-            <Setter Property="BorderBrush" Value="#F1C76B" />
-            <Setter Property="Foreground" Value="#081321" />
-            <Setter Property="Padding" Value="14,7" />
-            <Setter Property="Margin" Value="0,0,10,0" />
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="FontWeight" Value="Bold" />
-        </Style>
-
-        <Style x:Key="SecondaryOfferButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
-            <Setter Property="Background" Value="#12283C" />
-            <Setter Property="BorderBrush" Value="#2A4A63" />
-            <Setter Property="Foreground" Value="#BCD0E1" />
-            <Setter Property="Padding" Value="11,7" />
-            <Setter Property="Margin" Value="0,0,7,0" />
-            <Setter Property="FontSize" Value="12" />
-        </Style>
-
         <Style x:Key="ChromeText" TargetType="TextBlock">
             <Setter Property="FontFamily" Value="Segoe UI" />
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
@@ -148,7 +128,6 @@
              content area is 74px taller. -->
         <Grid.RowDefinitions>
             <RowDefinition Height="56" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="35" />
         </Grid.RowDefinitions>
@@ -219,64 +198,8 @@
             </Grid>
         </Border>
 
-        <Border x:Name="OfferBar"
-                Grid.Row="1"
-                Background="#172A3A"
-                BorderBrush="#385873"
-                BorderThickness="0,0,0,1"
-                Visibility="Collapsed">
-            <Grid Margin="24,9">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,18,0">
-                    <TextBlock Text="Champ select"
-                               Style="{StaticResource ChromeText}"
-                               Foreground="{StaticResource GoldBrightBrush}"
-                               FontWeight="SemiBold"
-                               FontSize="11" />
-                    <TextBlock x:Name="OfferHintText"
-                               Text="A build is ready to open"
-                               Style="{StaticResource ChromeText}"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               FontSize="11"
-                               Margin="0,1,0,0" />
-                </StackPanel>
-                <StackPanel Grid.Column="1"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Center">
-                    <Button x:Name="ImportRunesButton"
-                            Style="{StaticResource PrimaryOfferButton}"
-                            Content="Import runes"
-                            ToolTip="Read this page's rune build into the League client."
-                            Click="OnImportRunesClick" />
-                    <StackPanel x:Name="ChampChipsPanel"
-                                Orientation="Horizontal"
-                                VerticalAlignment="Center">
-                        <Button x:Name="UggOfferButton"
-                                Style="{StaticResource SecondaryOfferButton}"
-                                Content="Open u.gg"
-                                Click="OnUggOfferClick" />
-                        <Button x:Name="CoachlessOfferButton"
-                                Style="{StaticResource SecondaryOfferButton}"
-                                Content="Open Coachless"
-                                Click="OnCoachlessOfferClick" />
-                    </StackPanel>
-                </StackPanel>
-                <TextBlock x:Name="OfferCaptionText"
-                           Grid.Column="2"
-                           Text="Click a site to open"
-                           Style="{StaticResource ChromeText}"
-                           Foreground="{StaticResource MutedTextBrush}"
-                           FontSize="10"
-                           VerticalAlignment="Center" />
-            </Grid>
-        </Border>
-
         <Grid x:Name="ContentHost"
-              Grid.Row="2"
+              Grid.Row="1"
               Background="{StaticResource SiteCanvasBrush}">
             <Grid x:Name="BrowserHost" />
 
@@ -314,7 +237,7 @@
                             CornerRadius="10"
                             Padding="15,11"
                             Margin="0,28,0,0">
-                        <TextBlock Text="Tabs keep separate sign-ins and history. Use the champ offer during champ select when you want a site page."
+                        <TextBlock Text="Tabs keep separate sign-ins and history. Builds and both rune pages import automatically on champion lock."
                                    Foreground="#BCD0E1"
                                    TextWrapping="Wrap"
                                    TextAlignment="Center"
@@ -384,7 +307,7 @@
         </Grid>
 
         <Border x:Name="StatusRow"
-                Grid.Row="3"
+                Grid.Row="2"
                 Background="#07111D"
                 BorderBrush="#1C354C"
                 BorderThickness="0,1,0,0">

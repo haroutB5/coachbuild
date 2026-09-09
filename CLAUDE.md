@@ -28,8 +28,8 @@ CoachBuild.Desktop (WPF, net8.0-windows, Velopack-installed, per-user)
 │                            reads the League client, writes item sets + rune pages
 └── WebView2 window, four tabs
     ├── Draft      ← LOCAL static page shipped inside the app  (was "Companion")
-    ├── u.gg       ← real site, auto item-set import + runes button
-    ├── Coachless  ← real site, auto item-set import
+    ├── u.gg       ← real site, auto item-set + rune-page import
+    ├── Coachless  ← real site, auto item-set + rune-page import
     └── op.gg      ← real site, own profile via LCU riot-id
 ```
 
@@ -223,9 +223,10 @@ made them non-obvious. Do not re-derive them.
 - **Read-mostly is structural, not a promise.** `SiteTabComplianceTests` fails the
   build if an `ExecuteScriptAsync` call appears outside the sanctioned extractor
   families or if automated navigation reaches a call site that does not assert an
-  allowlist first. The list is **six** in 2.1.0 (`RunRunesImportAsync`,
-  `RunCoachlessWalkAsync`, `ExtractVisibleOnUiAsync`, `FetchViaWorkerOnUiAsync`,
-  `FetchCoachlessRunesOnUiAsync`, `DismissConsentAsync`) and automated navigation
+  allowlist first. In 2.2.0 item extractors are reached only through
+  `ExtractVisibleOnUiAsync` / `FetchViaWorkerOnUiAsync`; Coachless runes through
+  `FetchCoachlessRunesOnUiAsync`; and consent through `DismissConsentAsync`.
+  Automated navigation
   has **two** entries, `NavigateWorkerAndWaitAsync` (build pages) and
   `NavigateRunesWorkerAndWaitAsync` (the runes page), each asserting its own
   allowlist before they share `NavigateAndWaitCoreAsync`. Widening either set is a
@@ -238,18 +239,30 @@ made them non-obvious. Do not re-derive them.
   unrecognized wall stays up and the import fails honestly.
 - **Auto item-set import** (`SiteAutoImport.cs`): on champ-select lock, once per
   champion+role, and on a visible build-page URL change, both sites' item sets are
-  fetched in the background and written in **one merged call**, so the per-site
+  fetched in the background and flushed per site in merged batches, so the per-site
   `CoachBuild import: {Champ} {Role} (u.gg)` / `(Coachless)` titles coexist. Two
   sequential single-set writes would not — the merge drops every `CoachBuild*` set
   it reads, which is exactly why the batch exists.
-- **Runes.** The u.gg **Import runes button** is one read-only script per click.
-  Since 2.1.0 the auto-import also writes runes for **Coachless**, from its
+- **Coachless items (2.2.0).** The builds-page extractor performs one read of
+  the initial top-WPA row for Starter, 1st, 2nd, 3rd, 4th+ and Boots. There is
+  no item click/recompute walk or settle loop; an empty slot is noted and
+  omitted. On roleless locks the active role discovered from u.gg forms the
+  Coachless target, and Coachless's own roleless extractor reads its rendered
+  active role control rather than inventing a first/default button.
+- **Runes (2.2.0).** There is no offer bar or Import runes button. Every lock or
+  build-page trigger automatically writes both source pages as `u.gg {Champ}`
+  and `Coachless {Champ}`, adding `(Role)` only for a champ-select-assigned role.
+  The Coachless build comes from its
   separate `/runes/tree/{slug}/{primary}/{secondary}?role=` page
   (`CoachlessRunesTemplate`). The tree pair in the URL is a probe — the site
   redirects to the pair it recommends, so the extractor reads both tree ids off
   the rendered perk icons. Pick rule: top WPA per slot row, best **two rows** for
   the secondary tree; `is-empty` cards (`-.--`) are skipped, never read as zero.
   Any missing part is a typed failure naming it, and nothing partial is written.
+  Existing pages with either source prefix or legacy `CoachBuild import:` are
+  reusable/owned; foreign pages are never touched. u.gg has priority if only one
+  slot exists. Neither page is selected unless an owned page was current before
+  the write, in which case u.gg becomes current.
 - **Roles may be absent.** Practice tool and custom lobbies assign no position.
   `SiteImportValidator.RoleLabel` returns **null**, and `PageTitle` /
   `ChampionLabel` omit it — never the literal word "Unknown" (2.0.1 shipped
@@ -260,6 +273,11 @@ made them non-obvious. Do not re-derive them.
   can be opened before the client is up, which is why a whole field-test session
   produced zero `opgg:` lines), navigating only if the tab is still on op.gg home,
   and logs both branches.
+- **Ad requests (2.2.0).** u.gg, Coachless, op.gg and hidden import workers use
+  one `CoreWebView2` request filter to reject a maintained adtech-domain list.
+  Draft never receives the filter. First-party/CDN and Quantcast/Google Funding
+  Choices consent traffic is explicitly allowed; each blocked domain is logged
+  once per window session, not once per request.
 - **Memory** (2.1.0). Import workers are disposed after every run. A site tab
   invisible for `SiteTabIdlePolicy.IdleTimeout` (10 min, one constant) has its
   WebView2 disposed; the tab button stays and revisiting recreates it lazily, with
@@ -317,8 +335,9 @@ unrelated reasons and did not come back.
 
 ## HARD RULES (do not violate without a new explicit user directive)
 
-1. **Never delete or overwrite an LCU rune page or item set whose title does not
-   start with `"CoachBuild"`** — with one carve-out: a **manual** rune apply does
+1. **Never delete or overwrite an LCU rune page or item set the app does not own.**
+   Rune ownership is `u.gg `, `Coachless ` or legacy `CoachBuild`; item-set
+   ownership remains `CoachBuild`. One legacy carve-out remains: a **manual** rune apply does
    GET → DELETE → POST regardless of title, because a real click is real consent
    and a free account with two rune slots would otherwise have nowhere to put the
    page. The rule is absolute for the automatic path and for item sets.

@@ -30,22 +30,6 @@ public sealed class CompanionTabsFinalRegressionTests
     }
 
     [Fact]
-    public void Champ_select_offer_is_hidden_on_the_hosted_companion_tab()
-    {
-        var context = new ChampSelectContext(
-            103,
-            "Ahri",
-            "Ahri",
-            RoleId: 2,
-            Locked: false);
-
-        Assert.False(WebView2Window.ShouldShowOfferBar(CompanionTab.Companion, context));
-        Assert.True(WebView2Window.ShouldShowOfferBar(CompanionTab.UGg, context));
-        Assert.True(WebView2Window.ShouldShowOfferBar(CompanionTab.Coachless, context));
-        Assert.False(WebView2Window.ShouldShowOfferBar(CompanionTab.UGg, null));
-    }
-
-    [Fact]
     public async Task A_zero_cell_sentinel_does_not_hide_a_valid_hover_offer()
     {
         var root = Path.Combine(

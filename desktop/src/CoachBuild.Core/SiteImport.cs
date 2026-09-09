@@ -743,6 +743,19 @@ public static class SiteImportValidator
             ? $"CoachBuild import: {championName} {label} ({Label(source)})"
             : $"CoachBuild import: {championName} ({Label(source)})";
 
+    /// <summary>
+    /// Short automatic rune-page title. The role parameter is the assigned
+    /// champ-select role, not a site's discovered default; roleless modes keep
+    /// the requested <c>u.gg Jhin</c>/<c>Coachless Jhin</c> names.
+    /// </summary>
+    public static string RunePageTitle(string championName, string? assignedRole, SiteImportSource source)
+    {
+        var prefix = Label(source);
+        return RoleLabel(assignedRole) is { } label
+            ? $"{prefix} {championName} ({label})"
+            : $"{prefix} {championName}";
+    }
+
     public static string? ValidateRunes(SiteImportRunes? runes)
     {
         if (runes is null) return "the page yielded no rune build to import";
@@ -786,6 +799,14 @@ public static class SiteImportValidator
         // on purpose — the import must never prune the user's other
         // CoachBuild pages as a side effect; exact-title reuse still applies.
         return new ApplyRunesRequest(pageTitle, runes.PrimaryStyleId, runes.SubStyleId, selected, true, "manual");
+    }
+
+    public static ApplyRunesRequest BuildAutoRuneRequest(
+        string pageTitle,
+        SiteImportRunes runes)
+    {
+        var selected = runes.PerkIds.Concat(runes.ShardIds).ToArray();
+        return new ApplyRunesRequest(pageTitle, runes.PrimaryStyleId, runes.SubStyleId, selected, false, "auto");
     }
 
     public static ApplyItemSetsRequest BuildItemSetRequest(

@@ -3,15 +3,11 @@ using CoachBuild.Core;
 namespace CoachBuild.Desktop.Web;
 
 /// <summary>
-/// The per-site extractor scripts for the user-initiated build import.
+/// The per-site extractor scripts for the automatic build import.
 ///
 /// <para>Each script is a self-contained IIFE: no external requests, no
-/// navigation, one JSON string out. The u.gg script is a read-only DOM read;
-/// the Coachless walk additionally dispatches a click per slot section —
-/// that click IS the import (it reproduces exactly what a user clicking the
-/// page's own top-WPA row does, driving the site's own conditioned
-/// recompute), it runs only inside the import click handler, and the shape
-/// each step returns is exactly what <see cref="SiteImportPayload"/> parses —
+/// navigation, one JSON string out. Both item scripts are read-only DOM reads;
+/// the shape each returns is exactly what <see cref="SiteImportPayload"/> parses —
 /// <c>{ source, championSlug, role, runes, itemBlocks }</c> or
 /// <c>{ error }</c>. A failed read is a TYPED failure, never a silent empty
 /// payload: the extractor reports what it could not find and C# turns that
@@ -23,14 +19,13 @@ namespace CoachBuild.Desktop.Web;
 /// filenames the same way the maps do. The one
 /// exception is u.gg's rune-TREE ids, which the page renders numerically
 /// already (<c>/runes/8000.png</c>), so there is no name to map. The
-/// Coachless step script needs no icon tables: item ids read numerically
-/// off <c>/img/item/{id}.</c>, and the keystone it clicks for conditioning
-/// is never resolved to an id.</para>
+/// Coachless items script needs no icon tables: item ids read numerically
+/// off <c>/img/item/{id}.</c>.</para>
 ///
 /// <para>DOM ANCHORS, derived from the real rendered fixtures captured
 /// 2026-09-08 (<c>_research/site-import/ugg-jhin-adc.html</c>,
 /// <c>coachless-jhin-adc.html</c> — read the per-site remarks on
-/// <see cref="UGgTemplate"/> and <see cref="CoachlessStepTemplate"/>). The full
+/// <see cref="UGgTemplate"/> and <see cref="CoachlessItemsTemplate"/>). The full
 /// anchor-by-anchor account, with fragility notes, lives in the phase report;
 /// the short version: numeric ids out of CDN image URLs first
 /// (<c>perk-images/</c>, <c>/runes/{id}.png</c>, <c>/img/item/{id}.</c>),
@@ -418,47 +413,14 @@ public static class SiteImportExtractors
         """;
 
     /// <summary>
-    /// Coachless step script, for the champion builds overview
+    /// Coachless items extractor, for the champion builds overview
     /// (<c>coachless.gg/builds/{slug}?role={role}</c>).
     ///
-    /// <para>That page is per-SLOT stat tables, and the tables are
-    /// INTERACTIVE: selecting a row (the site marks it <c>active</c> on the
-    /// <c>tr.data-row</c> — see the embedded stylesheet rule
-    /// <c>.data-row.active</c> in the <c>coachless-jhin-adc.html</c> fixture)
-    /// recomputes every downstream slot's WPA conditioned on the picks so
-    /// far. Reading the unconditioned first rows (what the 1.2.0 extractor
-    /// did) yields a build no user ever sees — e.g. Phantom Dancer top in
-    /// 2nd, 3rd AND 4th+ at once. So this script never produces a build on
-    /// its own: it performs ONE step of the user-initiated selection walk,
-    /// driven by C# (<see cref="SiteImportSequencer"/>), which invokes it
-    /// repeatedly from the single import click handler.</para>
-    ///
-    /// <para>The step to perform arrives via the
-    /// <c>__COACHLESS_STEP_JSON__</c> token, replaced by C# with
-    /// <c>{"action":"inspect"}</c>, <c>{"action":"click","slot":title}</c>
-    /// or <c>{"action":"read"}</c> (see <c>SiteImportSteps</c>):</para>
-    ///
-    /// <para><c>inspect</c> lists the slot sections in DOM order (each
-    /// <c>table</c> headed by a <c>th.entry-name.title</c>) with whether its
-    /// top-WPA row (first <c>tr.data-row</c> — the site sorts by WPA) is
-    /// already <c>active</c>, whether that top row is <c>selectable</c> (a
-    /// slot whose top row lacks the class is READ-ONLY: the site grants
-    /// selections only to a capped depth and C# never clicks such a slot),
-    /// whether ANY row of the table is <c>active</c> (the settle wait
-    /// watches this for the clicked slot), plus a fingerprint hash of the
-    /// slot tables' contents that C# polls until stable. <c>click</c>
-    /// dispatches a bubbling click on the named slot's top row unless it is
-    /// already <c>active</c> (idempotent re-click guard, reported as
-    /// <c>already-selected</c>) or no longer <c>selectable</c> (reported as
-    /// <c>read-only</c>, no click dispatched). <c>read</c> returns the final
-    /// payload — the SELECTED (<c>tr.data-row.active</c>) row of each item
-    /// slot (Starter, 1st, 2nd, 3rd, 4th+, Boots) where one exists, else the
-    /// TOP row of the by-now conditioned table (read-only slots, and Starter
-    /// which is read but never clicked, collapse to
-    /// conditioned recommendations that are never granted <c>selectable</c>,
-    /// and the top row IS the recommendation) — one single-item block per
-    /// slot titled with the page's own header text, each carrying
-    /// <c>selected</c> provenance.</para>
+    /// <para>The page sorts each slot table by WPA. Per the 2.2.0 field
+    /// decision, this performs exactly one read of the initial page and takes
+    /// the first <c>tr.data-row</c> from Starter, 1st, 2nd, 3rd, 4th+ and
+    /// Boots. It dispatches no clicks and waits for no recomputation. That is
+    /// intentionally the unconditioned top-WPA row per slot.</para>
     ///
     /// <para>AN EMPTY SLOT DEGRADES, IT DOES NOT ABORT (2.1.0). Field log
     /// 2026-09-08, Nasus top, on a run where the consent wall HAD been
@@ -472,9 +434,7 @@ public static class SiteImportExtractors
     /// OMITS that block. Only a page where no slot at all yields items is
     /// still a typed failure, and that one names every slot it tried.</para>
     ///
-    /// <para>RUNES ARE NOT ON THIS PAGE. The walk clicks item slots only,
-    /// starting at 1st Item (Keystone, Starter and Spell are never clicked),
-    /// and no keystone is ever imported: the overview renders
+    /// <para>RUNES ARE NOT ON THIS PAGE. The overview renders
     /// keystone options and zero minor runes or shards, so no complete rune
     /// page can be read here. The final payload carries <c>runes: null</c>
     /// and C# applies the item set on its own, reporting the missing half
@@ -485,11 +445,9 @@ public static class SiteImportExtractors
     /// img</c> (<c>/img/item/{id}.webp</c>), skipping icons the page hid
     /// itself (<c>onerror="this.style.display='none'"</c>).</para>
     /// </summary>
-    public const string CoachlessStepTemplate = """
+    public const string CoachlessItemsTemplate = """
         (function () {
           function fail(message) { return JSON.stringify({ error: message }); }
-          var STEP = __COACHLESS_STEP_JSON__;
-          var action = STEP && STEP.action;
           function slotTables() {
             var out = [];
             var tables = document.getElementsByTagName('table');
@@ -515,22 +473,10 @@ public static class SiteImportExtractors
             }
             return rows;
           }
-          function isActive(row) {
-            return hasClass(row, 'active');
-          }
-          function isSelectable(row) {
-            return hasClass(row, 'selectable');
-          }
           function hasClass(row, name) {
             var cls = row.classList;
             if (cls && cls.contains && cls.contains(name)) return true;
             return (' ' + String(row.className || '') + ' ').indexOf(' ' + name + ' ') >= 0;
-          }
-          function hasActiveRow(rows) {
-            for (var a = 0; a < rows.length; a++) {
-              if (isActive(rows[a])) return true;
-            }
-            return false;
           }
           function itemIds(row) {
             var picked = [];
@@ -541,23 +487,6 @@ public static class SiteImportExtractors
               if (im) picked.push(parseInt(im[1], 10));
             }
             return picked;
-          }
-          function fingerprint(slots) {
-            var parts = [];
-            for (var s = 0; s < slots.length; s++) {
-              parts.push(slots[s].title);
-              var rows = dataRows(slots[s].table);
-              parts.push(String(rows.length));
-              for (var r = 0; r < rows.length; r++) {
-                parts.push(String(rows[r].className || ''));
-                parts.push((rows[r].textContent || '').replace(/\s+/g, ' ').trim());
-                parts.push(itemIds(rows[r]).join(','));
-              }
-            }
-            var text = parts.join('|');
-            var hash = 5381;
-            for (var i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
-            return ('0000000' + hash.toString(16)).slice(-8);
           }
           // What the WHOLE PAGE carried, whether or not any slot table was
           // recognized. Discovery's only failure mode is "zero titled slot
@@ -571,69 +500,51 @@ public static class SiteImportExtractors
           function pageCensus() {
             var all = document.getElementsByTagName('table');
             var titled = slotTables();
-            var rows = 0, selectable = 0;
+            var rows = 0;
             for (var t = 0; t < titled.length; t++) {
               var listed = dataRows(titled[t].table);
               rows += listed.length;
-              if (listed.length > 0 && isSelectable(listed[0])) selectable++;
             }
             var titles = [];
             for (var n = 0; n < titled.length && n < 8; n++) titles.push(titled[n].title);
             return all.length + ' tables on the page, ' + titled.length +
               ' with a slot title' + (titles.length ? ' [' + titles.join(', ') + ']' : '') +
-              ', ' + rows + ' data rows, ' + selectable + ' with a selectable top row';
+              ', ' + rows + ' data rows';
           }
-          if (action === 'inspect') {
-            var found = slotTables();
-            var states = [];
-            for (var s = 0; s < found.length; s++) {
-              var listed = dataRows(found[s].table);
-              states.push({
-                title: found[s].title,
-                topSelected: listed.length > 0 && isActive(listed[0]),
-                topSelectable: listed.length > 0 && isSelectable(listed[0]),
-                hasActive: hasActiveRow(listed),
-                rows: listed.length
-              });
+          var href = String((typeof location !== 'undefined' && location.href) || '');
+          var page = href.match(/coachless\.gg\/builds\/([a-z0-9]+)/i);
+          if (!page) return fail('not a champion builds page');
+          var slug = page[1].toLowerCase();
+          var role = '';
+          var qm = href.match(/[?&]role=([a-z]+)/i);
+          if (qm) role = qm[1].toLowerCase();
+          var notes = [];
+          // Roleless champ select is resolved from the same kind of source as
+          // u.gg: the site's rendered active role, never the first button or
+          // an invented default. Coachless marks its active role button and
+          // the icon URL names the token (role_adc_teal.png, etc.).
+          if (!role) {
+            var roleSelectors = document.getElementsByTagName('cl-role-selection');
+            for (var rs = 0; rs < roleSelectors.length && !role; rs++) {
+              var buttons = roleSelectors[rs].getElementsByTagName('button');
+              for (var rb = 0; rb < buttons.length && !role; rb++) {
+                if (!hasClass(buttons[rb], 'active')) continue;
+                var roleImgs = buttons[rb].getElementsByTagName('img');
+                for (var ri = 0; ri < roleImgs.length && !role; ri++) {
+                  var roleMatch = String(roleImgs[ri].getAttribute('src') || '')
+                    .match(/\/role_(top|jungle|mid|adc|support)(?:_teal)?\./i);
+                  if (roleMatch) role = roleMatch[1].toLowerCase();
+                }
+              }
             }
-            return JSON.stringify({
-              stage: 'state', settled: true, hash: fingerprint(found),
-              slots: states, census: pageCensus()
-            });
+            if (role)
+              notes.push('coachless: the URL carried no role; used the page\'s active role "' + role + '"');
+            else
+              notes.push('coachless: the URL carried no role and the page rendered no active role');
           }
-          if (action === 'click') {
-            var want = STEP && STEP.slot;
-            var tables = slotTables();
-            var target = null;
-            for (var k = 0; k < tables.length; k++) {
-              if (tables[k].title === want) { target = tables[k]; break; }
-            }
-            if (!target) return fail('slot "' + String(want) + '" not found');
-            var rows = dataRows(target.table);
-            if (!rows.length) return fail('slot "' + String(want) + '" has no rows');
-            if (isActive(rows[0]))
-              return JSON.stringify({ stage: 'already-selected', clickedSlot: want, settled: true });
-            if (!isSelectable(rows[0]))
-              return JSON.stringify({ stage: 'read-only', clickedSlot: want, settled: true });
-            if (typeof MouseEvent === 'function') {
-              rows[0].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-            } else if (rows[0].click) {
-              rows[0].click();
-            }
-            return JSON.stringify({ stage: 'clicked', clickedSlot: want, settled: false });
-          }
-          if (action === 'read') {
-            var href = String((typeof location !== 'undefined' && location.href) || '');
-            var page = href.match(/coachless\.gg\/builds\/([a-z0-9]+)/i);
-            if (!page) return fail('not a champion builds page');
-            var slug = page[1].toLowerCase();
-            var role = '';
-            var qm = href.match(/[?&]role=([a-z]+)/i);
-            if (qm) role = qm[1].toLowerCase();
             var SLOT_ORDER = ['Starter', '1st Item', '2nd Item', '3rd Item', '4th+ Item', 'Boots'];
             var looked = slotTables();
             var blocks = [];
-            var notes = [];
             for (var b = 0; b < SLOT_ORDER.length; b++) {
               var entry = null;
               for (var e = 0; e < looked.length; e++) {
@@ -651,16 +562,12 @@ public static class SiteImportExtractors
                 notes.push('coachless: slot "' + SLOT_ORDER[b] + '" is not on the page -- omitted');
                 continue;
               }
-              var sel = null;
               var cand = dataRows(entry.table);
               if (!cand.length) {
                 notes.push('coachless: slot "' + SLOT_ORDER[b] + '" has no rows -- omitted');
                 continue;
               }
-              for (var q = 0; q < cand.length; q++) {
-                if (isActive(cand[q])) { sel = cand[q]; break; }
-              }
-              var row = sel || cand[0];
+              var row = cand[0];
               var ids = itemIds(row);
               if (!ids.length) {
                 // Name what the row DID carry, so the next live pass does not
@@ -674,27 +581,20 @@ public static class SiteImportExtractors
                   if (String(all[v].getAttribute('src') || '').indexOf('/img/item/') >= 0) itemish++;
                 }
                 notes.push('coachless: slot "' + SLOT_ORDER[b] + '" yielded no items -- omitted (' +
-                  cand.length + ' rows, ' + (sel ? 'selected' : 'top') + ' row has ' + all.length +
+                  cand.length + ' rows, top row has ' + all.length +
                   ' img, ' + itemish + ' item-icon, ' + hidden + ' hidden)');
                 continue;
               }
-              blocks.push({ title: SLOT_ORDER[b], itemIds: ids, selected: !!sel });
+              blocks.push({ title: SLOT_ORDER[b], itemIds: ids });
             }
-            // Deliberately NOT the words "no build": that phrase is the one
-            // SiteImportSequencer.MapStepError collapses to the generic
-            // no-build reason, and the whole value of this branch is the
-            // per-slot detail it carries into the log.
-            if (!blocks.length)
-              return fail('every item slot on the page was empty -- ' + notes.join('; ').slice(0, 240));
-            return JSON.stringify({
-              stage: 'done', settled: true,
-              payload: {
-                source: 'coachless', championSlug: slug, role: role, runes: null,
-                itemBlocks: blocks, meta: { notes: notes }
-              }
-            });
-          }
-          return fail('unknown import step');
+            // Deliberately NOT the words "no build": preserve the per-slot
+            // detail this branch carries into the log.
+          if (!blocks.length)
+            return fail('every item slot on the page was empty (' + pageCensus() + ') -- ' + notes.join('; ').slice(0, 240));
+          return JSON.stringify({
+            source: 'coachless', championSlug: slug, role: role, runes: null,
+            itemBlocks: blocks, meta: { notes: notes }
+          });
         })();
         """;
 
@@ -703,9 +603,9 @@ public static class SiteImportExtractors
     /// (<c>coachless.gg/runes/tree/{slug}/{primary}/{secondary}?role={role}</c>).
     ///
     /// <para>WHY A SECOND PAGE. The builds overview
-    /// (<see cref="CoachlessStepTemplate"/>) renders keystone OPTIONS and zero
+    /// (<see cref="CoachlessItemsTemplate"/>) renders keystone OPTIONS and zero
     /// minor runes or shards, so it can never yield a full rune page — the
-    /// walk has always imported items only and reported "no rune page on this
+    /// items read has always imported items only and reported "no rune page on this
     /// site". Coachless ranks the rest of the tree on a dedicated Runes page,
     /// and this script reads it. Read-only: no click, no navigation, one JSON
     /// string out.</para>
@@ -764,7 +664,7 @@ public static class SiteImportExtractors
     /// row whose cards all lack data, fewer than two usable secondary rows —
     /// returns <c>{ error }</c> naming that part, and C# reports it and
     /// writes nothing. <c>itemBlocks</c> is always empty here: this page has
-    /// no items, and the walk owns those.</para>
+    /// no items, and the builds-page read owns those.</para>
     ///
     /// <para>BUT AN ABSENT NUMBER IS NOT YET AN ANSWER (2.1.0 round 2). Field
     /// log 2026-09-08: <c>no keystone on the runes page carried a WPA
@@ -830,6 +730,21 @@ public static class SiteImportExtractors
             var cls = el.classList;
             if (cls && cls.contains && cls.contains(name)) return true;
             return (' ' + String(el.className || '') + ' ').indexOf(' ' + name + ' ') >= 0;
+          }
+          if (!role) {
+            var roleSelectors = document.getElementsByTagName('cl-role-selection');
+            for (var rs = 0; rs < roleSelectors.length && !role; rs++) {
+              var buttons = roleSelectors[rs].getElementsByTagName('button');
+              for (var rb = 0; rb < buttons.length && !role; rb++) {
+                if (!hasClass(buttons[rb], 'active')) continue;
+                var roleImgs = buttons[rb].getElementsByTagName('img');
+                for (var ri = 0; ri < roleImgs.length && !role; ri++) {
+                  var activeRole = String(roleImgs[ri].getAttribute('src') || '')
+                    .match(/\/role_(top|jungle|mid|adc|support)(?:_teal)?\./i);
+                  if (activeRole) role = activeRole[1].toLowerCase();
+                }
+              }
+            }
           }
           function rowsUnder(hostSelector, rowClass) {
             var host = document.querySelector(hostSelector);
@@ -982,7 +897,7 @@ public static class SiteImportExtractors
     /// <para>WHY IT EXISTS. Field log 2026-09-08 17:48:15 —
     /// <c>auto-import: Coachless extraction failed (no build on page)</c>. A
     /// hidden worker's first-ever load of either site hits the consent modal,
-    /// which is what the slot tables sit behind, so the walk discovers zero
+    /// which is what the slot tables sit behind, so the read discovers zero
     /// slots and reports an honest but useless no-build. The user asked for
     /// this import; clicking the dialog they would have clicked is part of
     /// that one sanctioned interaction, and nothing else about the read-only
@@ -1065,12 +980,6 @@ public static class SiteImportExtractors
         .Replace("__PERK_MAP_JSON__", PerkIconMap.ToJson(), StringComparison.Ordinal)
         .Replace("__SHARD_MAP_JSON__", ShardIconMap.ToJson(), StringComparison.Ordinal);
 
-    private static readonly string BuiltCoachlessInspectScript =
-        CoachlessStepTemplate.Replace(
-            "__COACHLESS_STEP_JSON__",
-            """{"action":"inspect"}""",
-            StringComparison.Ordinal);
-
     private static readonly string BuiltCoachlessRunesScript = CoachlessRunesTemplate
         .Replace("__PERK_MAP_JSON__", PerkIconMap.ToJson(), StringComparison.Ordinal)
         .Replace("__SHARD_MAP_JSON__", ShardIconMap.ToCoachlessJson(), StringComparison.Ordinal)
@@ -1085,71 +994,22 @@ public static class SiteImportExtractors
     /// <summary>The runnable consent-dismiss step. No tables to inject.</summary>
     public static string ConsentDismissScript => ConsentDismissTemplate;
 
-    /// <summary>
-    /// A runnable Coachless step script for one sequencer step: the
-    /// <paramref name="stepJson"/> is the <c>__COACHLESS_STEP_JSON__</c>
-    /// action object (see <c>SiteImportSteps</c>), embedded verbatim.
-    /// </summary>
-    public static string CoachlessStepScript(string stepJson)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stepJson);
-        return CoachlessStepTemplate.Replace(
-            "__COACHLESS_STEP_JSON__", stepJson, StringComparison.Ordinal);
-    }
-
-    /// <summary>The Coachless walk's first step: list the slot sections in DOM order.</summary>
-    public static string CoachlessInspectScript => BuiltCoachlessInspectScript;
-
-    /// <summary>
-    /// The Coachless builds-overview section titles that hold ITEMS (the
-    /// same six the step script's <c>read</c> action reports). Keystone and
-    /// Spell sections exist on the page but hold no items and are never part
-    /// of the import — neither clicked nor read.
-    /// </summary>
-    public static readonly IReadOnlySet<string> CoachlessItemSlotTitles =
-        new HashSet<string>(StringComparer.Ordinal)
-        {
-            "Starter", "1st Item", "2nd Item", "3rd Item", "4th+ Item", "Boots",
-        };
-
-    /// <summary>
-    /// Whether the select-and-recompute walk may click this slot section.
-    ///
-    /// <para>Live-verified 2026-09-08: the walk must start at <b>1st
-    /// Item</b> — no Keystone/Starter clicks. The keystone conditioning is
-    /// what flipped the build to Hubris; the headline WPA chain (1st →
-    /// 2nd → conditioned tops) is the payload. So the clickable set is item
-    /// slots only, minus Starter: Starter's CONDITIONED top row is still
-    /// read (it is the honest Doran's-Blade-style opener once 1st/2nd are
-    /// picked) but never clicked. Keystone, Starter and Spell are never
-    /// clicked under any selectability: the walk positions past them at
-    /// discovery and skips them mid-walk, exactly like read-only slots.
-    /// </para>
-    /// </summary>
-    public static bool IsWalkClickableSlot(string? title) =>
-        !string.IsNullOrEmpty(title)
-        && CoachlessItemSlotTitles.Contains(title)
-        && !string.Equals(title, "Starter", StringComparison.Ordinal);
+    /// <summary>The runnable one-shot Coachless items extractor.</summary>
+    public static string CoachlessItemsScript => CoachlessItemsTemplate;
 
     /// <summary>
     /// The extractor for a site tab, or null for the hosted tab (which is
-    /// never scraped). For Coachless this is the walk's opening inspect
-    /// step; the sequencer drives the clicks and the final read from the
-    /// same import click handler.
+    /// never scraped). Both site scripts perform one read and no interaction.
     /// </summary>
     public static string? ScriptFor(CompanionTab tab) => tab switch
     {
         CompanionTab.UGg => UGgScript,
-        CompanionTab.Coachless => CoachlessInspectScript,
+        CompanionTab.Coachless => CoachlessItemsScript,
         _ => null,
     };
 
     /// <summary>
-    /// Whether the import button enables for this tab+URL: the active site
-    /// tab must be showing that site's BUILD-page shape. The LCU half of the
-    /// enablement lives with the caller (it owns the connection state); this
-    /// is the URL half, shared so the button and the extractor cannot
-    /// disagree about what "a build page" means.
+    /// Whether a tab is showing that site's build-page shape.
     /// </summary>
     public static bool CanImportFromUrl(CompanionTab tab, string? url)
     {

@@ -2,6 +2,71 @@ using System.Text.Json;
 
 namespace CoachBuild.Desktop.Web;
 
+/// <summary>Request-level ad serving policy for the three public site tabs.</summary>
+public static class SiteAdBlockingPolicy
+{
+    /// <summary>
+    /// Maintained ad-serving/adtech domain patterns. Keep consent providers
+    /// and first-party site/CDN hosts out of this list: site functionality
+    /// wins whenever a host is ambiguous.
+    /// </summary>
+    public static readonly IReadOnlyList<string> BlockedDomainPatterns =
+    [
+        "doubleclick.net",
+        "googlesyndication.com",
+        "adservice.google.*",
+        "adnxs.com",
+        "amazon-adsystem.com",
+        "criteo.com",
+        "criteo.net",
+        "taboola.com",
+        "outbrain.com",
+        "pubmatic.com",
+        "rubiconproject.com",
+        "openx.net",
+        "indexexchange.com",
+        "magnite.com",
+        "media.net",
+    ];
+
+    private static readonly string[] FirstPartyRoots = ["u.gg", "coachless.gg", "op.gg"];
+
+    public static bool TryGetBlockedDomain(string? requestUri, out string domain)
+    {
+        domain = string.Empty;
+        if (!Uri.TryCreate(requestUri, UriKind.Absolute, out var uri)) return false;
+        var host = uri.IdnHost.TrimEnd('.').ToLowerInvariant();
+        if (host.Length == 0 || IsFirstParty(host) || IsConsentHost(host)) return false;
+
+        foreach (var pattern in BlockedDomainPatterns)
+        {
+            if (pattern.EndsWith(".*", StringComparison.Ordinal))
+            {
+                var prefix = pattern[..^1];
+                if (!host.StartsWith(prefix, StringComparison.Ordinal)) continue;
+            }
+            else if (!string.Equals(host, pattern, StringComparison.Ordinal) &&
+                     !host.EndsWith("." + pattern, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            domain = host;
+            return true;
+        }
+        return false;
+    }
+
+    private static bool IsFirstParty(string host) =>
+        FirstPartyRoots.Any(root =>
+            string.Equals(host, root, StringComparison.Ordinal) ||
+            host.EndsWith("." + root, StringComparison.Ordinal));
+
+    private static bool IsConsentHost(string host) =>
+        host.Contains("qc-cmp", StringComparison.Ordinal) ||
+        host.Contains("fundingchoices", StringComparison.Ordinal);
+}
+
 /// <summary>
 /// The typed answer from <see cref="SiteImportExtractors.ConsentDismissScript"/>.
 /// Never throws: an unparseable result is "nothing was dismissed", which is

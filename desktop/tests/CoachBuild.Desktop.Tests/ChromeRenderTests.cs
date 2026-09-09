@@ -95,7 +95,7 @@ public sealed class ChromeRenderTests
     {
         var source = ReadSource(WindowSource);
         Assert.Contains("OnContentRendered", source, StringComparison.Ordinal);
-        foreach (var element in new[] { "ChromeRow", "OfferBar", "ContentHost", "StatusRow" })
+        foreach (var element in new[] { "ChromeRow", "ContentHost", "StatusRow" })
             Assert.Contains(element, source, StringComparison.Ordinal);
     }
 
@@ -117,7 +117,7 @@ public sealed class ChromeRenderTests
     {
         var markup = ReadSource(WindowMarkup);
         var rows = Regex.Matches(markup, "<RowDefinition\\b").Count;
-        Assert.Equal(4, rows);
+        Assert.Equal(3, rows);
 
         for (var row = 0; row < rows; row++)
         {
@@ -159,22 +159,21 @@ public sealed class ChromeRenderTests
         Assert.NotEmpty(brushes);
 
         var rowColours = new List<string>();
-        for (var row = 0; row < 4; row++)
+        for (var row = 0; row < 3; row++)
         {
             var placed = Regex.Match(markup, $"Grid\\.Row=\"{row}\"");
             var tag = markup[markup.LastIndexOf('<', placed.Index)..markup.IndexOf('>', placed.Index)];
             rowColours.Add(Resolve(tag, brushes));
         }
 
-        // Row 2 is the content host; every other row is chrome and must be dark.
+        // Row 1 is the content host; every other row is chrome and must be dark.
         Assert.False(IsLight(rowColours[0]), $"chrome row is {rowColours[0]}");
-        Assert.False(IsLight(rowColours[1]), $"offer bar is {rowColours[1]}");
-        Assert.Equal("#F4F7FA", rowColours[2]);
-        Assert.False(IsLight(rowColours[3]), $"status bar is {rowColours[3]}");
+        Assert.Equal("#F4F7FA", rowColours[1]);
+        Assert.False(IsLight(rowColours[2]), $"status bar is {rowColours[2]}");
 
         // The root Grid shows through a collapsed row, so it counts too.
         Assert.False(IsLight(brushes["CanvasBrush"]));
-        // And the landing state is what actually covers row 2 on screen.
+        // And the landing state is what actually covers row 1 on screen.
         Assert.Contains("Background=\"#081A2A\"", markup, StringComparison.Ordinal);
 
         // Named white in any spelling is out.

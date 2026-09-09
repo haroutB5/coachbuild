@@ -321,6 +321,20 @@ public sealed class SiteImportTests
             SiteImportValidator.PageTitle("Ahri", "mid", SiteImportSource.Coachless));
     }
 
+    [Theory]
+    [InlineData("adc", "u.gg Jhin (ADC)", "Coachless Jhin (ADC)")]
+    [InlineData(null, "u.gg Jhin", "Coachless Jhin")]
+    public void Automatic_rune_titles_are_short_source_named_and_use_only_the_assigned_role(
+        string? assignedRole,
+        string expectedUgg,
+        string expectedCoachless)
+    {
+        Assert.Equal(expectedUgg,
+            SiteImportValidator.RunePageTitle("Jhin", assignedRole, SiteImportSource.UGg));
+        Assert.Equal(expectedCoachless,
+            SiteImportValidator.RunePageTitle("Jhin", assignedRole, SiteImportSource.Coachless));
+    }
+
     // A practice tool / custom lobby assigns no position, so champ select
     // hands the import an empty role. 2.0.1 stamped the literal word into the
     // client ("CoachBuild import: Nasus Unknown (u.gg)", field-tested

@@ -14,29 +14,20 @@ namespace CoachBuild.Desktop.Web;
 /// destination so each tab keeps its own history and sign-in while the
 /// application still has one window and one lifetime gate.
 ///
-/// <para>The hosted CoachBuild page is the only surface with the persistent
-/// session token and the only surface whose document is inspected
-/// unprompted: the version meta tag is read solely to support the existing
-/// web-freshness check. The site tabs are read-mostly, with TWO sanctioned
-/// exceptions. (1) The gold <c>Import runes</c> button reads the VISIBLE u.gg
-/// build page once per click - runes only, never items - while the client is
-/// connected (<see cref="SiteImportExtractors"/> for the scripts,
-/// <c>RunRunesImportAsync</c> below for the single call site). It is hidden
-/// on Coachless, which has no rune page. (2) The automatic item import
-/// (<see cref="SiteAutoImportService"/>) fetches both sites' item sets in the
-/// background on champ-select lock (and re-fetches the visible build page
-/// when its URL changes): u.gg is one read-only script; Coachless is a
-/// stepped select-and-recompute walk (inspect, click each ITEM slot's top row
-/// from 1st Item in DOM order awaiting settle, final read of selected else
-/// conditioned top rows) because its tables recompute conditioned on the
-/// picks so far. Background fetches reuse a background site tab or a hidden
+/// <para>The site tabs are read-mostly. The automatic import
+/// (<see cref="SiteAutoImportService"/>) fetches both sites' item and rune
+/// recommendations in the background on champ-select lock (and refreshes on
+/// recognized build-page visits). Both item extractors perform one read-only
+/// script call; Coachless takes the initial top-WPA row in each slot. Its
+/// separate runes page keeps a bounded settle read because that is page-load
+/// timing, not a selection walk. Background fetches reuse a background site tab or a hidden
 /// worker webview - never the visible tab, never a change of the selected
 /// tab, never a focus steal - and a worker is navigated ONLY to the exact
 /// deep-link URL the app's own builders produce for the locked
 /// champion+role
 /// (<see cref="AutoImportCoordinator.IsAllowedAutoImportTarget"/>).
 /// <c>SiteTabComplianceTests</c> pins that scope: site-tab script execution
-/// is extractor steps from the runes click, the visible-extract path, or the
+/// is extractor work from the automatic rune fetch, visible-extract path, or the
 /// worker-fetch path (plus this file's Companion version read); automated
 /// navigation call sites are enumerated and the worker one asserts the
 /// allowlist; and no timer of the window's own may scrape.</para>
@@ -100,16 +91,13 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     private readonly Func<CancellationToken, Task<Uri?>>? _opGgProfileResolver;
     private readonly Dictionary<CompanionTab, BrowserTabState> _tabs = new();
     private CompanionTabsPreferences _preferences;
-    private ChampSelectContext? _champSelectContext;
-    private readonly ISiteImportHost? _siteImport;
     private bool _lcuConnected;
-    private bool _importRunning;
     /// <summary>
     /// The automatic item import: constructed by
     /// <see cref="AttachAutoImport"/> (the window is the executor — the only
     /// place that may touch a WebView) and driven by
     /// <see cref="NotifySnapshotForAutoImport"/> on the snapshot tick. Null
-    /// until attached; the runes button works without it.
+    /// until attached.
     /// </summary>
     private SiteAutoImportService? _autoImport;
     /// <summary>
@@ -121,6 +109,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     private readonly Dictionary<CompanionTab, DateTimeOffset> _lastVisible = new();
     /// <summary>Hidden worker webviews for the auto-import, one per site at most. Never shown, never selected.</summary>
     private readonly Dictionary<CompanionTab, BrowserTabState> _workers = new();
+    private readonly HashSet<string> _blockedAdDomainsLogged = new(StringComparer.Ordinal);
     /// <summary>
     /// The auto-import's run token (2.1.2). Champ-select END swaps this for a
     /// fresh source (cancelling whatever run holds the old one); the
@@ -154,7 +143,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         Action<RepairResult>? repairCompleted = null,
         CompanionTabsPreferences? preferences = null,
         Action<CompanionTabsPreferences>? preferencesChanged = null,
-        ISiteImportHost? siteImport = null,
         Func<CancellationToken, Task<Uri?>>? opGgProfileResolver = null)
     {
         _environmentService = environmentService ?? throw new ArgumentNullException(nameof(environmentService));
@@ -166,10 +154,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         _preferencesChanged = preferencesChanged;
         _opGgProfileResolver = opGgProfileResolver;
         _preferences = preferences ?? CompanionTabsPreferences.Default;
-        // Null (no host, e.g. the client never connected at startup) leaves
-        // the import button present but disabled with a tooltip saying why.
-        _siteImport = siteImport;
-
         InitializeComponent();
         Fallback.RepairRequested += OnRepairRequested;
         Closed += OnClosed;
@@ -182,14 +166,14 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     /// <para>Belt and braces behind <see cref="ChromeRenderPolicy"/>. When the
     /// blank-chrome fault struck in 2.1.0, the regions that came out CORRECT
     /// were exactly the ones something had invalidated after first paint (the
-    /// offer bar appearing, the status text changing, the tab buttons
+    /// status text changing and the tab buttons
     /// restyling) — so a forced re-render is the operation observed to repair
     /// the surface. Software rendering is the actual fix and makes this a
     /// no-op; this exists for <c>--gpu-render</c>, where the hardware present
     /// path is back and nothing else would repaint a window the user never
     /// touches.</para>
     ///
-    /// <para>Costs one extra render pass of two Borders and a collapsed row,
+    /// <para>Costs one extra render pass of the chrome and status Borders,
     /// once, at window open.</para>
     /// </summary>
     protected override void OnContentRendered(EventArgs e)
@@ -197,7 +181,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         base.OnContentRendered(e);
         if (_disposed) return;
         InvalidateVisual();
-        foreach (var element in new UIElement[] { ChromeRow, OfferBar, ContentHost, StatusRow })
+        foreach (var element in new UIElement[] { ChromeRow, ContentHost, StatusRow })
         {
             element.InvalidateVisual();
         }
@@ -342,28 +326,8 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     }
 
     /// <summary>
-    /// Receives the current LCU champ-select projection. Updating this value
-    /// only updates the offer row; it never navigates a site.
-    /// </summary>
-    public void UpdateChampSelectContext(ChampSelectContext? context)
-    {
-        if (_disposed) return;
-        if (!Dispatcher.CheckAccess())
-        {
-            Dispatcher.BeginInvoke(
-                new Action(() => UpdateChampSelectContext(context)),
-                System.Windows.Threading.DispatcherPriority.Background);
-            return;
-        }
-
-        _champSelectContext = context;
-        UpdateOfferBar();
-    }
-
-    /// <summary>
     /// Receives the LCU connection projection on the existing snapshot tick.
-    /// Redraws chrome (the import button's enabled state), and — on the
-    /// RISING edge of the connection — gives the MyStats tab the one retry it
+    /// On the RISING edge of the connection, gives the MyStats tab the one retry it
     /// was missing (see <see cref="RetryOpGgProfileAsync"/>).
     /// </summary>
     public void UpdateSiteImportAvailability(bool lcuConnected)
@@ -379,7 +343,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
 
         var connected = lcuConnected && !_lcuConnected;
         _lcuConnected = lcuConnected;
-        UpdateOfferBar();
         if (connected) _ = RetryOpGgProfileAsync(_shutdownToken);
     }
 
@@ -805,6 +768,9 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         webView.Settings.IsStatusBarEnabled = false;
         webView.Settings.IsZoomControlEnabled = true;
 
+        if (state.Tab != CompanionTab.Companion)
+            ConfigureAdBlocking(webView);
+
         webView.NavigationStarting += (_, args) => OnNavigationStarting(state, args);
         webView.NavigationCompleted += (_, args) => OnNavigationCompleted(state, args);
         webView.NewWindowRequested += (_, args) => OnNewWindowRequested(state, args);
@@ -814,6 +780,28 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         webView.SourceChanged += (_, _) => OnNavigationStateChanged(state);
         webView.HistoryChanged += (_, _) => OnNavigationStateChanged(state);
         browser.ZoomFactorChanged += (_, _) => OnZoomFactorChanged(state);
+    }
+
+    /// <summary>
+    /// Blocks known third-party ad-serving requests before they reach the
+    /// network. Applied to u.gg, Coachless and MyStats (including hidden
+    /// import workers), never to the local Draft tab. Consent and first-party
+    /// hosts are explicitly exempted by <see cref="SiteAdBlockingPolicy"/>.
+    /// </summary>
+    private void ConfigureAdBlocking(CoreWebView2 core)
+    {
+        core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
+        core.WebResourceRequested += (_, args) =>
+        {
+            if (!SiteAdBlockingPolicy.TryGetBlockedDomain(args.Request.Uri, out var domain)) return;
+            args.Response = core.Environment.CreateWebResourceResponse(
+                Stream.Null,
+                403,
+                "Blocked",
+                "Content-Length: 0");
+            if (_blockedAdDomainsLogged.Add(domain))
+                LogLifecycle($"debug: ads: blocked {domain}");
+        };
     }
 
     private void OnNavigationStarting(
@@ -999,7 +987,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (IsActiveTab(state))
         {
             UpdateChrome();
-            UpdateOfferBar();
         }
 
         NavigationStateChanged?.Invoke();
@@ -1162,121 +1149,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             await NavigateSiteHome(state, _shutdownToken).ConfigureAwait(true);
     }
 
-    private async void OnUggOfferClick(object sender, RoutedEventArgs e) =>
-        await OpenSiteOfferAsync(CompanionTab.UGg).ConfigureAwait(true);
-
-    private async void OnCoachlessOfferClick(object sender, RoutedEventArgs e) =>
-        await OpenSiteOfferAsync(CompanionTab.Coachless).ConfigureAwait(true);
-
-    private async void OnImportRunesClick(object sender, RoutedEventArgs e) =>
-        await RunRunesImportAsync().ConfigureAwait(true);
-
-    /// <summary>
-    /// The runes-button import, reachable only from
-    /// <see cref="ImportRunesButton"/>, which shows only on a u.gg
-    /// build-page URL and enables only while the client is connected — and
-    /// the connection is re-checked here, because the client may have closed
-    /// between the last snapshot tick and the click. u.gg runs ONE
-    /// read-only script, then the host validates and writes the rune page
-    /// alone: items never flow through this button (they arrive via the
-    /// automatic import). Never navigates, never reloads; every outcome
-    /// (including an unexpected exception) lands on the status line and
-    /// writes nothing partial.
-    ///
-    /// <para>2.1.2: NO press ends without a visible status change. The live
-    /// pass-3 fault was a Coachless press that left zero log lines and no
-    /// page change: the guards below used to return silently (a second press
-    /// during the settle fetch, a tab that moved off its page between paint
-    /// and click), and a repeat press that changed nothing had no honest
-    /// wording. Every guard now sets the status, and the host answers an
-    /// identical, already-selected page with "Runes already current".</para>
-    /// </summary>
-    private async Task RunRunesImportAsync()
-    {
-        // The window going away is the one press that cannot be answered: no
-        // status line exists to write it on.
-        if (_disposed) return;
-        if (_importRunning)
-        {
-            // A second press while the first is still settling used to die
-            // here silently; the in-flight press's settle line was the only
-            // trace either press left.
-            SetStatus("Import already running -- try again in a moment");
-            return;
-        }
-        var site = ActiveTab;
-        // Belt and braces behind the hidden button: only the two sites that
-        // have a rune page to read. Anything else has nothing to import.
-        if (site is not (CompanionTab.UGg or CompanionTab.Coachless))
-        {
-            SetStatus("Open a u.gg or Coachless champion page to import its runes.");
-            return;
-        }
-        var state = GetState(site);
-        // Without a host or a live site browser there is nothing to read.
-        if (state?.Core is null || _siteImport is null)
-        {
-            SetStatus("Import is unavailable in this window.");
-            return;
-        }
-        // The SAME predicate the button's visibility uses, re-evaluated here
-        // because the tab may have navigated between the paint and the click.
-        // That race used to be a silent return; it now says where to go.
-        var coachlessRunes = site == CompanionTab.Coachless
-            ? SiteDeepLink.CoachlessRunesUrlForPage(state.Core.Source)
-            : null;
-        if (site == CompanionTab.Coachless && coachlessRunes is null)
-        {
-            SetStatus("Open a Coachless champion page to import its runes.");
-            return;
-        }
-
-        _importRunning = true;
-        UpdateOfferBar();
-        SetStatus($"Importing runes from {CompanionTabs.LabelFor(site)}…");
-        try
-        {
-            // u.gg's rune panel is on the build page in front of the user, so
-            // it is read in place. Coachless keeps its per-slot WPA runes on a
-            // SEPARATE page, so this reuses the automatic import's own fetch --
-            // hidden worker, allowlisted target, settle probe and all -- rather
-            // than growing a second way to read that page. The visible tab is
-            // never navigated by this button on either site.
-            var raw = coachlessRunes is null
-                ? await state.Core.ExecuteScriptAsync(SiteImportExtractors.UGgScript).ConfigureAwait(true)
-                : await FetchCoachlessRunesAsync(
-                        coachlessRunes,
-                        SiteDeepLink.CoachlessSlugForPage(coachlessRunes),
-                        SiteDeepLink.RoleIdFromToken(SiteNavigationPolicy.RoleFromUri(coachlessRunes)),
-                        _shutdownToken)
-                    .ConfigureAwait(true);
-            if (_disposed) return;
-            var result = await _siteImport.ImportRunesAsync(raw, _shutdownToken).ConfigureAwait(true);
-            if (_disposed) return;
-            // The verdict, on BOTH surfaces: the status line the fix promises
-            // and the tray log the next live pass reads.
-            LogLifecycle($"runes: {result.Message}");
-            SetStatus(result.Message);
-        }
-        catch (Exception error)
-        {
-            // The script surface carries no secrets (no token, no
-            // credentials), so naming the failure is safe and debuggable.
-            if (!_disposed)
-            {
-                var message = $"Import failed ({error.Message}) -- nothing was imported";
-                LogLifecycle($"runes: {message}");
-                SetStatus(message);
-            }
-        }
-        finally
-        {
-            _importRunning = false;
-            if (!_disposed) UpdateOfferBar();
-            CloseIfLingeringAndIdle();
-        }
-    }
-
     /// <summary>
     /// The zoom keyboard shortcuts. 2.1.0 removed the Zoom -/100%/+ chrome
     /// cluster to merge the two chrome rows into one; zoom itself had to keep
@@ -1319,107 +1191,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     }
 
     /// <summary>
-    /// The Coachless select-and-recompute walk as extractor-shaped JSON: the
-    /// page's slot tables recompute conditioned on the picks so far, so the
-    /// fetch reproduces what a user gets by clicking the top-WPA row of each
-    /// ITEM slot from 1st Item in DOM order, then reading each item slot
-    /// (selected row else conditioned top row). The order AND the clickable
-    /// set come from the page (the opening inspect step), never from a
-    /// hardcoded list: only item slots whose top row carries the site's
-    /// <c>selectable</c> class are clicked (Keystone, Starter and Spell
-    /// never; read-only slots are skipped outright, never clicked, never
-    /// waited on).
-    ///
-    /// <para>Runs on ANY site CoreWebView2 -- the visible Coachless tab or a
-    /// hidden worker -- because the caller (never this method) decides which
-    /// core is safe to touch. Returns the final payload JSON, or an
-    /// <c>error</c> payload on failure so the service's normal typed-failure
-    /// path reports it. Each loop turn runs one small step script; after a
-    /// click the driver polls until the tables settle AND the clicked slot
-    /// shows a selection (~250ms apart, ~5s wait per slot -- plain awaits,
-    /// not a timer). A clicked slot that never selects does NOT fail the
-    /// fetch -- the walk notes it into the payload meta and moves on.
-    /// Compliance calls this a script SITE (not a call count): it is
-    /// reachable only from the two auto-import fetch paths below.</para>
-    /// </summary>
-    private async Task<string> RunCoachlessWalkAsync(CoreWebView2 core, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(core);
-        try
-        {
-            var sequence = SiteImportSequencer.Initial();
-            while (true)
-            {
-                if (_disposed) return WalkFailure("the window closed during the import");
-                cancellationToken.ThrowIfCancellationRequested();
-                switch (SiteImportSequencer.CommandFor(sequence))
-                {
-                    case FailCommand fail:
-                        return WalkFailure(fail.Reason);
-                    case SucceedCommand done:
-                        return done.PayloadJson;
-                    case ClickSlotCommand click:
-                    {
-                        var raw = await core.ExecuteScriptAsync(
-                            SiteImportExtractors.CoachlessStepScript(
-                                SiteImportSteps.Click(click.Title))).ConfigureAwait(true);
-                        if (_disposed) return WalkFailure("the window closed during the import");
-                        sequence = SiteImportSequencer.Transition(
-                            sequence, CoachlessStepResponse.Parse(raw));
-                        break;
-                    }
-                    case ReadFinalCommand:
-                    {
-                        var raw = await core.ExecuteScriptAsync(
-                            SiteImportExtractors.CoachlessStepScript(
-                                SiteImportSteps.Read())).ConfigureAwait(true);
-                        if (_disposed) return WalkFailure("the window closed during the import");
-                        sequence = SiteImportSequencer.Transition(
-                            sequence, CoachlessStepResponse.Parse(raw));
-                        break;
-                    }
-                    default:
-                    {
-                        // InspectCommand: discovery, or one settle poll. The
-                        // pause lives only here, before settle polls -- a
-                        // plain await, not a timer.
-                        if (sequence.Phase == SequencerPhase.Settle)
-                            await Task.Delay(
-                                SiteImportSequencer.SettlePollDelayMs,
-                                cancellationToken).ConfigureAwait(true);
-                        if (_disposed) return WalkFailure("the window closed during the import");
-                        var raw = await core.ExecuteScriptAsync(
-                            SiteImportExtractors.CoachlessInspectScript).ConfigureAwait(true);
-                        if (_disposed) return WalkFailure("the window closed during the import");
-                        sequence = SiteImportSequencer.Transition(
-                            sequence, CoachlessStepResponse.Parse(raw));
-                        break;
-                    }
-                }
-            }
-        }
-        catch (Exception error)
-        {
-            return WalkFailure(error.Message);
-        }
-    }
-
-    /// <summary>
-    /// Shapes a walk failure as the extractor's own <c>error</c> envelope so
-    /// the service reports it through the normal typed-failure path (quiet
-    /// log plus status-line note, never a dialog).
-    /// </summary>
-    private static string WalkFailure(string reason) =>
-        System.Text.Json.JsonSerializer.Serialize(
-            new { error = string.IsNullOrWhiteSpace(reason) ? "the import failed" : reason.Trim() });
-
-    /// <summary>
-    /// Attaches the automatic item import to this window. The window is the
+    /// Attaches automatic item and rune imports to this window. The window is the
     /// executor (the only place that may touch a WebView);
-    /// <paramref name="items"/> is the bridge's item-set service (items-only
-    /// writes, so the runes button's rune pages are never in reach) and
-    /// <paramref name="logInfo"/> is the tray log sink. Null until attached;
-    /// the runes button works without it. Call on the dispatcher.
+    /// <paramref name="items"/> is the bridge's item-set service and
+    /// <paramref name="logInfo"/> is the tray log sink. Call on the dispatcher.
     /// </summary>
     public void AttachAutoImport(
         ItemSetApplyService items,
@@ -1530,7 +1305,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     /// <summary>
     /// The game-start teardown (2.1.2). The old shape closed the window
     /// synchronously, and the teardown's disposed flag aborted the
-    /// in-flight Coachless walk mid-run ("the window closed during the
+    /// in-flight Coachless read mid-run ("the window closed during the
     /// import") — taking the u.gg set the run had ALREADY extracted with
     /// it, before the per-site flush existed to have saved it.
     ///
@@ -1552,7 +1327,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             return;
         }
         if (_disposed || _browserDisposed) return;
-        if (!IsAutoImportRunning && !_importRunning)
+        if (!IsAutoImportRunning)
         {
             Close();
             return;
@@ -1573,9 +1348,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     private bool IsAutoImportRunning => _autoImport?.IsRunning == true;
 
     /// <summary>
-    /// Closes the lingering window once nothing it waited for is still
-    /// running. Reached from the worker-release continuation (the flight is
-    /// done) and from the manual runes press (the click is done).
+    /// Closes the lingering window once the automatic import is done.
     /// </summary>
     private void CloseIfLingeringAndIdle()
     {
@@ -1586,7 +1359,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             return;
         }
         if (!_gameStartLinger || _disposed) return;
-        if (IsAutoImportRunning || _importRunning) return;
+        if (IsAutoImportRunning) return;
         Close();
     }
 
@@ -1686,9 +1459,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (core is null) return null;
         await DismissConsentAsync(core, site, cancellationToken).ConfigureAwait(true);
         if (_disposed) return null;
-        if (site == CompanionTab.Coachless)
-            return await RunCoachlessWalkAsync(core, cancellationToken).ConfigureAwait(true);
-        return await core.ExecuteScriptAsync(SiteImportExtractors.UGgScript).ConfigureAwait(true);
+        return await core.ExecuteScriptAsync(
+            site == CompanionTab.Coachless
+                ? SiteImportExtractors.CoachlessItemsScript
+                : SiteImportExtractors.UGgScript).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -1703,7 +1477,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     /// import, and logs the fact.
     ///
     /// <para>This is the ONE click the import makes outside the Coachless
-    /// slot walk, and it is inside the same user-sanctioned interaction: the
+    /// slot read, and it is inside the same user-sanctioned interaction: the
     /// user asked for the build, and the wall is what stands between the
     /// worker and the page they asked about (field log 2026-09-08 17:48:15,
     /// "Coachless extraction failed (no build on page)"). It clicks only the
@@ -1803,7 +1577,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     /// The executor's Coachless RUNES fetch: navigate a worker to the
     /// per-slot WPA runes page and read the full page off it.
     ///
-    /// <para>Separate from the item walk because it is a separate PAGE. The
+    /// <para>Separate from the item read because it is a separate PAGE. The
     /// builds overview ranks keystones only, so before 2.1.0 a Coachless
     /// import was honestly items-only ("no rune page on this site"). Same
     /// worker rules as every other automated navigation: allowlisted URL,
@@ -1938,9 +1712,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (_disposed) return null;
         await DismissConsentAsync(core, site, cancellationToken).ConfigureAwait(true);
         if (_disposed) return null;
-        if (site == CompanionTab.Coachless)
-            return await RunCoachlessWalkAsync(core, cancellationToken).ConfigureAwait(true);
-        return await core.ExecuteScriptAsync(SiteImportExtractors.UGgScript).ConfigureAwait(true);
+        return await core.ExecuteScriptAsync(
+            site == CompanionTab.Coachless
+                ? SiteImportExtractors.CoachlessItemsScript
+                : SiteImportExtractors.UGgScript).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -2062,6 +1837,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         worker.Core.NewWindowRequested += (_, args) => args.Handled = true;
         worker.Core.LaunchingExternalUriScheme += (_, args) => args.Cancel = true;
         worker.Core.PermissionRequested += (_, args) => args.State = CoreWebView2PermissionState.Deny;
+        ConfigureAdBlocking(worker.Core);
         worker.Core.NavigationStarting += (_, args) =>
         {
             if (!SiteNavigationPolicy.IsAllowed(args.Uri)) args.Cancel = true;
@@ -2263,27 +2039,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         }
     }
 
-    private async Task OpenSiteOfferAsync(CompanionTab tab)
-    {
-        if (_champSelectContext is not { } context) return;
-        var site = CompanionTabs.SiteFor(tab);
-        if (site is null || context.UrlFor(site) is not { } url) return;
-
-        if (!await SelectTabCoreAsync(
-                tab,
-                remember: true,
-                navigateWhenEmpty: false,
-                _shutdownToken).ConfigureAwait(true))
-            return;
-
-        var state = GetState(tab);
-        if (state?.Core is null) return;
-        if (!SiteNavigationPolicy.IsAlreadyThere(state.Core.Source, url))
-            Navigate(state, url);
-        else
-            SetStatus($"{site.Label} is already showing this champion and role.");
-    }
-
     private CancellationToken _shutdownToken => CancellationToken.None;
 
     private void RememberLastTab(CompanionTab tab)
@@ -2391,7 +2146,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         SetTabVisual(UggTabButton, CompanionTab.UGg);
         SetTabVisual(CoachlessTabButton, CompanionTab.Coachless);
         SetTabVisual(OpGgTabButton, CompanionTab.OpGg);
-        UpdateOfferBar();
     }
 
     private void SetTabVisual(System.Windows.Controls.Button button, CompanionTab tab)
@@ -2403,126 +2157,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         button.Background = active ? (System.Windows.Media.Brush)FindResource("ChromeRaisedBrush") : transparent;
         button.BorderBrush = active ? (System.Windows.Media.Brush)FindResource("GoldBrush") : transparent;
         button.Foreground = active ? (System.Windows.Media.Brush)FindResource("TextBrush") : (System.Windows.Media.Brush)FindResource("MutedTextBrush");
-    }
-
-    private void UpdateOfferBar()
-    {
-        if (!Dispatcher.CheckAccess()) return;
-        var context = _champSelectContext;
-        var showOffer = ShouldShowOfferBar(ActiveTab, context);
-        // The runes button works outside champ select too (a rune page
-        // persists), so the bar also shows for a bare u.gg build page --
-        // with the chips hidden and only the runes button working. Item
-        // sets arrive via the automatic import, never this button.
-        var runesUrl = ShouldShowRunesImport(ActiveTab, GetState(ActiveTab)?.Core?.Source);
-        OfferBar.Visibility = showOffer || runesUrl ? Visibility.Visible : Visibility.Collapsed;
-        if (OfferBar.Visibility != Visibility.Visible) return;
-
-        ChampChipsPanel.Visibility = showOffer && context is not null
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        if (showOffer && context is not null)
-        {
-            var role = SiteDeepLink.RoleLabel(context.RoleId);
-            OfferHintText.Text = context.Locked
-                ? $"{context.ChampionName}{(role is null ? string.Empty : $" · {role}")} locked"
-                : $"{context.ChampionName}{(role is null ? string.Empty : $" · {role}")} hovered";
-            UggOfferButton.Content = "Open u.gg";
-            CoachlessOfferButton.Content = "Open Coachless";
-
-            var uggOffer = context.UrlFor(CompanionTabs.UGg);
-            var coachlessOffer = context.UrlFor(CompanionTabs.Coachless);
-            UggOfferButton.IsEnabled = uggOffer is not null
-                && !SiteNavigationPolicy.IsAlreadyThere(
-                    GetState(CompanionTab.UGg)?.Core?.Source,
-                    uggOffer);
-            CoachlessOfferButton.IsEnabled = coachlessOffer is not null
-                && !SiteNavigationPolicy.IsAlreadyThere(
-                    GetState(CompanionTab.Coachless)?.Core?.Source,
-                    coachlessOffer);
-        }
-        else
-        {
-            OfferHintText.Text = "Import reads this page's runes";
-        }
-
-        var button = RunesButtonFor(
-            ActiveTab,
-            GetState(ActiveTab)?.Core?.Source,
-            _siteImport is not null,
-            _importRunning,
-            _lcuConnected);
-        ImportRunesButton.Visibility = button.Visible ? Visibility.Visible : Visibility.Collapsed;
-        ImportRunesButton.IsEnabled = button.Enabled;
-        ImportRunesButton.ToolTip = button.Tooltip;
-        OfferCaptionText.Text = showOffer ? "Click a site to open" : "Import writes to the client";
-    }
-
-    /// <summary>The runes button's chrome state: visibility, enablement, and the reason in the tooltip.</summary>
-    internal sealed record RunesButtonState(bool Visible, bool Enabled, string Tooltip);
-
-    /// <summary>
-    /// Pure runes-button state. Visible on a u.gg build page and, since 2.1.1,
-    /// on a Coachless build or runes page (hidden on Companion, which is never
-    /// scraped); enabled only while the client is connected. The tooltip always
-    /// says WHY the button will not run, not merely refuse.
-    /// </summary>
-    internal static RunesButtonState RunesButtonFor(
-        CompanionTab activeTab,
-        string? currentUrl,
-        bool hasHost,
-        bool importRunning,
-        bool lcuConnected)
-    {
-        if (!ShouldShowRunesImport(activeTab, currentUrl))
-            return new(false, false, "Open a u.gg or Coachless champion page to import its runes.");
-        if (!hasHost)
-            return new(true, false, "Import is unavailable in this window.");
-        if (importRunning)
-            return new(true, false, "Import already running…");
-        if (!lcuConnected)
-            return new(true, false, "Open the League client to import these runes.");
-        return new(true, true, "Read this page's rune build into the League client.");
-    }
-
-    /// <summary>
-    /// The runes button's visibility: the u.gg tab on a build-page URL, or the
-    /// Coachless tab on a page a runes import can be aimed from. Pure, so the
-    /// button state and the import share ONE definition of "a page with runes
-    /// on it" — u.gg through
-    /// <see cref="SiteImportExtractors.CanImportFromUrl"/>, Coachless through
-    /// <see cref="SiteDeepLink.CoachlessRunesUrlForPage"/>, which is also the
-    /// call that produces the URL the click then imports. A visible button
-    /// therefore always has a target. Hidden on Companion (never scraped).
-    ///
-    /// <para>2.1.1 adds the Coachless arm. It was u.gg-only because when the
-    /// button was built Coachless had no rune source: the builds overview
-    /// ranks keystones and nothing else. The per-slot WPA runes page and the
-    /// settle probe that reads it landed in 2.1.0 round 2 and are live-proven
-    /// (<c>CoachBuild import: Nasus (Coachless)</c>), so the reason for the
-    /// asymmetry is gone and the button follows.</para>
-    /// </summary>
-    internal static bool ShouldShowRunesImport(CompanionTab activeTab, string? currentUrl) => activeTab switch
-    {
-        CompanionTab.UGg => SiteImportExtractors.CanImportFromUrl(activeTab, currentUrl),
-        CompanionTab.Coachless => SiteDeepLink.CoachlessRunesUrlForPage(currentUrl) is not null,
-        _ => false,
-    };
-
-    /// <summary>
-    /// The champ-select row belongs to the research tabs. Keeping it collapsed
-    /// on Companion prevents an automatic draft open from adding a second call
-    /// to action above the hosted app, while still preserving the context for
-    /// the site tab the user chooses.
-    /// </summary>
-    internal static bool ShouldShowOfferBar(
-        CompanionTab activeTab,
-        ChampSelectContext? context)
-    {
-        return activeTab != CompanionTab.Companion
-            && context is not null
-            && context.UrlFor(CompanionTabs.UGg) is not null
-            && context.UrlFor(CompanionTabs.Coachless) is not null;
     }
 
     /// <summary>

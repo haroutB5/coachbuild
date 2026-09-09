@@ -17,6 +17,51 @@ namespace CoachBuild.Desktop.Tests;
 /// </summary>
 public sealed class SiteTabLifecycleTests
 {
+    [Theory]
+    [InlineData("https://securepubads.g.doubleclick.net/gampad/ads")]
+    [InlineData("https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js")]
+    [InlineData("https://adservice.google.co.uk/adsid/integrator.js")]
+    [InlineData("https://ib.adnxs.com/ut/v3/prebid")]
+    [InlineData("https://c.amazon-adsystem.com/aax2/apstag.js")]
+    [InlineData("https://static.criteo.net/js/ld/publishertag.js")]
+    [InlineData("https://cdn.taboola.com/libtrc/u.gg/loader.js")]
+    [InlineData("https://widgets.outbrain.com/outbrain.js")]
+    [InlineData("https://ads.pubmatic.com/AdServer/js/pwt/123.js")]
+    [InlineData("https://fastlane.rubiconproject.com/a/api/fastlane.json")]
+    [InlineData("https://u.openx.net/w/1.0/pd")]
+    [InlineData("https://htlb.indexexchange.com/cygnus")]
+    [InlineData("https://prebid-server.magnite.com/openrtb2/auction")]
+    [InlineData("https://contextual.media.net/dmedianet.js")]
+    public void Known_adtech_hosts_are_blocked(string url)
+    {
+        Assert.True(SiteAdBlockingPolicy.TryGetBlockedDomain(url, out var domain));
+        Assert.False(string.IsNullOrWhiteSpace(domain));
+    }
+
+    [Theory]
+    [InlineData("https://u.gg/lol/champions/jhin/build")]
+    [InlineData("https://cdn.u.gg/assets/app.js")]
+    [InlineData("https://coachless.gg/builds/jhin")]
+    [InlineData("https://api.coachless.gg/builds/jhin")]
+    [InlineData("https://op.gg/lol/champions/jhin/build")]
+    [InlineData("https://static.op.gg/app.js")]
+    [InlineData("https://cmp.quantcast.com/qc-cmp2-container.js")]
+    [InlineData("https://fundingchoicesmessages.google.com/i/ca-pub-1")]
+    [InlineData("not-a-url")]
+    public void First_party_consent_and_invalid_hosts_are_never_blocked(string url)
+    {
+        Assert.False(SiteAdBlockingPolicy.TryGetBlockedDomain(url, out _));
+    }
+
+    [Fact]
+    public void The_adtech_list_is_one_explicit_maintained_constant()
+    {
+        Assert.Equal(15, SiteAdBlockingPolicy.BlockedDomainPatterns.Count);
+        Assert.Contains("adservice.google.*", SiteAdBlockingPolicy.BlockedDomainPatterns);
+        Assert.DoesNotContain(SiteAdBlockingPolicy.BlockedDomainPatterns,
+            pattern => pattern.Contains("consent", StringComparison.OrdinalIgnoreCase));
+    }
+
     // ── The Coachless runes deep link ────────────────────────────────────────
 
     [Theory]

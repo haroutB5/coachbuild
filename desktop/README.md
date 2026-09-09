@@ -27,38 +27,31 @@ PowerShell companion while the staged native rollout proves parity.
 - **Overlay:** transparent, borderless, topmost, non-focusable and click-through
   by default. It becomes keyboard-interactive only for calibration/adjustment.
   Calibration is stored by monitor resolution and DPI.
-- **WebView2:** one owned window with four tabs — Companion, u.gg, Coachless,
-  op.gg (1.3.1). The Companion tab navigates between `/draft` and canonical Builds
-  URLs and is same-origin only; it is the only tab carrying the session token
-  and the only one whose document is ever scripted unprompted (the version meta
-  tag). Site tabs are **read-mostly** with two sanctioned exceptions: the gold
-  **Import runes** button in the offer bar reads the rune build off the u.gg
-  build page you are viewing (u.gg only — Coachless renders no rune page, so
-  the button is hidden there), validates it against the local perk/shard
-  catalogs, and writes a rune page via the existing LCU service — once per
-  click, only on a build-page URL while the client is connected; and the
-  **automatic item import** (1.3.0) fetches both sites' item sets in the
-  background on champ-select lock (once per champion+role, plus a re-fetch
-  when the visible build page's URL changes) and writes them in one merged
-  call under per-site `CoachBuild import: {Champ} {Role} (u.gg)` /
-  `(Coachless)` titles so both sets coexist. Background fetches reuse a
-  background site tab or a hidden worker webview — never the visible tab,
-  never a tab switch, never a focus steal — and navigate only to the exact
-  deep-link URLs the app builds for the locked champion+role. Runes never
-  flow through the automatic path, items never flow through the button.
-  op.gg is profile-only: it never appears in the champ-select offer row or
-  automatic import. On first/home navigation it resolves current-summoner's
-  Riot ID plus LoginDataPacket's platform id and opens
-  `https://op.gg/summoners/{region}/{name}-{tag}`; if League is unavailable or
-  identity/region is incomplete it opens op.gg home. Site tabs are restricted
-  to https. Each tab's WebView2 is created on
-  first visit and gets its own profile directory under `WebView2/`, so cookies
-  and site preferences persist without sharing storage with the hosted app.
-  A native host remains hidden until its browser is ready, and callbacks arriving
-  after close are ignored, so app-owned loading/error states remain usable.
-  Missing runtime state stays in an app-owned fallback and never opens the
-  default browser; a failed page load is a separate state that names the site
-  and offers a retry.
+- **WebView2:** one owned window with four tabs — Draft, u.gg, Coachless and
+  op.gg. Draft is same-origin only, carries the session token, and hosts the
+  shipped local page. The public site tabs are **read-mostly**. Automatic import
+  fetches u.gg and Coachless on champ-select lock and on a visible build-page
+  change. u.gg contributes its embedded items and runes; Coachless items are a
+  single read of the initial top-WPA row for Starter, 1st, 2nd, 3rd, 4th+ and
+  Boots, while its full rune build comes from its separate runes page. On a
+  roleless lock, u.gg's discovered active role is used for the Coachless target
+  so the sites cannot silently choose different lanes.
+
+  Item sets keep their per-site `CoachBuild import: {Champ} {Role} (u.gg)` /
+  `(Coachless)` titles. Rune pages are automatic and named `u.gg {Champ}` /
+  `Coachless {Champ}`, with `(Role)` only when champ select assigned one. There
+  is no offer bar or Import runes button. u.gg gets priority when only one
+  editable/reusable rune-page slot exists; non-CoachBuild pages are untouched.
+  Background fetches reuse a background site tab or hidden worker — never the
+  visible tab, a tab switch, or focus — and navigate only to app-built links.
+
+  op.gg remains profile-only and resolves the current summoner's profile when
+  League identity is available. All public tabs are HTTPS-only and keep separate
+  persistent profiles. u.gg, Coachless, op.gg and import workers reject a narrow
+  maintained adtech-domain list at request time; Draft, first-party/CDN hosts and
+  consent-management traffic are never filtered. Browsers are created lazily,
+  and app-owned loading/error states remain available if creation or navigation
+  fails.
 - **Updates:** Velopack checks/downloads in the background, defers application
   while the companion is busy, then applies and relaunches when the gate clears.
   The 2-hour loop is the fallback: game end, companion window close, and resume

@@ -2,6 +2,12 @@ using System.Text.Json;
 
 namespace CoachBuild.Core;
 
+public sealed record AutoRunePageWrite(string Name, ApplyRunesResult Result, int? PageId = null);
+
+public sealed record AutoRunePagesResult(
+    IReadOnlyList<AutoRunePageWrite> Pages,
+    bool OnlyOneEditableSlot);
+
 public sealed class RuneApplyService
 {
     private readonly ILcuApi _lcu;
@@ -24,15 +30,16 @@ public sealed class RuneApplyService
     public RuneOwnershipLedger Ledger => _ledger;
 
     /// <summary>
-    /// The title prefix that marks a rune page as ours. The one place it is
-    /// spelled — the same literal <see cref="ItemSetMergeService"/> uses to
-    /// decide which item sets are ours, so the two halves of an import can
-    /// never disagree about what "a CoachBuild page" is.
+    /// The legacy title prefix retained as owned for reuse and migration.
+    /// New automatic pages use the two source prefixes below; item sets still
+    /// use this CoachBuild prefix.
     /// </summary>
     public const string OwnedPagePrefix = "CoachBuild";
+    public const string UGgOwnedPagePrefix = "u.gg ";
+    public const string CoachlessOwnedPagePrefix = "Coachless ";
 
     /// <summary>
-    /// How many <see cref="OwnedPagePrefix"/> rune pages may survive a write,
+    /// How many app-owned rune pages may survive a write,
     /// counting the one just written. The one place this number lives.
     ///
     /// <para>WHY IT EXISTS. Field evidence 2026-09-08: the item-set write
@@ -48,6 +55,16 @@ public sealed class RuneApplyService
     /// and a dodge does not cost the page you came from.</para>
     /// </summary>
     public const int MaxOwnedPages = 2;
+
+    /// <summary>
+    /// True only for rune pages the app owns: the two 2.2.0 source prefixes
+    /// and the legacy CoachBuild prefix retained for migration/reuse.
+    /// </summary>
+    public static bool IsOwnedPageName(string? name) =>
+        !string.IsNullOrEmpty(name) &&
+        (name.StartsWith(UGgOwnedPagePrefix, StringComparison.Ordinal) ||
+         name.StartsWith(CoachlessOwnedPagePrefix, StringComparison.Ordinal) ||
+         name.StartsWith(OwnedPagePrefix, StringComparison.Ordinal));
 
     public async Task<ApplyRunesResult> ApplyAsync(
         ApplyRunesRequest? request,
@@ -208,7 +225,175 @@ public sealed class RuneApplyService
         _log?.Info("apply-runes: rejected slots-full");
         return new ApplyRunesFailure(
             "slots-full",
-            "all rune pages are yours -- click Apply runes to replace the current one");
+            "all rune pages are yours -- delete one of your rune pages and retry");
+    }
+
+    /// <summary>
+    /// Writes the automatic u.gg and Coachless pages as one capacity-aware
+    /// operation. Requests are priority ordered (u.gg first). Exact names are
+    /// reused first, then any owned page, then a free editable slot. A foreign
+    /// page is never edited or deleted. Neither page becomes current unless an
+    /// owned page was current before the operation; in that case the first
+    /// successfully written page (u.gg) becomes current.
+    /// </summary>
+    public async Task<AutoRunePagesResult> ApplyOwnedPagesAsync(
+        IReadOnlyList<ApplyRunesRequest>? requests,
+        CancellationToken cancellationToken = default)
+    {
+        if (requests is null || requests.Count == 0)
+            return new AutoRunePagesResult([], false);
+
+        var desired = requests.Take(MaxOwnedPages).ToArray();
+        var invalid = desired
+            .Select(request => ApplyPayloadValidation.TryValidateRunes(request, out var failure) ? null : failure)
+            .ToArray();
+        if (invalid.Any(failure => failure is not null))
+        {
+            return new AutoRunePagesResult(
+                desired.Select((request, index) => new AutoRunePageWrite(
+                    request.Name ?? string.Empty,
+                    invalid[index] ?? new ApplyRunesFailure("bad-batch", "another automatic rune page was invalid")))
+                    .ToArray(),
+                false);
+        }
+
+        using var write = _state?.BeginLcuWrite();
+        var pagesResponse = await _lcu.SendAsync(
+            HttpMethod.Get,
+            "/lol-perks/v1/pages",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (!pagesResponse.Ok)
+        {
+            return FailedBatch(desired, "read-failed", "could not read existing rune pages -- nothing was changed");
+        }
+
+        var editable = ReadPages(pagesResponse.Content);
+        var currentResponse = await _lcu.SendAsync(
+            HttpMethod.Get,
+            "/lol-perks/v1/currentpage",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var currentWasOwned = CurrentWasOwned(currentResponse, editable);
+
+        var owned = editable
+            .Where(page => page.IsDeletable && IsOwnedPageName(page.Name))
+            .OrderBy(page => page.Id)
+            .ToList();
+        var inventory = await _lcu.SendAsync(
+            HttpMethod.Get,
+            "/lol-perks/v1/inventory",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var freeSlots = ReadEditableCapacity(inventory) is { } capacity
+            ? Math.Max(0, capacity - editable.Count)
+            : 0;
+        var writableCount = Math.Min(desired.Length, owned.Count + freeSlots);
+        var onlyOne = desired.Length > 1 && writableCount == 1;
+
+        var targets = new LcuPage?[writableCount];
+        var assigned = new HashSet<int>();
+        // Reserve exact names before consuming general owned pages.
+        for (var index = 0; index < writableCount; index++)
+        {
+            var exact = owned.FirstOrDefault(page =>
+                !assigned.Contains(page.Id) &&
+                string.Equals(page.Name, desired[index].Name, StringComparison.Ordinal));
+            if (exact is null) continue;
+            targets[index] = exact;
+            assigned.Add(exact.Id);
+        }
+        for (var index = 0; index < writableCount; index++)
+        {
+            if (targets[index] is not null) continue;
+            var family = PageFamily(desired[index].Name);
+            var reusable = owned.FirstOrDefault(page =>
+                    !assigned.Contains(page.Id) &&
+                    string.Equals(PageFamily(page.Name), family, StringComparison.Ordinal))
+                ?? owned.FirstOrDefault(page => !assigned.Contains(page.Id));
+            if (reusable is null) continue;
+            targets[index] = reusable;
+            assigned.Add(reusable.Id);
+        }
+
+        var results = new List<AutoRunePageWrite>(desired.Length);
+        var successfulIds = new List<int>();
+        for (var index = 0; index < desired.Length; index++)
+        {
+            var request = desired[index];
+            if (index >= writableCount)
+            {
+                results.Add(new AutoRunePageWrite(
+                    request.Name!,
+                    new ApplyRunesFailure("slots-full", "no editable CoachBuild rune-page slot was available")));
+                continue;
+            }
+
+            var target = targets[index];
+            var fingerprint = Fingerprint(
+                request.PrimaryStyleId,
+                request.SubStyleId,
+                request.SelectedPerkIds!);
+            if (target is not null)
+            {
+                var unchanged = string.Equals(target.Name, request.Name, StringComparison.Ordinal) &&
+                    Fingerprint(target.PrimaryStyleId, target.SubStyleId, target.SelectedPerkIds) == fingerprint;
+                if (!unchanged)
+                {
+                    var edited = await _lcu.SendAsync(
+                        HttpMethod.Put,
+                        $"/lol-perks/v1/pages/{target.Id}",
+                        CreatePageBody(target.Id, request, current: false),
+                        cancellationToken).ConfigureAwait(false);
+                    if (!edited.Ok)
+                    {
+                        results.Add(new AutoRunePageWrite(
+                            request.Name!,
+                            new ApplyRunesFailure("edit-failed", LcuFailureHint(edited.StatusCode, "rune page edit"))));
+                        continue;
+                    }
+                }
+                _ledger.Record(request.Name!, fingerprint);
+                successfulIds.Add(target.Id);
+                results.Add(new AutoRunePageWrite(
+                    request.Name!,
+                    new ApplyRunesSuccess(false, true, [], unchanged),
+                    target.Id));
+                continue;
+            }
+
+            var created = await _lcu.SendAsync(
+                HttpMethod.Post,
+                "/lol-perks/v1/pages",
+                CreatePageBody(null, request, current: false),
+                cancellationToken).ConfigureAwait(false);
+            if (!created.Ok || !TryReadId(created.Content, out var createdId))
+            {
+                results.Add(new AutoRunePageWrite(
+                    request.Name!,
+                    new ApplyRunesFailure("create-failed", LcuFailureHint(created.StatusCode, "new rune page"))));
+                continue;
+            }
+            _ledger.Record(request.Name!, fingerprint);
+            successfulIds.Add(createdId);
+            results.Add(new AutoRunePageWrite(
+                request.Name!,
+                new ApplyRunesSuccess(false, true, []),
+                createdId));
+        }
+
+        var firstPage = results.FirstOrDefault();
+        if (currentWasOwned && firstPage?.PageId is int uggId &&
+            firstPage.Name.StartsWith(UGgOwnedPagePrefix, StringComparison.Ordinal))
+        {
+            var selected = await _lcu.SendAsync(
+                HttpMethod.Put,
+                "/lol-perks/v1/currentpage",
+                uggId,
+                cancellationToken).ConfigureAwait(false);
+            if (selected.Ok && results[0].Result is ApplyRunesSuccess first)
+                results[0] = results[0] with { Result = first with { Selected = true } };
+        }
+
+        await PruneOwnedPagesExceptAsync(successfulIds, cancellationToken).ConfigureAwait(false);
+        return new AutoRunePagesResult(results, onlyOne);
     }
 
     /// <summary>
@@ -218,8 +403,8 @@ public sealed class RuneApplyService
     /// <para>Pure, so the rule is testable without a client. The rules, each of
     /// which is a refusal:</para>
     /// <list type="bullet">
-    ///   <item>A page whose title does not start with
-    ///   <see cref="OwnedPagePrefix"/> is the USER'S and is never returned,
+    ///   <item>A page whose title does not match <see cref="IsOwnedPageName"/>
+    ///   is the USER'S and is never returned,
     ///   whatever the cap says. Title-less pages are the user's too.</item>
     ///   <item>An undeletable page is never returned (the client owns those).</item>
     ///   <item><paramref name="keepId"/> — the page just written — is never
@@ -238,7 +423,7 @@ public sealed class RuneApplyService
                 page.Id != keepId &&
                 page.IsDeletable &&
                 page.Name is not null &&
-                page.Name.StartsWith(OwnedPagePrefix, StringComparison.Ordinal))
+                IsOwnedPageName(page.Name))
             .OrderByDescending(page => page.Id)
             .ToArray();
         // The written page occupies one slot of the cap, so the survivors
@@ -348,7 +533,82 @@ public sealed class RuneApplyService
         }
     }
 
-    private static object CreatePageBody(int? id, ApplyRunesRequest request)
+    private async Task PruneOwnedPagesExceptAsync(
+        IReadOnlyCollection<int> keepIds,
+        CancellationToken cancellationToken)
+    {
+        if (keepIds.Count == 0) return;
+        try
+        {
+            var pagesResponse = await _lcu.SendAsync(
+                HttpMethod.Get,
+                "/lol-perks/v1/pages",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (!pagesResponse.Ok) return;
+            var keep = keepIds.ToHashSet();
+            var doomed = ReadPages(pagesResponse.Content)
+                .Where(page => page.IsDeletable && IsOwnedPageName(page.Name) && !keep.Contains(page.Id))
+                .Select(page => page.Id)
+                .ToArray();
+            var removed = 0;
+            foreach (var id in doomed)
+            {
+                try
+                {
+                    var response = await _lcu.SendAsync(
+                        HttpMethod.Delete,
+                        $"/lol-perks/v1/pages/{id}",
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                    if (response.Ok) removed++;
+                }
+                catch
+                {
+                }
+            }
+            if (removed > 0)
+                _log?.Info($"apply-runes: pruned {removed} superseded CoachBuild rune page(s), keeping {keep.Count}");
+        }
+        catch
+        {
+            // Both requested writes already completed. Cleanup is fail-soft.
+        }
+    }
+
+    private static AutoRunePagesResult FailedBatch(
+        IReadOnlyList<ApplyRunesRequest> requests,
+        string reason,
+        string hint) =>
+        new(requests.Select(request => new AutoRunePageWrite(
+            request.Name ?? string.Empty,
+            new ApplyRunesFailure(reason, hint))).ToArray(), false);
+
+    private static bool CurrentWasOwned(LcuResponse response, IReadOnlyList<LcuPage> pages)
+    {
+        if (!response.Ok || response.Content is not { } current) return false;
+        if (current.ValueKind == JsonValueKind.Object && IsOwnedPageName(ReadString(current, "name")))
+            return true;
+        return TryReadId(current, out var currentId) &&
+            pages.Any(page => page.Id == currentId && IsOwnedPageName(page.Name));
+    }
+
+    private static int? ReadEditableCapacity(LcuResponse response)
+    {
+        if (!response.Ok || response.Content is not { } inventory ||
+            inventory.ValueKind != JsonValueKind.Object ||
+            !inventory.TryGetProperty("ownedPageCount", out var count) ||
+            !count.TryGetInt32(out var capacity) || capacity <= 0)
+            return null;
+        return capacity;
+    }
+
+    private static string PageFamily(string? name)
+    {
+        if (name?.StartsWith(UGgOwnedPagePrefix, StringComparison.Ordinal) == true) return UGgOwnedPagePrefix;
+        if (name?.StartsWith(CoachlessOwnedPagePrefix, StringComparison.Ordinal) == true) return CoachlessOwnedPagePrefix;
+        return OwnedPagePrefix;
+    }
+
+    private static object CreatePageBody(int? id, ApplyRunesRequest request, bool current = true)
     {
         if (id is null)
             return new
@@ -357,7 +617,7 @@ public sealed class RuneApplyService
                 primaryStyleId = request.PrimaryStyleId,
                 subStyleId = request.SubStyleId,
                 selectedPerkIds = request.SelectedPerkIds,
-                current = true
+                current
             };
         return new
         {
@@ -366,7 +626,7 @@ public sealed class RuneApplyService
             primaryStyleId = request.PrimaryStyleId,
             subStyleId = request.SubStyleId,
             selectedPerkIds = request.SelectedPerkIds,
-            current = true
+            current
         };
     }
 

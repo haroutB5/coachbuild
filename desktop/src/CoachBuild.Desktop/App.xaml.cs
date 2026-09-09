@@ -100,15 +100,15 @@ public sealed record DesktopPhaseSnapshot(
     string? Error = null,
     OverlayState? Overlay = null,
     /// <summary>
-    /// Who champ select says the player is on, projected for the site tabs'
-    /// offer bar. Null outside champ select, and null inside it until the
-    /// champion roster has been fetched — the offer needs a NAME and a ddragon
+    /// Who champ select says the player is on, projected for automatic site
+    /// imports. Null outside champ select, and null inside it until the
+    /// champion roster has been fetched — imports need a NAME and a ddragon
     /// KEY, and a numeric id alone can build neither a label nor a slug.
     /// </summary>
     ChampSelectContext? ChampSelect = null,
     /// <summary>
     /// Whether the League client is currently connected (credentials present).
-    /// The site tabs' import button needs it for enablement; it rides the
+    /// Automatic imports need it before any write; it rides the
     /// existing 750 ms push rather than a new poll.
     /// </summary>
     bool LcuConnected = false);
@@ -549,17 +549,10 @@ public partial class App : WpfApplication
         _tray?.UpdateState(_trayState);
         SetUpdateBusy(effectiveBusy);
 
-        // The site tabs' champ-select offer, refreshed on the same 750 ms
-        // projection as everything else. It is a LABEL AND A LINK and nothing
-        // else: the window's UpdateChampSelectContext only redraws the offer
-        // row and cannot navigate, so no tick of this loop can move a page the
-        // user is reading. Null (no champ select, or a roster that has not
-        // loaded) clears the row rather than leaving a stale champion on it.
-        _webView?.UpdateChampSelectContext(snapshot.ChampSelect);
-        // The import button's LCU half, on the same tick. Like the context
-        // above this only redraws chrome; it never touches a page.
+        // The connection edge lets an already-open MyStats tab retry its
+        // account-specific op.gg destination once LCU becomes available.
         _webView?.UpdateSiteImportAvailability(snapshot.LcuConnected);
-        // The automatic item import's trigger, on the same tick. This only
+        // The automatic item+runes import trigger, on the same tick. This only
         // OFFERS the snapshot to the window's auto-import service (which
         // debounces, single-flights, and fetches through background/hidden
         // webviews without moving the user's tab); the 750 ms cadence is the
@@ -1095,7 +1088,6 @@ public partial class App : WpfApplication
                     OnWebViewRepairCompleted,
                     preferenceStore?.Read(),
                     preferenceStore is null ? null : preferenceStore.Save,
-                    coreServices?.CreateSiteImportHost(),
                     coreServices is null
                         ? null
                         : new Func<CancellationToken, Task<Uri?>>(coreServices.ResolveOpGgProfileAsync));
@@ -1542,15 +1534,6 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     public CompanionState State => _state;
 
     /// <summary>
-    /// The user-initiated site-import runner for the companion window: the
-    /// bridge's two LCU apply services plus the roster this host already
-    /// owns. Null when there is no host to build one from is handled by the
-    /// caller (the window disables its import button without one).
-    /// </summary>
-    public ISiteImportHost CreateSiteImportHost() =>
-        new SiteImportHost(_bridge.RuneApplyService, _bridge.ItemSetApplyService, _champions, _state);
-
-    /// <summary>
     /// Resolves the account-specific op.gg destination through the bridge-owned
     /// LCU client. Null is intentional: the window opens op.gg home whenever
     /// League is closed or either identity field is unavailable.
@@ -1564,12 +1547,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     public ItemSetApplyService AutoImportItemSets => _bridge.ItemSetApplyService;
 
     /// <summary>
-    /// The bridge's rune service for the automatic import's Coachless RUNES
-    /// leg (2.1.0). Until 2.1.0 the auto path wrote item sets only and the
-    /// runes button owned every rune page; Coachless's per-slot WPA runes
-    /// page changed that, so the auto path now also writes a full rune page
-    /// when it can read a complete one. Same service, same 0.127.0 validator,
-    /// same exact-title reuse as the button.
+    /// The bridge's rune service for the automatic u.gg and Coachless rune
+    /// pages. Both use the same validated, capacity-aware owned-page writer.
     /// </summary>
     public RuneApplyService AutoImportRunes => _bridge.RuneApplyService;
 
@@ -1702,23 +1681,21 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     }
 
     /// <summary>
-    /// Projects the champ-select snapshot into the offer the site tabs render.
+    /// Projects the champ-select snapshot into the automatic-import context.
     ///
     /// <para><c>CompanionState.ToStatus</c> already returns null here for every
-    /// phase but ChampSelect, so the offer bar cannot survive into the game
-    /// without a second rule saying so.</para>
+    /// phase but ChampSelect, so stale picks cannot trigger imports in game.</para>
     ///
     /// <para><b>Locked and hovered are both offered, and the difference is
     /// carried rather than flattened.</b> <c>cellChampionId</c> is the locked
     /// pick; <c>championPickIntent</c> is the hover. A hover is exactly when a
-    /// player wants to read a champion's page — flattening the two would make
-    /// the chip claim a pick that has not happened, and dropping the hover
-    /// would withhold the offer at the only moment it changes a decision.</para>
+    /// player wants to read a champion's page — flattening the two would claim
+    /// a pick that has not happened, and dropping the hover would withhold the
+    /// page-change trigger at the only moment it changes a decision.</para>
     ///
     /// <para>Returns null when the roster has not loaded. That is deliberate:
-    /// the link slug and the button label both come from the roster entry, and
-    /// an offer built from a bare id would either read "Open 62 on u.gg" or
-    /// guess a slug. No offer is better than a wrong one.</para>
+    /// the link slug and display label both come from the roster entry. A bare
+    /// id cannot safely form either, so no import is better than a wrong one.</para>
     /// </summary>
     private ChampSelectContext? BuildChampSelectContext(CompanionChampSelectSnapshot? champSelect)
     {

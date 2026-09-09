@@ -53,7 +53,7 @@ public static class ApplyPayloadValidation
         // write gate. Same reasoning for the stale-removal prefix, which is
         // just as capable of touching pages that are not ours; absent
         // (an older web build) always passes.
-        if (!IsCoachBuildTitle(request.Name)) return "bad-title";
+        if (!RuneApplyService.IsOwnedPageName(request.Name)) return "bad-title";
         if (!IsValidReplacePrefix(request.ReplacePrefix)) return "bad-title";
         if (request.SelectedPerkIds is null || request.SelectedPerkIds.Count != 9) return "bad-runes";
         if (request.SelectedPerkIds.Any(x => x <= 0)) return "bad-runes";

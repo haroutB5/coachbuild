@@ -5,7 +5,7 @@ namespace CoachBuild.Desktop.Web;
 /// <summary>The four destinations the companion window can show.</summary>
 public enum CompanionTab
 {
-    /// <summary>The hosted CoachBuild web app. The only tab with a session token.</summary>
+    /// <summary>The shipped local Draft page. The only tab with a session token.</summary>
     Companion,
     UGg,
     Coachless,
@@ -15,13 +15,12 @@ public enum CompanionTab
 /// <summary>
 /// A third-party site the window renders for the user to READ.
 ///
-/// <para><b>Read-mostly, with one sanctioned automation.</b> Nothing in this
+/// <para><b>Read-mostly, with sanctioned import automation.</b> Nothing in this
 /// app scrapes these sites on a timer or navigates them speculatively — and
 /// <c>SiteTabComplianceTests</c> still pins that a script reaches a site tab
-/// only as an extractor step (the runes button, the visible auto-import
-/// extract, or the worker fetch). The single sanctioned AUTOMATED
-/// navigation is the automatic item import's worker fetch, and ONLY to the
-/// two known build-page URL shapes the app's own deep-link builders produce
+/// only as a visible auto-import extract, worker fetch, consent dismissal or
+/// Coachless rune-page read. Automated navigation is confined to the known
+/// build/runes URL shapes the app's own deep-link builders produce
 /// (<see cref="SiteDeepLink"/>), triggered by champ-select context or the
 /// user's own browsing — never the visible tab, never a focus steal. That
 /// is the reason <see cref="SiteTabView"/> has no
@@ -514,67 +513,6 @@ public static class SiteDeepLink
         _ => null,
     };
 
-    /// <summary>
-    /// The Coachless runes page to import from while the user is looking at
-    /// <paramref name="pageUrl"/> — a Coachless BUILDS page or a Coachless
-    /// RUNES page — or null when this page is neither.
-    ///
-    /// <para>2.1.1: this is what lets the offer bar's runes button work on the
-    /// Coachless tab. It is deliberately the ONE predicate behind both the
-    /// button's visibility and the button's action, so a visible button can
-    /// never be a dead click: if this returns a URL the import has a target,
-    /// and if it returns null the button is not shown.</para>
-    ///
-    /// <para>It REBUILDS the deep link rather than reusing the page's own URL,
-    /// even when the user is already standing on a runes page. Two reasons.
-    /// The import path checks its target against
-    /// <see cref="AutoImportCoordinator.IsAllowedRunesTarget"/>, which compares
-    /// against exactly what <see cref="CoachlessRunesUrl"/> produces — a
-    /// hand-carried URL would be refused by that allowlist. And the tree pair
-    /// in a rendered runes URL is the site's own snap of a probe pair
-    /// (<see cref="RunesProbePrimary"/>), so carrying it forward would pin a
-    /// recommendation that is not ours to pin.</para>
-    ///
-    /// <para>The role comes off the page: both shapes carry <c>?role=</c>, and
-    /// a page without one yields a roleless link, which the site answers with
-    /// the champion's main role — the same "ask the page, never guess" rule the
-    /// u.gg role discovery follows. A roleless import then reports without a
-    /// role rather than inventing one.</para>
-    /// </summary>
-    public static Uri? CoachlessRunesUrlForPage(string? pageUrl)
-    {
-        if (string.IsNullOrWhiteSpace(pageUrl)
-            || !Uri.TryCreate(pageUrl, UriKind.Absolute, out var uri))
-            return null;
-        if (CoachlessSlugForPage(uri) is not { } slug) return null;
-        return CoachlessRunesUrl(slug, RoleIdFromToken(SiteNavigationPolicy.RoleFromUri(uri)));
-    }
-
-    /// <summary>
-    /// The champion slug a Coachless builds or runes URL addresses, or null.
-    /// <c>/builds/{slug}</c> and <c>/runes/tree/{slug}/{primary}/{secondary}</c>.
-    /// </summary>
-    public static string? CoachlessSlugForPage(Uri? uri)
-    {
-        if (uri is null) return null;
-        if (!SiteImportExtractors.IsCoachlessBuildsUrl(uri)
-            && !SiteImportExtractors.IsCoachlessRunesUrl(uri))
-            return null;
-        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var raw = segments switch
-        {
-            [var builds, var slug] when string.Equals(builds, "builds", StringComparison.OrdinalIgnoreCase)
-                => slug,
-            [var runes, var tree, var slug, _, _]
-                when string.Equals(runes, "runes", StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(tree, "tree", StringComparison.OrdinalIgnoreCase)
-                => slug,
-            _ => null,
-        };
-        var normalized = ChampionNameKey.Normalize(raw);
-        return string.IsNullOrEmpty(normalized) ? null : normalized;
-    }
-
     public static Uri? Build(CompanionTab tab, string? championKey, int? roleId)
     {
         if (Slug(championKey) is not { } slug) return null;
@@ -597,7 +535,7 @@ public static class SiteDeepLink
 }
 
 /// <summary>
-/// What champ select currently says, projected for the site tabs' chip.
+/// What champ select currently says, projected for automatic site imports.
 ///
 /// <para><see cref="Locked"/> distinguishes a locked-in champion from a hover
 /// (<c>championPickIntent</c>). Both offer the same link; only the wording
@@ -705,10 +643,8 @@ public static class SiteNavigationPolicy
 
     /// <summary>
     /// The role token a site URL carries — u.gg in the final path segment,
-    /// Coachless in <c>?role=</c> — or null. Public since 2.1.1 so
-    /// <see cref="SiteDeepLink.CoachlessRunesUrlForPage"/> reads a role the
-    /// same single way this policy does, rather than growing a second parser
-    /// to drift against it.
+    /// Coachless in <c>?role=</c> — or null. Shared by exact-target checks so
+    /// role-bearing and roleless destinations cannot collapse together.
     /// </summary>
     public static string? RoleFromUri(Uri uri)
     {

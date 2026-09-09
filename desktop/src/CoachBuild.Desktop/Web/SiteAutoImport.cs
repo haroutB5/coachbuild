@@ -6,7 +6,7 @@ namespace CoachBuild.Desktop.Web;
 /// What the automatic item import knows on one evaluation: the champ-select
 /// context (if any), which tab the user is viewing and its URL, and whether
 /// the client is connected. Built on the UI thread from the same 750 ms
-/// snapshot tick that feeds the offer bar -- no new poll. (1.3.0.)
+/// existing snapshot tick -- no new poll. (1.3.0.)
 /// </summary>
 public sealed record AutoImportInput(
     int? ChampionId,
@@ -466,7 +466,7 @@ public interface ISiteAutoImportSink
 /// flushed as soon as ITS extraction completes (the batch still carries the
 /// other site's cached set, so a later-completing site's write re-batches
 /// whatever is ready). A practice-tool instalock ends champ select ~10s
-/// after the lock while the Coachless walk is still in flight; the old
+/// after the lock while the Coachless read is still in flight; the old
 /// end-of-run write lost the u.gg set that had been sitting fetched for
 /// seconds. Fetch order is still u.gg then Coachless; only the write timing
 /// changed.</para>
@@ -476,10 +476,8 @@ public interface ISiteAutoImportSink
 /// every 750 ms tick and never awaits it; overlapping ticks return
 /// immediately and the next tick after completion re-evaluates, so a dropped
 /// tick delays a trigger past the run but never loses it. LCU writes
-/// serialize through the item-set service's own write lease, and the offer
-/// bar's runes button touches only the rune endpoints — the runes/items
-/// split is also the concurrency split, so the two paths share no
-/// read-modify-write.</para>
+/// serialize through the services' own write lease. Rune writes run only
+/// after the item fetch/flush loop, so the two paths do not overlap.</para>
 ///
 /// <para>CANCELLATION: the window owns the token. Champ-select END (the
 /// phase leaving ChampSelect for None/Lobby, e.g. a dodge) cancels the
@@ -490,8 +488,7 @@ public interface ISiteAutoImportSink
 /// their current run and write before disposing (see the window's linger).
 /// Contract: never throws (a background import must not break the
 /// snapshot tick); LCU absent means skip quietly with a log-once line;
-/// extraction failure means a quiet log plus a status-line note; runes are
-/// never written by this path (items-only batch).</para>
+/// extraction failure means a quiet log plus a status-line note.</para>
 /// </summary>
 public sealed class SiteAutoImportService
 {
@@ -654,10 +651,27 @@ public sealed class SiteAutoImportService
         CancellationToken cancellationToken)
     {
         var hadWritable = false;
+        SiteImportPayload? uggRunesPayload = null;
+        var effectiveRoleId = input.RoleId;
         foreach (var planned in fetch)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var target = planned;
+            // Roleless lobbies first ask u.gg which role its rendered active
+            // tab selected. Coachless then loads that exact role instead of
+            // independently falling back to a different site default.
+            if (target.Site == CompanionTab.Coachless &&
+                input.RoleId is null && effectiveRoleId is not null &&
+                SiteDeepLink.Build(CompanionTab.Coachless, input.ChampionKey, effectiveRoleId) is { } aligned)
+            {
+                target = target with
+                {
+                    Url = aligned,
+                    RoleId = effectiveRoleId,
+                    ExtractInPlace = target.ExtractInPlace &&
+                        SiteNavigationPolicy.IsAlreadyThere(target.Url.ToString(), aligned),
+                };
+            }
             var raw = await FetchTargetAsync(target, cancellationToken).ConfigureAwait(false);
             // SPA FALLBACK (2.1.1). An in-place read of the user's own visible
             // tab can be correct about the DOM and still see no build, because
@@ -701,6 +715,10 @@ public sealed class SiteAutoImportService
             // "yielded no item build" is never again a bare absence with no
             // account of where the read stopped (field log 2026-09-08).
             LogPayloadNotes(target.Site, payload);
+            if (payload.Source == SiteImportSource.UGg && payload.Runes is not null)
+                uggRunesPayload = payload;
+            if (effectiveRoleId is null)
+                effectiveRoleId = SiteDeepLink.RoleIdFromToken(payload.Role);
             if (payload.ItemBlocks.Count == 0)
             {
                 _sink.LogInfo(
@@ -724,7 +742,8 @@ public sealed class SiteAutoImportService
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        await ImportCoachlessRunesAsync(fetch, input, cancellationToken).ConfigureAwait(false);
+        await ImportBothRunesAsync(
+            input, uggRunesPayload, effectiveRoleId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -780,44 +799,139 @@ public sealed class SiteAutoImportService
     }
 
     /// <summary>
-    /// The Coachless RUNES leg (2.1.0): fetch the per-slot WPA runes page for
-    /// the champion+role this run acted on, and write the full rune page.
-    ///
-    /// <para>Runs only when this run actually touched Coachless, so a u.gg-only
-    /// trigger never navigates a second Coachless page. It is deliberately
-    /// INDEPENDENT of the item write above: the item set has already landed by
-    /// the time this runs, so a rune failure costs the user nothing they had —
-    /// it is logged and noted, never escalated, and never a dialog.</para>
-    ///
-    /// <para>Honest per-part failure, per the brief: a page that yields no
-    /// complete rune page produces the extractor's own typed reason (which
-    /// names the missing slot) and writes NOTHING. There is no partial rune
-    /// page and no guessed slot — the 0.127.0 validator
-    /// (<c>PerkTreeCatalog.ValidatePage</c>, reached through
-    /// <c>SiteImportApplier.ApplyRunesOnlyAsync</c>) is the same gate the
-    /// u.gg button uses.</para>
+    /// Fetches both rune sources on every automatic-import trigger, validates
+    /// both before writing, then hands them to the capacity-aware two-page
+    /// writer in u.gg-first priority order. Item writes have already landed,
+    /// so any rune failure is independent and fail-soft.
     /// </summary>
-    private async Task ImportCoachlessRunesAsync(
-        IReadOnlyList<AutoImportSiteTarget> fetch,
+    private async Task ImportBothRunesAsync(
         AutoImportInput input,
+        SiteImportPayload? uggPayload,
+        int? effectiveRoleId,
         CancellationToken cancellationToken)
     {
         if (_runes is null) return;
         if (input.ChampionId is not > 0 || string.IsNullOrWhiteSpace(input.ChampionName)) return;
-        var touchedCoachless = false;
-        foreach (var target in fetch)
-        {
-            if (target.Site == CompanionTab.Coachless) { touchedCoachless = true; break; }
-        }
-        if (!touchedCoachless) return;
-        if (SiteDeepLink.CoachlessRunesUrl(input.ChampionKey, input.RoleId) is not { } url) return;
 
-        string? raw;
-        _fetchedThisRun = true;
+        // A visible Coachless-only refresh still imports BOTH pages. Fetch the
+        // u.gg build in a worker when this run did not already read it.
+        if (uggPayload?.Runes is null &&
+            SiteDeepLink.Build(CompanionTab.UGg, input.ChampionKey, effectiveRoleId) is { } uggUrl)
+        {
+            _fetchedThisRun = true;
+            try
+            {
+                var raw = await _executor.FetchViaWorkerAsync(
+                    CompanionTab.UGg,
+                    uggUrl,
+                    input.ChampionKey,
+                    effectiveRoleId,
+                    cancellationToken).ConfigureAwait(false);
+                if (SiteImportPayload.TryParse(raw, out var fetched, out var failure) &&
+                    fetched is not null && PayloadMatchesContext(fetched, input))
+                {
+                    uggPayload = fetched;
+                    if (effectiveRoleId is null)
+                        effectiveRoleId = SiteDeepLink.RoleIdFromToken(fetched.Role);
+                    LogPayloadNotes(CompanionTab.UGg, fetched);
+                }
+                else if (fetched is not null)
+                {
+                    _sink.LogInfo(
+                        $"runes: u.gg yielded \"{fetched.ChampionSlug}\", not the selected champion -- ignored");
+                }
+                else
+                {
+                    _sink.LogInfo($"runes: u.gg yielded no rune build ({failure})");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception error)
+            {
+                _sink.LogInfo($"runes: u.gg fetch failed ({error.Message})");
+            }
+        }
+
+        SiteImportPayload? coachlessPayload = null;
+        if (SiteDeepLink.CoachlessRunesUrl(input.ChampionKey, effectiveRoleId) is { } runesUrl)
+        {
+            _fetchedThisRun = true;
+            try
+            {
+                var raw = await _executor.FetchCoachlessRunesAsync(
+                    runesUrl,
+                    input.ChampionKey,
+                    effectiveRoleId,
+                    cancellationToken).ConfigureAwait(false);
+                if (SiteImportPayload.TryParse(raw, out var fetched, out var failure) &&
+                    fetched is not null && PayloadMatchesContext(fetched, input))
+                {
+                    coachlessPayload = fetched;
+                    LogPayloadNotes(CompanionTab.Coachless, fetched);
+                }
+                else if (fetched is not null)
+                {
+                    _sink.LogInfo(
+                        $"runes: Coachless yielded \"{fetched.ChampionSlug}\", not the selected champion -- ignored");
+                }
+                else
+                {
+                    _sink.LogInfo($"runes: Coachless yielded no rune build ({failure})");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception error)
+            {
+                _sink.LogInfo($"runes: Coachless fetch failed ({error.Message})");
+            }
+        }
+
+        var assignedRole = SiteDeepLink.RoleToken(input.RoleId);
+        var requests = new List<ApplyRunesRequest>(2);
+        if (TryBuildRuneRequest(uggPayload, input.ChampionName, assignedRole, out var uggRequest))
+            requests.Add(uggRequest);
+        if (TryBuildRuneRequest(coachlessPayload, input.ChampionName, assignedRole, out var coachlessRequest))
+            requests.Add(coachlessRequest);
+        if (requests.Count == 0) return;
+
         try
         {
-            raw = await _executor.FetchCoachlessRunesAsync(
-                url, input.ChampionKey, input.RoleId, cancellationToken).ConfigureAwait(false);
+            var result = await _runes.ApplyOwnedPagesAsync(requests, cancellationToken).ConfigureAwait(false);
+            foreach (var page in result.Pages)
+            {
+                if (page.Result is ApplyRunesSuccess success)
+                {
+                    var line = success.Unchanged == true
+                        ? $"runes: {page.Name} already matches"
+                        : $"runes: wrote {page.Name}";
+                    _sink.LogInfo(line);
+                    _sink.StatusNote(line);
+                }
+                else if (page.Result is ApplyRunesFailure failure && failure.Reason != "slots-full")
+                {
+                    _sink.LogInfo($"runes: {page.Name} was not written ({failure.Hint ?? failure.Reason})");
+                }
+            }
+            if (result.OnlyOneEditableSlot &&
+                result.Pages.FirstOrDefault()?.Result.Ok == true)
+            {
+                const string limited = "runes: only one editable page slot -- wrote u.gg only";
+                _sink.LogInfo(limited);
+                _sink.StatusNote(limited);
+            }
+            else if (result.Pages.Count > 0 && result.Pages.All(page =>
+                         page.Result is ApplyRunesFailure { Reason: "slots-full" }))
+            {
+                const string full = "runes: no editable page slots -- wrote no rune pages";
+                _sink.LogInfo(full);
+                _sink.StatusNote(full);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -825,40 +939,22 @@ public sealed class SiteAutoImportService
         }
         catch (Exception error)
         {
-            _sink.LogInfo($"auto-import: Coachless runes fetch failed ({error.Message})");
-            return;
+            _sink.LogInfo($"runes: automatic page write failed ({error.Message})");
         }
+    }
 
-        if (!SiteImportPayload.TryParse(raw, out var payload, out var failure) || payload is null)
-        {
-            _sink.LogInfo($"auto-import: Coachless yielded no rune build ({failure})");
-            return;
-        }
-        if (!PayloadMatchesContext(payload, input))
-        {
-            _sink.LogInfo(
-                $"auto-import: Coachless runes yielded \"{payload.ChampionSlug}\", " +
-                "not the selected champion -- ignored");
-            return;
-        }
-        LogPayloadNotes(CompanionTab.Coachless, payload);
-
-        try
-        {
-            var result = await SiteImportApplier.ApplyRunesOnlyAsync(
-                payload, input.ChampionName, input.ChampionId.Value,
-                _runes, cancellationToken).ConfigureAwait(false);
-            _sink.LogInfo($"auto-import: {result.Message}");
-            _sink.StatusNote(result.Message);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception error)
-        {
-            _sink.LogInfo($"auto-import: Coachless rune write failed ({error.Message})");
-        }
+    private static bool TryBuildRuneRequest(
+        SiteImportPayload? payload,
+        string championName,
+        string? assignedRole,
+        out ApplyRunesRequest request)
+    {
+        request = null!;
+        if (payload?.Runes is null || SiteImportValidator.ValidateRunes(payload.Runes) is not null)
+            return false;
+        var title = SiteImportValidator.RunePageTitle(championName, assignedRole, payload.Source);
+        request = SiteImportValidator.BuildAutoRuneRequest(title, payload.Runes);
+        return ApplyPayloadValidation.TryValidateRunes(request, out _);
     }
 
     /// <summary>

@@ -163,6 +163,86 @@ public sealed class RunePagePruneTests
         Assert.DoesNotContain(api.Calls, call => call.Method == HttpMethod.Delete);
     }
 
+    [Fact]
+    public async Task Automatic_write_creates_both_source_pages_without_selecting_a_foreign_current_page()
+    {
+        var api = new StubLcu();
+        api.Enqueue("[" + Wire(1, "My ranked page") + "]");
+        api.Enqueue(Wire(1, "My ranked page"));
+        api.Enqueue("{\"ownedPageCount\":5}");
+        api.Enqueue("{\"id\":10}");
+        api.Enqueue("{\"id\":11}");
+        api.Enqueue("[" + Wire(1, "My ranked page") + "," + Wire(10, "u.gg Nasus (Top)") + "," +
+            Wire(11, "Coachless Nasus (Top)") + "]");
+
+        var result = await new RuneApplyService(api).ApplyOwnedPagesAsync(TwoRequests());
+
+        Assert.Equal(2, result.Pages.Count);
+        Assert.All(result.Pages, page => Assert.True(page.Result.Ok));
+        var creates = api.Calls.Where(call => call.Method == HttpMethod.Post).ToArray();
+        Assert.Equal(2, creates.Length);
+        Assert.Contains(creates, call => Body(call).Contains("u.gg Nasus (Top)", StringComparison.Ordinal));
+        Assert.Contains(creates, call => Body(call).Contains("Coachless Nasus (Top)", StringComparison.Ordinal));
+        Assert.All(creates, call => Assert.Contains("\"current\":false", Body(call), StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(api.Calls, call => call.Path == "/lol-perks/v1/currentpage" && call.Method == HttpMethod.Put);
+        Assert.DoesNotContain(api.Calls, call => call.Method == HttpMethod.Delete);
+    }
+
+    [Fact]
+    public async Task One_editable_slot_writes_only_ugg_and_never_touches_foreign_pages()
+    {
+        var api = new StubLcu();
+        api.Enqueue("[" + Wire(1, "My first page") + "," + Wire(2, "My second page") + "]");
+        api.Enqueue(Wire(1, "My first page"));
+        api.Enqueue("{\"ownedPageCount\":3}");
+        api.Enqueue("{\"id\":10}");
+        api.Enqueue("[" + Wire(1, "My first page") + "," + Wire(2, "My second page") + "," +
+            Wire(10, "u.gg Nasus (Top)") + "]");
+
+        var result = await new RuneApplyService(api).ApplyOwnedPagesAsync(TwoRequests());
+
+        Assert.True(result.OnlyOneEditableSlot);
+        Assert.True(result.Pages[0].Result.Ok);
+        Assert.Equal("slots-full", Assert.IsType<ApplyRunesFailure>(result.Pages[1].Result).Reason);
+        var create = Assert.Single(api.Calls, call => call.Method == HttpMethod.Post);
+        Assert.Contains("u.gg Nasus (Top)", Body(create), StringComparison.Ordinal);
+        Assert.DoesNotContain(api.Calls, call => call.Method is { } method &&
+            (method == HttpMethod.Put || method == HttpMethod.Delete) &&
+            (call.Path.EndsWith("/1", StringComparison.Ordinal) || call.Path.EndsWith("/2", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task An_owned_current_page_makes_the_matching_ugg_page_current_after_both_are_reused()
+    {
+        var pages = "[" + Wire(10, "u.gg Nasus (Top)") + "," + Wire(11, "Coachless Nasus (Top)") + "]";
+        var api = new StubLcu();
+        api.Enqueue(pages);
+        api.Enqueue("{\"id\":11}");
+        api.Enqueue("{\"ownedPageCount\":2}");
+        api.Enqueue("{}");
+        api.Enqueue(pages);
+
+        var result = await new RuneApplyService(api).ApplyOwnedPagesAsync(TwoRequests());
+
+        Assert.All(result.Pages, page => Assert.IsType<ApplyRunesSuccess>(page.Result));
+        var select = Assert.Single(api.Calls, call =>
+            call.Method == HttpMethod.Put && call.Path == "/lol-perks/v1/currentpage");
+        Assert.Equal("10", Body(select));
+        Assert.DoesNotContain(api.Calls, call => call.Method == HttpMethod.Post ||
+            call.Path.StartsWith("/lol-perks/v1/pages/", StringComparison.Ordinal));
+    }
+
+    private static IReadOnlyList<ApplyRunesRequest> TwoRequests() =>
+    [
+        new("u.gg Nasus (Top)", 8000, 8400,
+            [8021, 8009, 9105, 8017, 8473, 8451, 5007, 5010, 5013], false, "auto"),
+        new("Coachless Nasus (Top)", 8000, 8400,
+            [8021, 8009, 9105, 8017, 8473, 8451, 5007, 5010, 5013], false, "auto"),
+    ];
+
+    private static string Body((HttpMethod Method, string Path, object? Body) call) =>
+        System.Text.Json.JsonSerializer.Serialize(call.Body);
+
     private static string Wire(int id, string name) =>
         $"{{\"id\":{id},\"name\":\"{name}\",\"isDeletable\":true,\"primaryStyleId\":8000," +
         "\"subStyleId\":8400,\"selectedPerkIds\":[8021,8009,9105,8017,8473,8451,5007,5010,5013]," +
@@ -172,7 +252,7 @@ public sealed class RunePagePruneTests
     {
         private readonly Queue<LcuResponse> _responses = new();
 
-        public List<(HttpMethod Method, string Path)> Calls { get; } = [];
+        public List<(HttpMethod Method, string Path, object? Body)> Calls { get; } = [];
 
         public void Enqueue(string json) =>
             _responses.Enqueue(new LcuResponse(true, 200, System.Text.Json.JsonDocument.Parse(json).RootElement.Clone()));
@@ -182,7 +262,7 @@ public sealed class RunePagePruneTests
         public Task<LcuResponse> SendAsync(
             HttpMethod method, string path, object? body = null, CancellationToken cancellationToken = default)
         {
-            Calls.Add((method, path));
+            Calls.Add((method, path, body));
             return Task.FromResult(
                 _responses.Count > 0 ? _responses.Dequeue() : new LcuResponse(false, 404));
         }

@@ -27,24 +27,12 @@ public sealed class SiteImportExtractorTests
     }
 
     [Fact]
-    public void The_coachless_step_template_needs_no_icon_tables()
+    public void The_coachless_items_template_needs_no_injected_tables()
     {
-        // The walk reads item ids numerically off /img/item/{id} and never
-        // resolves the clicked keystone to an id, so there is nothing to
-        // inject: the template carries the step token and every built step
-        // must carry no leftover token.
-        Assert.Contains(
-            "__COACHLESS_STEP_JSON__", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
-        foreach (var step in new[]
-            {
-                SiteImportSteps.Inspect(),
-                SiteImportSteps.Click("1st Item"),
-                SiteImportSteps.Read(),
-            })
-            Assert.DoesNotContain(
-                "__COACHLESS_STEP_JSON__",
-                SiteImportExtractors.CoachlessStepScript(step),
-                StringComparison.Ordinal);
+        Assert.Same(
+            SiteImportExtractors.CoachlessItemsTemplate,
+            SiteImportExtractors.CoachlessItemsScript);
+        Assert.DoesNotContain("__COACHLESS_STEP_JSON__", SiteImportExtractors.CoachlessItemsScript, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -58,15 +46,12 @@ public sealed class SiteImportExtractorTests
         // Escaped in the JS regex literal (\/runes\/(\d+)\.png): the style-id anchor.
         Assert.Contains("\\/runes\\/", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
 
-        Assert.Contains("data-row", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
-        Assert.Contains("entry-name", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
+        Assert.Contains("data-row", SiteImportExtractors.CoachlessItemsTemplate, StringComparison.Ordinal);
+        Assert.Contains("entry-name", SiteImportExtractors.CoachlessItemsTemplate, StringComparison.Ordinal);
         // Escaped in the JS regex literal (\/img\/item\/(\d+)\.): the item-id anchor.
-        Assert.Contains("\\/img\\/item\\/", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
-        // The walk's two new anchors: the site's own selection marker and
-        // the top-row click that drives the conditioned recompute.
-        Assert.Contains("'active'", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
-        Assert.Contains("dispatchEvent", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
-        Assert.Contains("already-selected", SiteImportExtractors.CoachlessStepTemplate, StringComparison.Ordinal);
+        Assert.Contains("\\/img\\/item\\/", SiteImportExtractors.CoachlessItemsTemplate, StringComparison.Ordinal);
+        Assert.Contains("cl-role-selection", SiteImportExtractors.CoachlessItemsTemplate, StringComparison.Ordinal);
+        Assert.Contains("'active'", SiteImportExtractors.CoachlessItemsTemplate, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -93,14 +78,12 @@ public sealed class SiteImportExtractorTests
     /// <summary>
     /// 2.1.0 field fix. A per-slot absence omits the block and notes it; only
     /// a page where NO slot yields items is still a typed failure, and that
-    /// reason must avoid the words "no build" or
-    /// <see cref="SiteImportSequencer"/>'s error mapping collapses the
-    /// per-slot detail it exists to carry.
+    /// reason carries a whole-page census.
     /// </summary>
     [Fact]
     public void The_coachless_read_degrades_on_an_empty_slot_instead_of_aborting()
     {
-        var read = SiteImportExtractors.CoachlessStepScript(SiteImportSteps.Read());
+        var read = SiteImportExtractors.CoachlessItemsScript;
         Assert.Contains("-- omitted", read, StringComparison.Ordinal);
         Assert.Contains("every item slot on the page was empty", read, StringComparison.Ordinal);
         Assert.Contains("meta: { notes: notes }", read, StringComparison.Ordinal);
@@ -109,15 +92,15 @@ public sealed class SiteImportExtractorTests
     }
 
     [Fact]
-    public void Only_the_coachless_walk_clicks_the_page()
+    public void Both_item_extractors_are_read_only()
     {
         // Control: both scripts under test are non-empty real scripts.
         Assert.Contains("JSON.stringify", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
-        Assert.Contains("JSON.stringify", SiteImportExtractors.CoachlessInspectScript, StringComparison.Ordinal);
-        // The u.gg import is a read; the click is the Coachless import's
-        // approved scope and must never leak into the static extractor.
+        Assert.Contains("JSON.stringify", SiteImportExtractors.CoachlessItemsScript, StringComparison.Ordinal);
         Assert.DoesNotContain("dispatchEvent", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
         Assert.DoesNotContain(".click(", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
+        Assert.DoesNotContain("dispatchEvent", SiteImportExtractors.CoachlessItemsScript, StringComparison.Ordinal);
+        Assert.DoesNotContain(".click(", SiteImportExtractors.CoachlessItemsScript, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -135,28 +118,16 @@ public sealed class SiteImportExtractorTests
     {
         // Control: the scripts under test are non-empty real scripts.
         Assert.Contains("JSON.stringify", SiteImportExtractors.UGgScript, StringComparison.Ordinal);
-        Assert.Contains("JSON.stringify", SiteImportExtractors.CoachlessInspectScript, StringComparison.Ordinal);
+        Assert.Contains("JSON.stringify", SiteImportExtractors.CoachlessItemsScript, StringComparison.Ordinal);
         Assert.DoesNotContain(forbidden, SiteImportExtractors.UGgScript, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(forbidden, SiteImportExtractors.CoachlessInspectScript, StringComparison.OrdinalIgnoreCase);
-        // Every Coachless step — inspect, click, and final read alike —
-        // runs against the third-party page, so the ban covers all three.
-        // (The click step's dispatchEvent is the approved scope, not a
-        // navigation primitive, and is pinned by its own test above.)
-        Assert.DoesNotContain(
-            forbidden,
-            SiteImportExtractors.CoachlessStepScript(SiteImportSteps.Click("1st Item")),
-            StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(
-            forbidden,
-            SiteImportExtractors.CoachlessStepScript(SiteImportSteps.Read()),
-            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(forbidden, SiteImportExtractors.CoachlessItemsScript, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public void Scripts_resolve_per_site_tab_and_never_for_the_hosted_one()
     {
         Assert.Same(SiteImportExtractors.UGgScript, SiteImportExtractors.ScriptFor(CompanionTab.UGg));
-        Assert.Same(SiteImportExtractors.CoachlessInspectScript, SiteImportExtractors.ScriptFor(CompanionTab.Coachless));
+        Assert.Same(SiteImportExtractors.CoachlessItemsScript, SiteImportExtractors.ScriptFor(CompanionTab.Coachless));
         Assert.Null(SiteImportExtractors.ScriptFor(CompanionTab.Companion));
     }
 
@@ -180,25 +151,4 @@ public sealed class SiteImportExtractorTests
         Assert.Equal(expected, SiteImportExtractors.CanImportFromUrl(tab, url));
     }
 
-    [Theory]
-    [InlineData(CompanionTab.UGg, "https://u.gg/lol/champions/jhin/build/adc", true)]
-    [InlineData(CompanionTab.UGg, "https://u.gg/lol/champions/jhin/build", true)]
-    [InlineData(CompanionTab.UGg, "https://u.gg/", false)]
-    // 2.1.1: Coachless shows it too, on either page that can aim a runes
-    // import. It was u.gg-only because Coachless had no rune source when the
-    // button was built; the per-slot WPA runes page landed in 2.1.0 round 2.
-    // Still never on a page that cannot aim one -- a button there would be a
-    // dead click. (Items arrive via the automatic import.)
-    [InlineData(CompanionTab.Coachless, "https://coachless.gg/builds/jhin?role=adc", true)]
-    [InlineData(CompanionTab.Coachless, "https://coachless.gg/runes/tree/jhin/precision/resolve?role=adc", true)]
-    [InlineData(CompanionTab.Coachless, "https://coachless.gg/builds/creator", false)]
-    [InlineData(CompanionTab.Coachless, "https://coachless.gg/", false)]
-    [InlineData(CompanionTab.Coachless, "https://u.gg/lol/champions/jhin/build/adc", false)]
-    [InlineData(CompanionTab.Companion, "https://u.gg/lol/champions/jhin/build/adc", false)]
-    [InlineData(CompanionTab.Companion, "https://coachless.gg/builds/jhin?role=adc", false)]
-    public void The_offer_bar_runes_visibility_follows_the_site_url_shape(
-        CompanionTab tab, string? url, bool expected)
-    {
-        Assert.Equal(expected, WebView2Window.ShouldShowRunesImport(tab, url));
-    }
 }
