@@ -578,6 +578,17 @@ public partial class App : WpfApplication
             CloseCompanionWindowForGame();
         }
 
+        // Champ select ended WITHOUT a game (a dodge: back to None/Lobby,
+        // 2.1.2). An import run still in flight is fetching for a draft that
+        // no longer exists, so it is cancelled and its debounce rolls back;
+        // the next lock re-imports from scratch. This is deliberately NOT
+        // the game-start path above, whose runs finish and write first.
+        if (previousPhase == CompanionPhase.ChampSelect &&
+            (phase == CompanionPhase.None || phase == CompanionPhase.Lobby))
+        {
+            _webView?.CancelAutoImportForChampSelectEnd();
+        }
+
         // Post-game is the natural idle window: the busy gate just cleared
         // and the player is reading stats, not playing. Fire-and-forget off
         // the dispatcher; the service's semaphore serialises with any running
@@ -911,6 +922,13 @@ public partial class App : WpfApplication
     /// Ends the browser that champ select opened, now that the player is in the
     /// game and only the skill-order overlay matters.
     ///
+    /// <para>2.1.2: this no longer closes the window synchronously. An import
+    /// run is usually still in flight at load-in (the lock fires it, the
+    /// game starts seconds later), and the old close aborted the Coachless
+    /// walk mid-run. <see cref="WebView2Window.CloseForGameStart"/> hides
+    /// the window now, lets the in-flight run finish and write, then closes.
+    /// </para>
+    ///
     /// <para>The teardown deliberately does <b>not</b> touch the updater beyond
     /// letting <see cref="OnWebViewClosed"/> run its normal course. That handler
     /// kicks a staged-apply retry, and in game that retry <b>must</b> be refused
@@ -925,7 +943,7 @@ public partial class App : WpfApplication
         var webView = _webView;
         if (webView is null) return;
         _log?.Info("window: closing the CoachBuild window for the game (WebView2 teardown)");
-        webView.Close();
+        webView.CloseForGameStart();
     }
 
     private void OnWebViewClosed(object? sender, EventArgs e)

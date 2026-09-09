@@ -149,6 +149,50 @@ public sealed class RuneOwnershipTests
         Assert.Equal(1, api.Count(HttpMethod.Delete, "/lol-perks/v1/pages/1"));
     }
 
+    /// <summary>
+    /// 2.1.2: a manual repeat press on an identical, already-selected page
+    /// is a no-write success marked Unchanged -- the re-apply the buttons
+    /// promise, with nothing to re-apply.
+    /// </summary>
+    [Fact]
+    public async Task Manual_repeat_press_on_the_current_page_is_unchanged_without_writes()
+    {
+        var api = new MockLcuApi();
+        api.Enqueue(HttpMethod.Get, "/lol-perks/v1/pages", Ok("[" + Page(1, "CoachBuild Ahri Top", 1, 1) + "]"));
+        api.Enqueue(HttpMethod.Get, "/lol-perks/v1/currentpage", Ok("{\"id\":1}"));
+        var result = await new RuneApplyService(api).ApplyAsync(Request("CoachBuild Ahri Top", "manual"));
+
+        var success = Assert.IsType<ApplyRunesSuccess>(result);
+        Assert.True(success.Unchanged);
+        Assert.Equal(0, api.Count(HttpMethod.Put, "/lol-perks/v1/pages/1"));
+        Assert.Equal(0, api.Count(HttpMethod.Put, "/lol-perks/v1/currentpage"));
+        Assert.Equal(0, api.Count(HttpMethod.Post, "/lol-perks/v1/pages"));
+        Assert.DoesNotContain(api.Calls, call => call.Method == HttpMethod.Delete);
+    }
+
+    /// <summary>
+    /// 2.1.2: a manual repeat press on an identical but DESELECTED page
+    /// skips the redundant edit yet still selects it as current -- reuse
+    /// plus select, never a silent no-op.
+    /// </summary>
+    [Fact]
+    public async Task Manual_repeat_press_on_a_deselected_page_reselects_without_edit()
+    {
+        var api = new MockLcuApi();
+        api.Enqueue(HttpMethod.Get, "/lol-perks/v1/pages", Ok("[" + Page(1, "CoachBuild Ahri Top", 1, 1) + "]"));
+        api.Enqueue(HttpMethod.Get, "/lol-perks/v1/currentpage", Ok("{\"id\":2}"));
+        api.Enqueue(HttpMethod.Put, "/lol-perks/v1/currentpage", Ok("1"));
+        api.Enqueue(HttpMethod.Get, "/lol-perks/v1/pages", Ok("[" + Page(1, "CoachBuild Ahri Top", 1, 1) + "]"));
+        api.Enqueue(HttpMethod.Get, "/lol-perks/v1/currentpage", Ok(Page(1, "CoachBuild Ahri Top", 1, 1)));
+        var result = await new RuneApplyService(api).ApplyAsync(Request("CoachBuild Ahri Top", "manual"));
+
+        var success = Assert.IsType<ApplyRunesSuccess>(result);
+        Assert.True(success.Ok);
+        Assert.Null(success.Unchanged);
+        Assert.Equal(0, api.Count(HttpMethod.Put, "/lol-perks/v1/pages/1"));
+        Assert.Equal(1, api.Count(HttpMethod.Put, "/lol-perks/v1/currentpage"));
+    }
+
     private static ApplyRunesRequest Request(string name, string mode, string? replacePrefix = null, int primary = 1, int sub = 1) =>
         new(name, primary, sub, Enumerable.Range(1, 9).ToArray(), true, mode, replacePrefix);
 

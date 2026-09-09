@@ -123,6 +123,25 @@ public sealed class RuneApplyService
                         "user-modified",
                         "you changed this rune page in the client -- CoachBuild left your version alone");
             }
+            else if (actualFingerprint == desiredFingerprint)
+            {
+                // A MANUAL repeat press on an identical page (2.1.2): reuse
+                // the page and make sure it is the current one, or report it
+                // already is. A press must never be silent and never leave
+                // the selection where the user left it: when the page is
+                // identical but NOT selected, the edit PUT is skipped (the
+                // content is already right) and CompleteAsync still selects,
+                // prunes and verifies. Only identical AND already selected is
+                // a no-write success, marked Unchanged so the caller can say
+                // so honestly instead of claiming an import happened.
+                if (await IsCurrentPageAsync(target.Id, cancellationToken).ConfigureAwait(false))
+                {
+                    _ledger.Record(body.Name!, desiredFingerprint);
+                    return new ApplyRunesSuccess(true, true, [], true);
+                }
+                _ledger.Record(body.Name!, desiredFingerprint);
+                return await CompleteAsync(target.Id, body, cancellationToken).ConfigureAwait(false);
+            }
 
             var edit = await _lcu.SendAsync(
                 HttpMethod.Put,
@@ -229,6 +248,28 @@ public sealed class RuneApplyService
     }
 
     public void ClearForChampSelect() => _ledger.Clear();
+
+    /// <summary>
+    /// Whether the client's currently selected rune page is <paramref
+    /// name="pageId"/>. Best effort by construction: an unreadable current
+    /// page answers false and the caller re-applies rather than guesses.
+    /// Never throws.
+    /// </summary>
+    private async Task<bool> IsCurrentPageAsync(int pageId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var current = await _lcu.SendAsync(
+                HttpMethod.Get,
+                "/lol-perks/v1/currentpage",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            return current.Ok && TryReadId(current.Content, out var currentId) && currentId == pageId;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     public static string Fingerprint(int primaryStyleId, int subStyleId, IEnumerable<int> selectedPerkIds) =>
         $"{primaryStyleId}|{subStyleId}|{string.Join(',', selectedPerkIds)}";

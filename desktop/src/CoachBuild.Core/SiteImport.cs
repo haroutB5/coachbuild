@@ -963,9 +963,24 @@ public static class SiteImportApplier
                 $"runes not applied ({runeFailure.Hint ?? runeFailure.Reason}) -- nothing was imported");
 
         var who = SiteImportValidator.ChampionLabel(championName, payload.Role);
+        // 2.1.2: a repeat press on an identical, already-selected page is a
+        // no-write success (RuneApplyService marks it Unchanged). Say so
+        // honestly instead of claiming an import happened -- and, just as
+        // importantly, say SOMETHING: no press may end without a status line.
+        if (runeResult is ApplyRunesSuccess alreadyCurrent && alreadyCurrent.Unchanged == true)
+            return new SiteImportSuccess(
+                AlreadyCurrentMessage(championName, payload.Role, payload.Source));
         return new SiteImportSuccess(
             $"Imported runes for {who} from {SiteImportValidator.Label(payload.Source)}");
     }
+
+    /// <summary>
+    /// The wording of the already-current success, for tests that pin the
+    /// exact status line without driving the LCU.
+    /// </summary>
+    public static string AlreadyCurrentMessage(string championName, string? role, SiteImportSource source) =>
+        $"Runes already current for {SiteImportValidator.ChampionLabel(championName, role)} " +
+        $"from {SiteImportValidator.Label(source)}";
 
     /// <summary>
     /// The automatic import's write: every contribution's item set in ONE

@@ -1,5 +1,101 @@
 # Changelog
 
+## Desktop 2.1.2 — polish: never-silent runes, instalock-proof item sets, no orphans (2026-09-09)
+
+Three findings from live pass 3 and the fan-cleanup session. Evidence:
+`%LOCALAPPDATA%\CoachBuild\companion.log` (2026-09-08/09 sessions) and the
+pass-3 report themes. Every fix below is pinned by the failure it answers.
+
+### A runes-button press always ends with a status line
+
+Live evidence (pass 3, 00:02:45): with the client's current page switched
+away, pressing the Coachless "Import runes" button produced ZERO log lines
+and no page change; two other presses produced only a bare `runes: settled`
+re-read. Two silent shapes shared one cause: the click handler's guards
+returned without touching the status line (a second press during the ~8s
+settle fetch; a tab that moved off its page between paint and click), and a
+repeat press that changed nothing had no honest wording to begin with.
+
+- Every guard in `RunRunesImportAsync` now sets the status: "Import already
+  running -- try again in a moment" for the double-press, "Open a u.gg or
+  Coachless champion page to import its runes." when the tab moved, "Import
+  is unavailable in this window." with no host. The only press that stays
+  silent is one into a window that is already gone. The verdict is also
+  logged (`runes: ...`) so the next live pass can tell "never ran" from
+  "ran silently".
+- A manual repeat press re-applies: reuse the identical page AND select it
+  as current. The redundant edit PUT is skipped but the select is not, so
+  the status honestly claims `Imported runes for {Champ} ...`. Only
+  identical AND already selected is a no-write success, marked `Unchanged`
+  through `ApplyRunesSuccess` and worded `Runes already current for {Champ}
+  ...`. Both buttons (u.gg + Coachless) share the host path, so both gain
+  this; the automatic runes leg inherits the honest wording too.
+- Pinned by: two Core tests (unchanged-without-writes, reselect-without-
+  edit), two host tests (the exact status strings, zero-write call counts),
+  one auto-import test (the leg logs already-current, items still flush).
+
+### Instalock no longer loses item sets
+
+Live evidence (23:34:45): locking immediately ends practice champ select in
+~10s; `apply-itemsets: count=N` only flushed at champ-select exit and the
+window teardown aborted the in-flight Coachless leg (`the window closed
+during the import`) -- only the u.gg set landed. Real instalockers hit
+this. Both halves fixed:
+
+- **Flush per site.** Each site's set is written as soon as ITS extraction
+  completes; the batch still merges whatever is ready (fresh payload plus
+  the other site's cached set), so a later-completing site's second write
+  carries the earlier one and the two per-site titles coexist exactly as
+  before. A lock run is now two PUTs (first: u.gg alone; second: both),
+  and a stalled Coachless leg cannot take an extracted u.gg set with it.
+- **The game-start teardown lingers instead of aborting.**
+  `CloseForGameStart` hides the window now (visible cost gone, no new runs,
+  idle sweep stood down) but lets an in-flight run finish -- bounded by its
+  existing timeouts, backstopped at 120 s -- and write before the workers
+  are disposed; the flight's own worker-release continuation closes the
+  window when it lands. Hiding rather than disposing tab browsers is
+  deliberate: an in-flight fetch may be reading through a background tab's
+  core, so disposing tabs would abort exactly the run the linger exists to
+  save. A hidden tree costs seconds of residency, not the 728 MB the
+  teardown exists to kill.
+- **Champ-select END is distinguished from game start.** Leaving
+  ChampSelect for None/Lobby (a dodge) cancels the in-flight run via a
+  window-owned token the snapshot ticks carry; whatever it already flushed
+  stands, but the debounce rolls back to the run's start so the next lock
+  re-evaluates from scratch instead of trusting a half-run. Cancellation
+  passes through fetch, flush and runes-leg awaits to one quiet
+  `auto-import: run cancelled` line -- never the "unexpected failure" path.
+- Pinned by: per-site flush order/carry, the stalled-site instalock shape,
+  mid-run cancel (write stands, debounce rolled back, next tick refetches
+  both), and never-started cancel (touches nothing).
+
+### Worker process trees die with the app
+
+Fan-cleanup evidence (2026-09-09 ~01:50): 34 orphaned msedgewebview2
+processes (~2.3GB) on the CoachBuild ugg profile survived force-kills of
+the app during QA -- force-termination skips every managed disposal path,
+so only the kernel can still reap the tree. `Program.Main` now assigns the
+process to a Windows Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+before anything else spawns, so the last handle close (which a dead
+process performs unconditionally) terminates every process still in the
+job. The handle is intentionally never closed; the call never throws and
+degrades to the existing disposal paths.
+
+- Residual gap, stated plainly: WebView2 launches its tree through its own
+  Edge loader, which this app cannot flag -- so containment is OBSERVED,
+  not assumed. The first initialized browser tree logs one
+  `webview2 job: N/M browser processes in the app job` census per process
+  lifetime (read-only PID queries; a short count names the loader escaping
+  the job). Deliberately no PID hunting: killing by executable name risks
+  reaping the user's own Edge, which is worse than an orphan. The kernel
+  kill switch covers what the job contains; orphans outside it remain
+  possible and now measurable.
+- Pinned by: a test asserting the assignment and re-querying the flag off
+  the OS on the own process (not re-reading a field), plus PID
+  membership for the current process. Live-verify: force-kill the app
+  mid-import and confirm no msedgewebview2 on the CoachBuild profiles
+  survives, and read the `webview2 job:` line (expect N/N).
+
 ## Desktop 2.1.1 — the Jhin champ select (2026-09-09)
 
 One real champ select on 2.1.0 (Jhin, ADC, 2026-09-08 22:37) failed all three

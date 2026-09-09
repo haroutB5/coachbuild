@@ -73,6 +73,14 @@ public sealed class SiteAutoImportTests
 
         public bool ThrowOnPut { get; set; }
 
+        /// <summary>
+        /// The <c>/lol-perks/v1/pages</c> answer. Empty by default (the
+        /// create path); a test pins the already-selected page here to drive
+        /// the already-current wording. The current-page answer stays id
+        /// 9001, so that test's page carries id 9001.
+        /// </summary>
+        public string PagesJson { get; set; } = "[]";
+
         public Task<LcuResponse> SendAsync(
             HttpMethod method, string path, object? body = null,
             CancellationToken cancellationToken = default)
@@ -89,7 +97,7 @@ public sealed class SiteAutoImportTests
             // Rune endpoints, for the 2.1.0 Coachless runes leg. An empty
             // page list plus room in the inventory is the create path.
             if (method == HttpMethod.Get && path == "/lol-perks/v1/pages")
-                return Task.FromResult(Ok("[]"));
+                return Task.FromResult(Ok(PagesJson));
             if (method == HttpMethod.Get && path == "/lol-perks/v1/inventory")
                 return Task.FromResult(Ok("{\"ownedPageCount\":5,\"canAddCustomPage\":true}"));
             if (method == HttpMethod.Post && path == "/lol-perks/v1/pages")
@@ -171,6 +179,15 @@ public sealed class SiteAutoImportTests
     private static JsonElement PutSets(StubLcu api)
     {
         var put = Assert.Single(api.Calls, call =>
+            call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal));
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(put.Body, JsonOptions.Wire));
+        return document.RootElement.GetProperty("itemSets").Clone();
+    }
+
+    /// <summary>The sets carried by the LAST item-set PUT, for runs that flush more than once.</summary>
+    private static JsonElement LastPutSets(StubLcu api)
+    {
+        var put = api.Calls.Last(call =>
             call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal));
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(put.Body, JsonOptions.Wire));
         return document.RootElement.GetProperty("itemSets").Clone();
@@ -446,8 +463,17 @@ public sealed class SiteAutoImportTests
 
     // -- Service: the lock run --------------------------------------------------
 
+    /// <summary>
+    /// 2.1.2: each site's set is flushed as soon as ITS extraction
+    /// completes -- two PUTs, not one. A practice-tool instalock ends champ
+    /// select ~10s after the lock while the Coachless walk is still in
+    /// flight; the old end-of-run write lost the u.gg set that had been
+    /// sitting fetched for seconds. The second write still carries the first
+    /// (the cached-set carry), so the two per-site titles coexist exactly as
+    /// the old single write arranged.
+    /// </summary>
     [Fact]
-    public async Task Lock_run_writes_both_item_sets_in_one_put_without_rune_calls()
+    public async Task Lock_run_flushes_each_site_as_its_extraction_completes_without_rune_calls()
     {
         var api = new StubLcu();
         var executor = new FakeExecutor
@@ -463,16 +489,30 @@ public sealed class SiteAutoImportTests
         // deep links, once each.
         Assert.Equal(
             [$"worker:{CompanionTab.UGg}:{AhriUggDeepLink}",
-             $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}"],
+              $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}"],
             executor.Calls);
-        // One merged PUT carrying both per-site titles; the rune endpoints
-        // see nothing even though the u.gg payload is rune-capable in shape.
-        var sets = PutSets(api);
+        // Two merged PUTs: the first carries only u.gg (Coachless had not
+        // completed yet), the second carries both. The rune endpoints see
+        // nothing even though the u.gg payload is rune-capable in shape.
+        var puts = api.Calls.Where(call =>
+            call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, puts.Count);
+        using var first = JsonDocument.Parse(JsonSerializer.Serialize(puts[0].Body, JsonOptions.Wire));
+        var firstSets = first.RootElement.GetProperty("itemSets");
+        Assert.Equal("CoachBuild import: Ahri Mid (u.gg)", Assert.Single(firstSets.EnumerateArray()).GetProperty("title").GetString());
+        using var second = JsonDocument.Parse(JsonSerializer.Serialize(puts[1].Body, JsonOptions.Wire));
+        var sets = second.RootElement.GetProperty("itemSets");
         Assert.Equal(2, sets.GetArrayLength());
-        Assert.Equal("CoachBuild import: Ahri Mid (u.gg)", sets[0].GetProperty("title").GetString());
-        Assert.Equal("CoachBuild import: Ahri Mid (Coachless)", sets[1].GetProperty("title").GetString());
+        // Fresh first, cached carried after: the ORDER differs from the old
+        // single write, so both titles are asserted as a set.
+        Assert.Equal(
+            ["CoachBuild import: Ahri Mid (Coachless)", "CoachBuild import: Ahri Mid (u.gg)"],
+            sets.EnumerateArray().Select(set => set.GetProperty("title").GetString()).OrderBy(title => title));
         Assert.DoesNotContain(api.Calls, call => call.Path.Contains("perks", StringComparison.Ordinal));
-        Assert.Equal(2, sink.Statuses.Count);
+        // Three verdicts for two writes: the second PUT re-batches the
+        // carried u.gg set, and each contribution reports its own write.
+        // Every line answers a real LCU PUT, so none is suppressed.
+        Assert.Equal(3, sink.Statuses.Count);
         Assert.All(sink.Statuses, status => Assert.Contains("Auto-imported", status, StringComparison.Ordinal));
 
         // Debounced: the same tick again moves nothing.
@@ -481,6 +521,123 @@ public sealed class SiteAutoImportTests
         await service.OnSnapshotAsync(LockedAhri());
         Assert.Equal(calls, executor.Calls.Count);
         Assert.Equal(lcu, api.Calls.Count);
+    }
+
+    /// <summary>
+    /// The instalock shape (live pass 3, 23:34:45): the Coachless leg never
+    /// finishes, and the first site's ALREADY-EXTRACTED set must still land.
+    /// </summary>
+    [Fact]
+    public async Task A_site_that_stalls_does_not_cost_the_site_that_finished()
+    {
+        var api = new StubLcu();
+        var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg
+                ? AhriUggJson
+                : gate.Task.GetAwaiter().GetResult(),
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink);
+
+        var run = Task.Run(() => service.OnSnapshotAsync(LockedAhri()));
+        // Wait until the u.gg flush has landed while Coachless is still
+        // parked in its fetch.
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!api.Calls.Any(call =>
+                call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal)) &&
+            DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        var puts = api.Calls.Where(call =>
+            call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal)).ToList();
+        var only = Assert.Single(puts);
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(only.Body, JsonOptions.Wire));
+        var sets = document.RootElement.GetProperty("itemSets");
+        Assert.Equal("CoachBuild import: Ahri Mid (u.gg)", Assert.Single(sets.EnumerateArray()).GetProperty("title").GetString());
+        Assert.Contains(sink.Statuses, status =>
+            status.Contains("Auto-imported", StringComparison.Ordinal) &&
+            status.Contains("u.gg", StringComparison.Ordinal));
+
+        // Let the run finish normally: the second write carries both.
+        gate.SetResult(AhriCoachlessJson);
+        await run;
+        var all = api.Calls.Where(call =>
+            call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, all.Count);
+    }
+
+    /// <summary>
+    /// Champ-select-end cancellation (a dodge: the phase leaves ChampSelect
+    /// for None/Lobby) rolls the run's debounce state back. The write that
+    /// already landed stands -- a client write cannot be unwound -- but the
+    /// half-run counts as never attempted, so the next lock re-evaluates
+    /// from scratch instead of trusting it.
+    /// </summary>
+    [Fact]
+    public async Task Cancelling_mid_run_keeps_the_write_but_rolls_back_the_debounce()
+    {
+        var api = new StubLcu();
+        var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg
+                ? AhriUggJson
+                : gate.Task.GetAwaiter().GetResult(),
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink);
+        using var cts = new CancellationTokenSource();
+
+        var run = Task.Run(() => service.OnSnapshotAsync(LockedAhri(), cts.Token));
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!api.Calls.Any(call =>
+                call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal)) &&
+            DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        Assert.Single(api.Calls, call =>
+            call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal));
+
+        // Champ select ends mid-walk: cancel, then release the parked fetch
+        // so the run can observe the cancel.
+        cts.Cancel();
+        gate.SetResult(AhriCoachlessJson);
+        await run;
+
+        // The u.gg write stood, Coachless never flushed, and the cancel was
+        // said out loud rather than reported as an unexpected failure.
+        Assert.Single(api.Calls, call =>
+            call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal));
+        Assert.Contains(sink.Logs, line => line.Contains("cancelled", StringComparison.Ordinal));
+        Assert.DoesNotContain(sink.Logs, line => line.Contains("unexpected failure", StringComparison.Ordinal));
+        // Rolled back: the key advancement the first flush committed is
+        // gone, so the next identical tick re-fetches BOTH sites.
+        Assert.Null(service.State.ChampionId);
+        await service.OnSnapshotAsync(LockedAhri());
+        Assert.Equal(4, executor.Calls.Count);
+    }
+
+    /// <summary>
+    /// A run that never starts (already-cancelled token, nothing fetched)
+    /// writes nothing, advances nothing, and says exactly one quiet line.
+    /// </summary>
+    [Fact]
+    public async Task A_cancelled_run_that_never_started_touches_nothing()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor { Worker = (_, _) => AhriUggJson };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await service.OnSnapshotAsync(LockedAhri(), cts.Token);
+
+        Assert.Empty(executor.Calls);
+        Assert.Empty(api.Calls);
+        Assert.Empty(sink.Statuses);
+        Assert.Single(sink.Logs, line => line.Contains("cancelled", StringComparison.Ordinal));
+        Assert.Null(service.State.ChampionId);
     }
 
     /// <summary>
@@ -635,14 +792,50 @@ public sealed class SiteAutoImportTests
         Assert.Contains(sink.Logs, line =>
             line.Contains("no rune build", StringComparison.Ordinal) &&
             line.Contains("primary rune row 2", StringComparison.Ordinal));
-        // The items still landed.
-        Assert.Equal(2, PutSets(api).GetArrayLength());
+        // The items still landed (both per-site flushes; the last carries both).
+        Assert.Equal(2, LastPutSets(api).GetArrayLength());
+    }
+
+    /// <summary>
+    /// 2.1.2: a runes page that is identical AND already selected is an
+    /// honest already-current, not a claimed import -- and, crucially, it
+    /// still says something. The stub's current page is id 9001, so the
+    /// pinned page carries it.
+    /// </summary>
+    [Fact]
+    public async Task An_identical_selected_runes_page_is_reported_already_current()
+    {
+        var api = new StubLcu
+        {
+            PagesJson = """
+                [{"id":9001,"name":"CoachBuild import: Ahri Mid (Coachless)","isDeletable":true,
+                  "primaryStyleId":8200,"subStyleId":8000,
+                  "selectedPerkIds":[8214,8226,8210,8237,9111,9105,5008,5008,5011],"current":true}]
+                """,
+        };
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        // No write at all on the rune endpoints: no edit, no create, no
+        // re-select of an already-selected page.
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Method != HttpMethod.Get && call.Path.Contains("perks", StringComparison.Ordinal));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("Runes already current for Ahri (Mid)", StringComparison.Ordinal));
+        // The items still landed through the per-site flushes.
+        Assert.Equal(2, LastPutSets(api).GetArrayLength());
     }
 
     [Fact]
     public async Task A_runes_page_for_another_champion_is_ignored()
-    {
-        var api = new StubLcu();
+    {        var api = new StubLcu();
         var executor = new FakeExecutor
         {
             Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
@@ -736,8 +929,10 @@ public sealed class SiteAutoImportTests
         // refresh plus the cached Coachless set.
         var puts = api.Calls.Where(call =>
             call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal)).ToList();
-        Assert.Equal(2, puts.Count);
-        using var document = JsonDocument.Parse(JsonSerializer.Serialize(puts[1].Body, JsonOptions.Wire));
+        // 2.1.2: the lock run itself flushes twice (one site at a time),
+        // so the refresh is the third PUT.
+        Assert.Equal(3, puts.Count);
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(puts[2].Body, JsonOptions.Wire));
         var sets = document.RootElement.GetProperty("itemSets");
         Assert.Equal(2, sets.GetArrayLength());
         Assert.Equal("6653", sets[0].GetProperty("blocks")[0].GetProperty("items")[0].GetProperty("id").GetString());

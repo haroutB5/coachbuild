@@ -121,6 +121,21 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     private readonly Dictionary<CompanionTab, DateTimeOffset> _lastVisible = new();
     /// <summary>Hidden worker webviews for the auto-import, one per site at most. Never shown, never selected.</summary>
     private readonly Dictionary<CompanionTab, BrowserTabState> _workers = new();
+    /// <summary>
+    /// The auto-import's run token (2.1.2). Champ-select END swaps this for a
+    /// fresh source (cancelling whatever run holds the old one); the
+    /// game-start linger deliberately does NOT cancel it. Never disposed:
+    /// an in-flight run may still be observing the old token after a swap,
+    /// and a disposed source turns its ThrowIfCancellationRequested into an
+    /// ObjectDisposedException instead of an OperationCanceledException.
+    /// </summary>
+    private CancellationTokenSource _autoImportCts = new();
+    /// <summary>
+    /// True once the game-start teardown has hidden the window while an
+    /// import run is still in flight (2.1.2). New runs are refused; the
+    /// in-flight one finishes and writes, then the window closes.
+    /// </summary>
+    private bool _gameStartLinger;
     private string? _activeUpdateHint;
     private string? _paintedUpdateHint;
     private ReopenTarget _lastTarget = new(ReopenDestination.Home);
@@ -679,6 +694,10 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             state.Initialized = true;
             state.IsLoading = false;
             state.Error = null;
+            // One containment census per process lifetime (2.1.2): the job
+            // in Program.Main is only proven by Edge's children landing in
+            // it, and this is the first moment a browser tree exists to ask.
+            ReportJobContainmentOnce(state.Environment);
             if (_disposed)
             {
                 RemoveFailedBrowser(state);
@@ -711,6 +730,58 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             return false;
         }
     }
+
+    /// <summary>
+    /// The job-containment census (2.1.2): asks the first initialized
+    /// browser tree how many of its processes landed in the app job and logs
+    /// the count once. Read-only — a short count documents the loader
+    /// escaping the job (see <see cref="ProcessJobObject"/>) and never kills
+    /// anything. Fire-and-forget off the dispatcher; never throws.
+    /// </summary>
+    private void ReportJobContainmentOnce(CoreWebView2Environment? environment)
+    {
+        if (environment is null) return;
+        if (Interlocked.Exchange(ref _jobContainmentReported, 1) == 1) return;
+        // The snapshot is taken on the dispatcher: WebView2 objects are
+        // thread-affine. Only the PID membership probes (plain P/Invoke)
+        // run on the pool thread.
+        IList<CoreWebView2ProcessInfo> snapshot;
+        try
+        {
+            snapshot = environment.GetProcessInfos().ToList();
+        }
+        catch (Exception error)
+        {
+            LogLifecycle($"webview2 job: process census unavailable ({error.Message})");
+            return;
+        }
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var total = 0;
+                var inJob = 0;
+                foreach (var info in snapshot)
+                {
+                    if (info is null) continue;
+                    total++;
+                    try
+                    {
+                        if (ProcessJobObject.IsProcessInAppJob(info.ProcessId)) inJob++;
+                    }
+                    catch
+                    {
+                    }
+                }
+                LogLifecycle($"webview2 job: {inJob}/{total} browser processes in the app job");
+            }
+            catch
+            {
+            }
+        });
+    }
+
+    private static int _jobContainmentReported;
 
     private void ConfigureBrowser(BrowserTabState state)
     {
@@ -1111,23 +1182,54 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     /// automatic import). Never navigates, never reloads; every outcome
     /// (including an unexpected exception) lands on the status line and
     /// writes nothing partial.
+    ///
+    /// <para>2.1.2: NO press ends without a visible status change. The live
+    /// pass-3 fault was a Coachless press that left zero log lines and no
+    /// page change: the guards below used to return silently (a second press
+    /// during the settle fetch, a tab that moved off its page between paint
+    /// and click), and a repeat press that changed nothing had no honest
+    /// wording. Every guard now sets the status, and the host answers an
+    /// identical, already-selected page with "Runes already current".</para>
     /// </summary>
     private async Task RunRunesImportAsync()
     {
-        if (_disposed || _importRunning) return;
+        // The window going away is the one press that cannot be answered: no
+        // status line exists to write it on.
+        if (_disposed) return;
+        if (_importRunning)
+        {
+            // A second press while the first is still settling used to die
+            // here silently; the in-flight press's settle line was the only
+            // trace either press left.
+            SetStatus("Import already running -- try again in a moment");
+            return;
+        }
         var site = ActiveTab;
         // Belt and braces behind the hidden button: only the two sites that
         // have a rune page to read. Anything else has nothing to import.
-        if (site is not (CompanionTab.UGg or CompanionTab.Coachless)) return;
+        if (site is not (CompanionTab.UGg or CompanionTab.Coachless))
+        {
+            SetStatus("Open a u.gg or Coachless champion page to import its runes.");
+            return;
+        }
         var state = GetState(site);
         // Without a host or a live site browser there is nothing to read.
-        if (state?.Core is null || _siteImport is null) return;
+        if (state?.Core is null || _siteImport is null)
+        {
+            SetStatus("Import is unavailable in this window.");
+            return;
+        }
         // The SAME predicate the button's visibility uses, re-evaluated here
         // because the tab may have navigated between the paint and the click.
+        // That race used to be a silent return; it now says where to go.
         var coachlessRunes = site == CompanionTab.Coachless
             ? SiteDeepLink.CoachlessRunesUrlForPage(state.Core.Source)
             : null;
-        if (site == CompanionTab.Coachless && coachlessRunes is null) return;
+        if (site == CompanionTab.Coachless && coachlessRunes is null)
+        {
+            SetStatus("Open a Coachless champion page to import its runes.");
+            return;
+        }
 
         _importRunning = true;
         UpdateOfferBar();
@@ -1151,18 +1253,27 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             if (_disposed) return;
             var result = await _siteImport.ImportRunesAsync(raw, _shutdownToken).ConfigureAwait(true);
             if (_disposed) return;
+            // The verdict, on BOTH surfaces: the status line the fix promises
+            // and the tray log the next live pass reads.
+            LogLifecycle($"runes: {result.Message}");
             SetStatus(result.Message);
         }
         catch (Exception error)
         {
             // The script surface carries no secrets (no token, no
             // credentials), so naming the failure is safe and debuggable.
-            if (!_disposed) SetStatus($"Import failed ({error.Message}) -- nothing was imported");
+            if (!_disposed)
+            {
+                var message = $"Import failed ({error.Message}) -- nothing was imported";
+                LogLifecycle($"runes: {message}");
+                SetStatus(message);
+            }
         }
         finally
         {
             _importRunning = false;
             if (!_disposed) UpdateOfferBar();
+            CloseIfLingeringAndIdle();
         }
     }
 
@@ -1346,10 +1457,16 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     /// inside the service flight, through the allowlisted worker path
     /// below), never changes the selected tab, and never blocks the tick:
     /// the service single-flights and never throws.
+    ///
+    /// <para>2.1.2: refused outright while the game-start linger owns the
+    /// window (no new runs beside a live game), and the offered snapshot
+    /// carries the run token champ-select END may cancel. The idle sweep
+    /// also stands down during the linger: it must not dispose a background
+    /// tab core the in-flight fetch is reading through.</para>
     /// </summary>
     public void NotifySnapshotForAutoImport(ChampSelectContext? context, bool lcuConnected)
     {
-        if (_disposed) return;
+        if (_disposed || _gameStartLinger) return;
         if (!Dispatcher.CheckAccess())
         {
             Dispatcher.BeginInvoke(
@@ -1369,8 +1486,131 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (auto is null) return;
 
         var input = AutoImportInput.FromContext(context, ActiveTab, CurrentUrl, lcuConnected);
-        // Fire-and-forget by construction (see the service contract).
-        _ = auto.OnSnapshotAsync(input, CancellationToken.None);
+        // Fire-and-forget by construction (see the service contract). The
+        // token is champ-select END's cancel handle: leaving ChampSelect for
+        // None/Lobby aborts this flight and rolls its debounce back, while
+        // the game-start path lets it finish (see CloseForGameStart).
+        var token = _autoImportCts.Token;
+        _ = auto.OnSnapshotAsync(input, token);
+    }
+
+    /// <summary>
+    /// Cancels the in-flight auto-import run, if any, because champ select
+    /// ended WITHOUT a game (None/Lobby — a dodge, 2.1.2). Its results no
+    /// longer matter, and the service rolls the run's debounce state back so
+    /// the next lock re-evaluates from scratch. Thread-safe; the swap hands
+    /// later ticks a fresh token, so only the run holding the old one
+    /// observes the cancel. The game-start teardown must NOT call this: its
+    /// runs finish and write first (see <see cref="CloseForGameStart"/>).
+    /// </summary>
+    public void CancelAutoImportForChampSelectEnd()
+    {
+        var previous = Interlocked.Exchange(ref _autoImportCts, new CancellationTokenSource());
+        try
+        {
+            previous.Cancel();
+        }
+        catch
+        {
+            // Cancellation never fails a caller: a run that already finished
+            // simply has nothing to observe.
+        }
+    }
+
+    /// <summary>
+    /// How long a hidden window may outlive the game-start teardown waiting
+    /// for its in-flight import run. A backstop, not a target: every await
+    /// in the worker paths is already bounded (30 s navigation waits, ~5 s
+    /// per Coachless slot, the 8 s runes settle), so a healthy run finishes
+    /// well inside this and the linger closes with it. Past it the window
+    /// closes anyway and the parked flight aborts on the teardown.
+    /// </summary>
+    private static readonly TimeSpan GameStartLingerTimeout = TimeSpan.FromSeconds(120);
+
+    /// <summary>
+    /// The game-start teardown (2.1.2). The old shape closed the window
+    /// synchronously, and the teardown's disposed flag aborted the
+    /// in-flight Coachless walk mid-run ("the window closed during the
+    /// import") — taking the u.gg set the run had ALREADY extracted with
+    /// it, before the per-site flush existed to have saved it.
+    ///
+    /// <para>This closes the window's VISIBLE cost now (the window hides, no
+    /// new runs start, idle tabs are stood down) but lets an in-flight
+    /// import flight finish its current run — bounded by its existing
+    /// timeouts — and write before the workers are disposed. The flight's
+    /// own worker-release continuation closes the window when it lands
+    /// (see <see cref="ReleaseImportWorkersOnUi"/>); the backstop above
+    /// closes it if the flight ever hangs. With no run in flight this is
+    /// the old immediate close.</para>
+    /// </summary>
+    public void CloseForGameStart()
+    {
+        if (_disposed || _browserDisposed) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(CloseForGameStart));
+            return;
+        }
+        if (_disposed || _browserDisposed) return;
+        if (!IsAutoImportRunning && !_importRunning)
+        {
+            Close();
+            return;
+        }
+        _gameStartLinger = true;
+        LogLifecycle("window: hiding for the game; an in-flight import finishes first (game-start linger)");
+        try
+        {
+            Hide();
+        }
+        catch
+        {
+        }
+        _ = LingerBackstopAsync();
+    }
+
+    /// <summary>True while the auto-import holds its single flight.</summary>
+    private bool IsAutoImportRunning => _autoImport?.IsRunning == true;
+
+    /// <summary>
+    /// Closes the lingering window once nothing it waited for is still
+    /// running. Reached from the worker-release continuation (the flight is
+    /// done) and from the manual runes press (the click is done).
+    /// </summary>
+    private void CloseIfLingeringAndIdle()
+    {
+        if (!_gameStartLinger || _disposed) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(CloseIfLingeringAndIdle));
+            return;
+        }
+        if (!_gameStartLinger || _disposed) return;
+        if (IsAutoImportRunning || _importRunning) return;
+        Close();
+    }
+
+    /// <summary>
+    /// The linger backstop: a parked flight must never keep a hidden browser
+    /// beside the game forever. Plain awaited delay, not a timer (the window
+    /// owns no timer — see the compliance pin).
+    /// </summary>
+    private async Task LingerBackstopAsync()
+    {
+        try
+        {
+            await Task.Delay(GameStartLingerTimeout).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+        try
+        {
+            _ = Dispatcher.BeginInvoke(new Action(CloseIfLingeringAndIdle));
+        }
+        catch
+        {
+        }
     }
 
     /// <summary>
@@ -1871,6 +2111,9 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         _workers.Clear();
         foreach (var site in released)
             LogLifecycle($"tabs: released the {CompanionTabs.LabelFor(site)} import worker after its run");
+        // The game-start linger's promise: the flight this release belongs
+        // to has finished and written, so the hidden window may now close.
+        CloseIfLingeringAndIdle();
     }
 
     /// <summary>
@@ -2414,6 +2657,16 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     private void OnClosed(object? sender, EventArgs e)
     {
         _disposed = true;
+        // Unpark any import flight still awaiting the page: its delays abort
+        // promptly instead of outliving the window. (The source is swapped,
+        // never disposed -- see the field.)
+        try
+        {
+            _autoImportCts.Cancel();
+        }
+        catch
+        {
+        }
         Fallback.RepairRequested -= OnRepairRequested;
         DisposeBrowser();
     }

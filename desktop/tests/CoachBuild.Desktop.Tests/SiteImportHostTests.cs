@@ -220,6 +220,68 @@ public sealed class SiteImportHostTests
         Assert.Empty(api.Calls);
     }
 
+    /// <summary>
+    /// 2.1.2: a repeat press on an identical, already-selected page is a
+    /// no-write success with honest wording -- never a silent press and
+    /// never a claimed import.
+    /// </summary>
+    [Fact]
+    public async Task Runes_button_repeat_press_on_the_current_page_reports_already_current()
+    {
+        const string title = "CoachBuild import: Jhin ADC (u.gg)";
+        const string perks = "[8021,9111,9104,8014,8233,8237,5005,5008,5011]";
+        var api = new StubLcuApi();
+        api.Enqueue(Ok(
+            "[{\"id\":7,\"name\":\"" + title + "\",\"isDeletable\":true,\"primaryStyleId\":8000," +
+            "\"subStyleId\":8200,\"selectedPerkIds\":" + perks + ",\"current\":true}]"));
+        api.Enqueue(Ok("{\"id\":7}"));
+
+        var result = await ConnectedHost(api).ImportRunesAsync(JhinUggJson);
+
+        var success = Assert.IsType<SiteImportSuccess>(result);
+        Assert.Equal("Runes already current for Jhin (ADC) from u.gg", success.Message);
+        // Two reads, zero writes on either half.
+        Assert.Equal(2, api.Calls.Count);
+        Assert.DoesNotContain(api.Calls,
+            call => call.Method != HttpMethod.Get);
+        Assert.DoesNotContain(api.Calls,
+            call => call.Path.Contains("item-sets", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 2.1.2: a repeat press on an identical but DESELECTED page reuses it
+    /// and selects it as current -- the edit PUT is skipped (the content is
+    /// already right) but the select is not, and the status claims an
+    /// import because the selection changed.
+    /// </summary>
+    [Fact]
+    public async Task Runes_button_repeat_press_on_a_deselected_page_reselects_it()
+    {
+        const string title = "CoachBuild import: Jhin ADC (u.gg)";
+        const string perks = "[8021,9111,9104,8014,8233,8237,5005,5008,5011]";
+        var page = "[{\"id\":7,\"name\":\"" + title + "\",\"isDeletable\":true,\"primaryStyleId\":8000," +
+            "\"subStyleId\":8200,\"selectedPerkIds\":" + perks + ",\"current\":false}]";
+        var api = new StubLcuApi();
+        api.Enqueue(Ok(page));
+        api.Enqueue(Ok("{\"id\":9}"));
+        api.Enqueue(Ok("7"));
+        api.Enqueue(Ok(page));
+        api.Enqueue(Ok(
+            "{\"id\":7,\"name\":\"" + title + "\",\"isDeletable\":true,\"primaryStyleId\":8000," +
+            "\"subStyleId\":8200,\"selectedPerkIds\":" + perks + ",\"current\":true}"));
+
+        var result = await ConnectedHost(api).ImportRunesAsync(JhinUggJson);
+
+        var success = Assert.IsType<SiteImportSuccess>(result);
+        Assert.Equal("Imported runes for Jhin (ADC) from u.gg", success.Message);
+        // Selected, never re-edited.
+        Assert.Contains(api.Calls, call =>
+            call.Method == HttpMethod.Put && call.Path == "/lol-perks/v1/currentpage");
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Method == HttpMethod.Put && call.Path.StartsWith("/lol-perks/v1/pages/", StringComparison.Ordinal));
+        Assert.DoesNotContain(api.Calls, call => call.Method == HttpMethod.Post);
+    }
+
     private static LcuResponse Ok(string raw)
     {
         using var document = JsonDocument.Parse(raw);

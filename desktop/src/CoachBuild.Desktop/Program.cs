@@ -9,6 +9,13 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // FIRST, before Velopack or any window: orphan containment (2.1.2).
+        // The job must own the process before its first child is spawned so
+        // the WebView2 tree inherits it; best effort and never throwing, so
+        // a failure degrades to the pre-2.1.2 disposal paths, never to a
+        // failed launch. See ProcessJobObject for the mechanism and its
+        // honestly-documented residual gap.
+        ProcessJobObject.EnsureKillOnClose();
         VelopackApp.Build().Run();
         EnablePerMonitorDpiAwareness();
         var options = CommandLineOptions.Parse(args);

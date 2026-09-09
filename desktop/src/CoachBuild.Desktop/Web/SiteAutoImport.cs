@@ -462,6 +462,15 @@ public interface ISiteAutoImportSink
 /// executor seam, and writes every fetched item set in ONE batched
 /// item-set call so the two sites coexist in the client.
 ///
+/// <para>2.1.2: the write is per SITE, not per run. Each site's set is
+/// flushed as soon as ITS extraction completes (the batch still carries the
+/// other site's cached set, so a later-completing site's write re-batches
+/// whatever is ready). A practice-tool instalock ends champ select ~10s
+/// after the lock while the Coachless walk is still in flight; the old
+/// end-of-run write lost the u.gg set that had been sitting fetched for
+/// seconds. Fetch order is still u.gg then Coachless; only the write timing
+/// changed.</para>
+///
 /// <para>THREADING: evaluated and advanced only inside the single flight.
 /// The window calls <see cref="OnSnapshotAsync"/> from the dispatcher on
 /// every 750 ms tick and never awaits it; overlapping ticks return
@@ -472,7 +481,14 @@ public interface ISiteAutoImportSink
 /// split is also the concurrency split, so the two paths share no
 /// read-modify-write.</para>
 ///
-/// <para>Contract: never throws (a background import must not break the
+/// <para>CANCELLATION: the window owns the token. Champ-select END (the
+/// phase leaving ChampSelect for None/Lobby, e.g. a dodge) cancels the
+/// in-flight run: whatever it already flushed stands (a client write cannot
+/// be unwound), but the debounce state rolls back to the run's start so the
+/// next lock re-evaluates from scratch instead of trusting a half-run. The
+/// game-start teardown deliberately does NOT cancel — hidden workers finish
+/// their current run and write before disposing (see the window's linger).
+/// Contract: never throws (a background import must not break the
 /// snapshot tick); LCU absent means skip quietly with a log-once line;
 /// extraction failure means a quiet log plus a status-line note; runes are
 /// never written by this path (items-only batch).</para>
@@ -542,6 +558,9 @@ public sealed class SiteAutoImportService
     /// <summary>The committed debounce state, for tests.</summary>
     internal AutoImportState State => _state;
 
+    /// <summary>True while a run holds the single flight, for tests and for the window's linger.</summary>
+    internal bool IsRunning => Volatile.Read(ref _active) != 0;
+
     public async Task OnSnapshotAsync(AutoImportInput input, CancellationToken cancellationToken = default)
     {
         if (input is null) return;
@@ -550,6 +569,15 @@ public sealed class SiteAutoImportService
         try
         {
             await RunAsync(input, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Champ-select-end cancellation (see CancelAutoImportFor... on
+            // the window): the run's debounce state was already rolled back
+            // inside RunAsync, so this is only the line saying so. Whatever
+            // the run flushed before the cancel stands -- a client write
+            // cannot be unwound, and the next lock re-imports from scratch.
+            _sink.LogInfo("auto-import: run cancelled -- nothing further will be written");
         }
         catch (Exception error)
         {
@@ -599,10 +627,36 @@ public sealed class SiteAutoImportService
         if (input.ChampionId is not > 0 || string.IsNullOrWhiteSpace(input.ChampionName))
             return;
 
-        var outcomes = new List<AutoImportOutcome>();
-        var fresh = new List<SiteImportPayload>();
+        // The debounce state before this run: restored verbatim if the run
+        // is cancelled, so a half-run never counts as attempted.
+        var preRun = _state;
+        try
+        {
+            await RunFetchesAsync(fetch, input, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            _state = preRun;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The fetch loop: each site extracts, then ITS set is flushed before
+    /// the next site starts (2.1.2). The batch still merges whatever is
+    /// ready — the fresh payload plus the other site's cached set — so the
+    /// second write carries the first, and the two per-site titles still
+    /// coexist in the client exactly as the old single write arranged.
+    /// </summary>
+    private async Task RunFetchesAsync(
+        List<AutoImportSiteTarget> fetch,
+        AutoImportInput input,
+        CancellationToken cancellationToken)
+    {
+        var hadWritable = false;
         foreach (var planned in fetch)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var target = planned;
             var raw = await FetchTargetAsync(target, cancellationToken).ConfigureAwait(false);
             // SPA FALLBACK (2.1.1). An in-place read of the user's own visible
@@ -632,7 +686,7 @@ public sealed class SiteAutoImportService
                 var label = CompanionTabs.LabelFor(target.Site);
                 _sink.LogInfo($"auto-import: {label} extraction failed ({failure})");
                 _sink.StatusNote($"Auto-import from {label} failed ({failure})");
-                outcomes.Add(new AutoImportOutcome(target.Site, target.Url.ToString(), null));
+                CommitOutcome(input, new AutoImportOutcome(target.Site, target.Url.ToString(), null));
                 continue;
             }
             if (!PayloadMatchesContext(payload, input))
@@ -640,7 +694,7 @@ public sealed class SiteAutoImportService
                 _sink.LogInfo(
                     $"auto-import: {CompanionTabs.LabelFor(target.Site)} yielded \"{payload.ChampionSlug}\", " +
                     $"not the selected champion -- ignored");
-                outcomes.Add(new AutoImportOutcome(target.Site, target.Url.ToString(), null));
+                CommitOutcome(input, new AutoImportOutcome(target.Site, target.Url.ToString(), null));
                 continue;
             }
             // The extractor's own stage/slot notes, BEFORE the verdict line, so
@@ -651,47 +705,78 @@ public sealed class SiteAutoImportService
             {
                 _sink.LogInfo(
                     $"auto-import: {CompanionTabs.LabelFor(target.Site)} yielded no item build -- ignored");
-                outcomes.Add(new AutoImportOutcome(target.Site, target.Url.ToString(), null));
+                CommitOutcome(input, new AutoImportOutcome(target.Site, target.Url.ToString(), null));
                 continue;
             }
-            fresh.Add(payload);
-            outcomes.Add(new AutoImportOutcome(target.Site, target.Url.ToString(), payload));
+            // FLUSH NOW (2.1.2): this site's set lands before the next site
+            // even starts, so a teardown that aborts the rest of the run
+            // cannot take an already-extracted set with it. The batch still
+            // carries the cached other site, so contiguity is preserved.
+            cancellationToken.ThrowIfCancellationRequested();
+            hadWritable = true;
+            await FlushSiteAsync(payload, input, cancellationToken).ConfigureAwait(false);
+            CommitOutcome(input, new AutoImportOutcome(target.Site, target.Url.ToString(), payload));
         }
 
-        var batch = AutoImportCoordinator.BuildWriteBatch(
-            fresh, _state.CachedSets, input.ChampionId.Value, input.ChampionName);
-        if (batch.Count > 0)
-        {
-            // A write that THROWS (rather than returning a typed failure)
-            // still commits its outcomes below: without that, the debounce
-            // never advances and every 750 ms tick re-fetches both pages in
-            // a hot loop behind one flapping LCU call.
-            IReadOnlyList<SiteImportResult> results = [];
-            try
-            {
-                results = await SiteImportApplier.ApplyItemsBatchAsync(
-                    batch, _items, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception error)
-            {
-                _sink.LogInfo($"auto-import: item-set write failed ({error.Message})");
-                _sink.StatusNote($"Auto-import write failed ({error.Message})");
-            }
-            foreach (var result in results)
-            {
-                _sink.LogInfo($"auto-import: {result.Message}");
-                _sink.StatusNote(result.Message);
-            }
-        }
-        else
+        if (!hadWritable)
         {
             _sink.LogInfo("auto-import: nothing writable from this run -- nothing was imported");
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         await ImportCoachlessRunesAsync(fetch, input, cancellationToken).ConfigureAwait(false);
+    }
 
+    /// <summary>
+    /// Commits one site's outcome to the debounce state: records the
+    /// attempted URL (success or quiet failure — both re-arm only on
+    /// change) and caches a written set for later single-site batches.
+    /// </summary>
+    private void CommitOutcome(AutoImportInput input, AutoImportOutcome outcome)
+    {
+        if (input.ChampionId is not > 0) return;
         _state = AutoImportCoordinator.RecordCompleted(
-            _state, input.ChampionId.Value, input.RoleId, input.ChampionName, outcomes);
+            _state, input.ChampionId.Value, input.RoleId, input.ChampionName ?? string.Empty, [outcome]);
+    }
+
+    /// <summary>
+    /// Writes one site's fresh payload batched with whatever the other site
+    /// has cached. A write that THROWS (rather than returning a typed
+    /// failure) still commits its outcome at the call site: without that,
+    /// the debounce never advances and every 750 ms tick re-fetches both
+    /// pages in a hot loop behind one flapping LCU call. Cancellation passes
+    /// through unwritten.
+    /// </summary>
+    private async Task FlushSiteAsync(
+        SiteImportPayload payload,
+        AutoImportInput input,
+        CancellationToken cancellationToken)
+    {
+        if (input.ChampionId is not > 0 || string.IsNullOrWhiteSpace(input.ChampionName))
+            return;
+        var batch = AutoImportCoordinator.BuildWriteBatch(
+            [payload], _state.CachedSets, input.ChampionId.Value, input.ChampionName);
+        if (batch.Count == 0) return;
+        IReadOnlyList<SiteImportResult> results = [];
+        try
+        {
+            results = await SiteImportApplier.ApplyItemsBatchAsync(
+                batch, _items, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            _sink.LogInfo($"auto-import: item-set write failed ({error.Message})");
+            _sink.StatusNote($"Auto-import write failed ({error.Message})");
+        }
+        foreach (var result in results)
+        {
+            _sink.LogInfo($"auto-import: {result.Message}");
+            _sink.StatusNote(result.Message);
+        }
     }
 
     /// <summary>
@@ -734,6 +819,10 @@ public sealed class SiteAutoImportService
             raw = await _executor.FetchCoachlessRunesAsync(
                 url, input.ChampionKey, input.RoleId, cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception error)
         {
             _sink.LogInfo($"auto-import: Coachless runes fetch failed ({error.Message})");
@@ -761,6 +850,10 @@ public sealed class SiteAutoImportService
                 _runes, cancellationToken).ConfigureAwait(false);
             _sink.LogInfo($"auto-import: {result.Message}");
             _sink.StatusNote(result.Message);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception error)
         {
@@ -794,6 +887,13 @@ public sealed class SiteAutoImportService
                 : await _executor.FetchViaWorkerAsync(
                     target.Site, target.Url, target.ChampionKey, target.RoleId, cancellationToken)
                     .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Champ-select-end cancellation, not a fetch failure: it must
+            // reach OnSnapshotAsync (which rolls the debounce back), never
+            // the quiet-miss path below.
+            throw;
         }
         catch (Exception error)
         {
