@@ -63,13 +63,18 @@ public sealed class SiteImportExtractorTests
     {
         var read = SiteImportExtractors.CoachlessItemsTemplate;
 
-        Assert.Contains("var SLOT_ORDER = ['Starter', '1st Item', 'Boots', '2nd Item', '3rd Item', '4th+ Item'];", read, StringComparison.Ordinal);
+        Assert.Contains("var SLOT_PLAN = [", read, StringComparison.Ordinal);
+        Assert.Contains("{ title: '1st Item', source: '1st Item' }", read, StringComparison.Ordinal);
+        Assert.Contains("var lateSlots = /^(adc|bottom|bot|carry)$/.test(role) ? 3 : 2;", read, StringComparison.Ordinal);
+        Assert.Contains("SLOT_PLAN.push({ title: (late + 4) + 'th Item', source: '4th+ Item' });", read, StringComparison.Ordinal);
+        Assert.Contains("looked[e].title === plan.source", read, StringComparison.Ordinal);
         Assert.Contains("usedItemIds.indexOf(candidateIds[ci]) >= 0", read, StringComparison.Ordinal);
         Assert.Contains("if (!candidateIds.length || duplicate) continue;", read, StringComparison.Ordinal);
         // The first non-duplicate row is selected, preserving Coachless's
         // existing top-WPA ordering while avoiding repeated item ids.
         Assert.Contains("row = cand[c];", read, StringComparison.Ordinal);
         Assert.Contains("for (var used = 0; used < ids.length; used++) usedItemIds.push(ids[used]);", read, StringComparison.Ordinal);
+        Assert.Contains("blocks.push({ title: plan.title, itemIds: ids });", read, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -801,6 +801,7 @@ public sealed class SiteAutoImportService
     {
         var hadWritable = false;
         SiteImportPayload? uggRunesPayload = null;
+        var runesImported = false;
         var effectiveRoleId = input.RoleId;
         foreach (var planned in fetch)
         {
@@ -868,6 +869,15 @@ public sealed class SiteAutoImportService
                 uggRunesPayload = payload;
             if (effectiveRoleId is null)
                 effectiveRoleId = SiteDeepLink.RoleIdFromToken(payload.Role);
+            // Rune pages are needed during champion select. Once u.gg has
+            // resolved the role, write the validated pair before waiting on
+            // Coachless's item page. Keep the capacity-aware paired write.
+            if (!runesImported && uggRunesPayload?.Runes is not null)
+            {
+                await ImportBothRunesAsync(input, uggRunesPayload, effectiveRoleId, cancellationToken)
+                    .ConfigureAwait(false);
+                runesImported = true;
+            }
             if (payload.ItemBlocks.Count == 0)
             {
                 _sink.LogInfo(
@@ -891,8 +901,9 @@ public sealed class SiteAutoImportService
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        await ImportBothRunesAsync(
-            input, uggRunesPayload, effectiveRoleId, cancellationToken).ConfigureAwait(false);
+        if (!runesImported)
+            await ImportBothRunesAsync(
+                input, uggRunesPayload, effectiveRoleId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -950,8 +961,8 @@ public sealed class SiteAutoImportService
     /// <summary>
     /// Fetches both rune sources on every automatic-import trigger, validates
     /// both before writing, then hands them to the capacity-aware two-page
-    /// writer in u.gg-first priority order. Item writes have already landed,
-    /// so any rune failure is independent and fail-soft.
+    /// writer in u.gg-first priority order. Runs as soon as u.gg is ready,
+    /// ahead of Coachless items; rune failures remain independent and fail-soft.
     /// </summary>
     private async Task ImportBothRunesAsync(
         AutoImportInput input,

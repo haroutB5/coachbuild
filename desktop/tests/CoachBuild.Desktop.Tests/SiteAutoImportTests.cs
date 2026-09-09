@@ -911,8 +911,8 @@ public sealed class SiteAutoImportTests
 
         Assert.Equal(
             [$"worker:{CompanionTab.UGg}:{AhriUggDeepLink}",
-             $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}",
-             $"runes:{AhriCoachlessRunesLink}"],
+             $"runes:{AhriCoachlessRunesLink}",
+             $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}"],
             executor.Calls);
         var runeCreates = api.Calls.Where(call =>
             call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages").ToArray();
@@ -974,12 +974,11 @@ public sealed class SiteAutoImportTests
 
         await service.OnSnapshotAsync(LockedAhri());
 
-        // The runes page is fetched at the app's OWN deep link, after both
-        // item fetches, exactly once.
+        // The rune pair lands before the Coachless item fetch, exactly once.
         Assert.Equal(
             [$"worker:{CompanionTab.UGg}:{AhriUggDeepLink}",
-             $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}",
-             $"runes:{AhriCoachlessRunesLink}"],
+             $"runes:{AhriCoachlessRunesLink}",
+             $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}"],
             executor.Calls);
         // ...and both source-named rune pages were actually written.
         var runeCreates = api.Calls.Where(call =>
@@ -998,6 +997,27 @@ public sealed class SiteAutoImportTests
     /// exactly what it was before 2.1.0 — items only, no second navigation,
     /// no rune endpoint touched.
     /// </summary>
+    [Fact]
+    public async Task Both_rune_pages_are_written_before_coachless_items_start()
+    {
+        var api = new StubLcu();
+        var runePagesAtItemFetch = -1;
+        var executor = new FakeExecutor {
+            Worker = (site, _) => {
+                if (site == CompanionTab.UGg) return AhriUggRunesJson;
+                runePagesAtItemFetch = api.Calls.Count(call =>
+                    call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages");
+                return AhriCoachlessJson;
+            },
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var service = NewService(executor, api, new FakeSink(), withRunes: true);
+        await service.OnSnapshotAsync(LockedAhri());
+        Assert.Equal(2, runePagesAtItemFetch);
+        Assert.Equal(2, api.Calls.Count(call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages"));
+    }
+
     [Fact]
     public async Task Without_a_rune_service_the_runes_leg_never_runs()
     {

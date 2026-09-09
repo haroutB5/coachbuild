@@ -757,6 +757,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             // onto the app's own origin. DenyCors keeps the mapped folder from
             // being read cross-origin; the page's own calls to the loopback
             // bridge are governed by the bridge's Origin allowlist instead.
+            webView.WebMessageReceived += OnCounterMessage;
             webView.SetVirtualHostNameToFolderMapping(
                 _policy.Origin.Host,
                 System.IO.Path.Combine(AppContext.BaseDirectory, HostedPagePolicy.LocalAssetFolder),
@@ -2357,6 +2358,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     /// </summary>
     internal void DisposeBrowser()
     {
+        _counterRequest?.Cancel();
         if (_browserDisposed) return;
         _browserDisposed = true;
 

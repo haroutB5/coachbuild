@@ -1,5 +1,19 @@
 # Changelog
 
+## Desktop 2.2.4 (2026-09-09)
+
+- Draft now uses u.gg's Best Lane Counters (top 15 by GD15) and Worst Picks
+  (top 10 by lowest matchup win rate), for the selected opponent and lane,
+  World Emerald+ Ranked Solo. It follows u.gg's own 0.5% matchup pick-rate
+  threshold and source ordering. LoLalytics no longer supplies Draft counters.
+- A separate, cancellable background WebView reads u.gg's embedded matchup
+  data without interrupting item/rune workers. Results cache for one hour.
+- Rune pages now import as soon as the u.gg build resolves the role, before
+  waiting for Coachless items. The capacity-aware paired page write remains.
+- Coachless's combined 4th+ table now fills 4th and 5th items, plus a 6th
+  item for ADC. Every selection remains unique, with boots after item one.
+  Missing source candidates are reported rather than replaced with invented items.
+
 ## Desktop 2.2.3 (2026-09-09)
 
 - Draft now shows the ten strongest lane counters instead of starving the

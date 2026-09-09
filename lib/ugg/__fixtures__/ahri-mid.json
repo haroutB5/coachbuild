@@ -1,0 +1,293 @@
+{
+  "lastUpdated": "2026-09-08T15:04:25.924807Z",
+  "rows": [
+    {
+      "champion_id": 246,
+      "gold_adv_15": -598,
+      "matches": 3747,
+      "pick_rate": 1.63,
+      "win_rate": 48.84
+    },
+    {
+      "champion_id": 166,
+      "gold_adv_15": -489,
+      "matches": 2772,
+      "pick_rate": 1.21,
+      "win_rate": 48.88
+    },
+    {
+      "champion_id": 105,
+      "gold_adv_15": -377,
+      "matches": 5526,
+      "pick_rate": 2.41,
+      "win_rate": 48.91
+    },
+    {
+      "champion_id": 8,
+      "gold_adv_15": 104,
+      "matches": 4716,
+      "pick_rate": 2.06,
+      "win_rate": 49.05
+    },
+    {
+      "champion_id": 45,
+      "gold_adv_15": 146,
+      "matches": 5258,
+      "pick_rate": 2.29,
+      "win_rate": 49.09
+    },
+    {
+      "champion_id": 711,
+      "gold_adv_15": -161,
+      "matches": 3457,
+      "pick_rate": 1.51,
+      "win_rate": 49.32
+    },
+    {
+      "champion_id": 101,
+      "gold_adv_15": -28,
+      "matches": 5102,
+      "pick_rate": 2.23,
+      "win_rate": 49.43
+    },
+    {
+      "champion_id": 1,
+      "gold_adv_15": 184,
+      "matches": 2739,
+      "pick_rate": 1.19,
+      "win_rate": 49.54
+    },
+    {
+      "champion_id": 55,
+      "gold_adv_15": -190,
+      "matches": 7866,
+      "pick_rate": 3.43,
+      "win_rate": 49.58
+    },
+    {
+      "champion_id": 99,
+      "gold_adv_15": -166,
+      "matches": 5264,
+      "pick_rate": 2.3,
+      "win_rate": 49.64
+    },
+    {
+      "champion_id": 161,
+      "gold_adv_15": -200,
+      "matches": 1162,
+      "pick_rate": 0.51,
+      "win_rate": 49.66
+    },
+    {
+      "champion_id": 238,
+      "gold_adv_15": -509,
+      "matches": 10530,
+      "pick_rate": 4.59,
+      "win_rate": 49.71
+    },
+    {
+      "champion_id": 134,
+      "gold_adv_15": -200,
+      "matches": 11821,
+      "pick_rate": 5.16,
+      "win_rate": 49.78
+    },
+    {
+      "champion_id": 157,
+      "gold_adv_15": -313,
+      "matches": 9433,
+      "pick_rate": 4.11,
+      "win_rate": 49.86
+    },
+    {
+      "champion_id": 7,
+      "gold_adv_15": -311,
+      "matches": 7361,
+      "pick_rate": 3.21,
+      "win_rate": 49.99
+    },
+    {
+      "champion_id": 112,
+      "gold_adv_15": -83,
+      "matches": 11365,
+      "pick_rate": 4.96,
+      "win_rate": 49.99
+    },
+    {
+      "champion_id": 142,
+      "gold_adv_15": -424,
+      "matches": 3668,
+      "pick_rate": 1.6,
+      "win_rate": 50.03
+    },
+    {
+      "champion_id": 910,
+      "gold_adv_15": -23,
+      "matches": 4961,
+      "pick_rate": 2.16,
+      "win_rate": 50.23
+    },
+    {
+      "champion_id": 127,
+      "gold_adv_15": -99,
+      "matches": 6704,
+      "pick_rate": 2.92,
+      "win_rate": 50.46
+    },
+    {
+      "champion_id": 245,
+      "gold_adv_15": -108,
+      "matches": 3478,
+      "pick_rate": 1.52,
+      "win_rate": 50.72
+    },
+    {
+      "champion_id": 4,
+      "gold_adv_15": -280,
+      "matches": 6101,
+      "pick_rate": 2.66,
+      "win_rate": 50.86
+    },
+    {
+      "champion_id": 75,
+      "gold_adv_15": 548,
+      "matches": 2032,
+      "pick_rate": 0.89,
+      "win_rate": 50.94
+    },
+    {
+      "champion_id": 38,
+      "gold_adv_15": 311,
+      "matches": 3343,
+      "pick_rate": 1.46,
+      "win_rate": 50.97
+    },
+    {
+      "champion_id": 517,
+      "gold_adv_15": 44,
+      "matches": 11666,
+      "pick_rate": 5.09,
+      "win_rate": 51.03
+    },
+    {
+      "champion_id": 91,
+      "gold_adv_15": -294,
+      "matches": 1968,
+      "pick_rate": 0.86,
+      "win_rate": 51.17
+    },
+    {
+      "champion_id": 131,
+      "gold_adv_15": -380,
+      "matches": 3302,
+      "pick_rate": 1.44,
+      "win_rate": 51.21
+    },
+    {
+      "champion_id": 805,
+      "gold_adv_15": -411,
+      "matches": 7440,
+      "pick_rate": 3.25,
+      "win_rate": 51.34
+    },
+    {
+      "champion_id": 39,
+      "gold_adv_15": -892,
+      "matches": 3061,
+      "pick_rate": 1.34,
+      "win_rate": 51.39
+    },
+    {
+      "champion_id": 163,
+      "gold_adv_15": 86,
+      "matches": 2072,
+      "pick_rate": 0.9,
+      "win_rate": 51.5
+    },
+    {
+      "champion_id": 800,
+      "gold_adv_15": -789,
+      "matches": 4512,
+      "pick_rate": 1.97,
+      "win_rate": 51.51
+    },
+    {
+      "champion_id": 893,
+      "gold_adv_15": -103,
+      "matches": 2776,
+      "pick_rate": 1.21,
+      "win_rate": 52.13
+    },
+    {
+      "champion_id": 61,
+      "gold_adv_15": -49,
+      "matches": 3786,
+      "pick_rate": 1.65,
+      "win_rate": 52.19
+    },
+    {
+      "champion_id": 13,
+      "gold_adv_15": 154,
+      "matches": 3624,
+      "pick_rate": 1.58,
+      "win_rate": 52.59
+    },
+    {
+      "champion_id": 136,
+      "gold_adv_15": 545,
+      "matches": 2100,
+      "pick_rate": 0.92,
+      "win_rate": 52.67
+    },
+    {
+      "champion_id": 90,
+      "gold_adv_15": 142,
+      "matches": 5981,
+      "pick_rate": 2.61,
+      "win_rate": 53.08
+    },
+    {
+      "champion_id": 84,
+      "gold_adv_15": -20,
+      "matches": 5942,
+      "pick_rate": 2.59,
+      "win_rate": 53.13
+    },
+    {
+      "champion_id": 777,
+      "gold_adv_15": 79,
+      "matches": 7794,
+      "pick_rate": 3.4,
+      "win_rate": 53.16
+    },
+    {
+      "champion_id": 69,
+      "gold_adv_15": -67,
+      "matches": 1885,
+      "pick_rate": 0.82,
+      "win_rate": 53.37
+    },
+    {
+      "champion_id": 34,
+      "gold_adv_15": -4,
+      "matches": 2729,
+      "pick_rate": 1.19,
+      "win_rate": 53.39
+    },
+    {
+      "champion_id": 268,
+      "gold_adv_15": 210,
+      "matches": 2074,
+      "pick_rate": 0.9,
+      "win_rate": 53.76
+    },
+    {
+      "champion_id": 3,
+      "gold_adv_15": 421,
+      "matches": 4263,
+      "pick_rate": 1.86,
+      "win_rate": 54.61
+    }
+  ],
+  "sourceUrl": "https://stats2.u.gg/lol/1.5/matchups/16_17/ranked_solo_5x5/103/1.5.0.json"
+}

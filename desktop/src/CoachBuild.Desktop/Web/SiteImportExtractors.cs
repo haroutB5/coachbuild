@@ -417,9 +417,12 @@ public static class SiteImportExtractors
     /// (<c>coachless.gg/builds/{slug}?role={role}</c>).
     ///
     /// <para>The page sorts each slot table by WPA. This performs exactly one
-    /// read of the initial page and takes the first <c>tr.data-row</c> from
-    /// Starter, 1st, Boots, 2nd, 3rd and 4th+ in that exported order. It
-    /// dispatches no clicks and waits for no recomputation. If the top-WPA
+    /// read of the initial page and takes the first non-duplicate
+    /// <c>tr.data-row</c> from Starter, 1st, Boots, 2nd and 3rd in that
+    /// exported order. Coachless renders later full-item choices together in
+    /// one <c>4th+ Item</c> table: ADC pages fill 4th, 5th and 6th from its
+    /// successive unique rows, while other roles fill 4th and 5th. It
+    /// dispatches no clicks and waits for no recomputation. If a candidate
     /// row repeats an item already emitted by an earlier slot, the next row
     /// is scanned until a non-duplicate item is found.</para>
     ///
@@ -430,7 +433,7 @@ public static class SiteImportExtractors
     /// <para>AN EMPTY SLOT DEGRADES, IT DOES NOT ABORT (2.1.0). Field log
     /// 2026-09-08, Nasus top, on a run where the consent wall HAD been
     /// dismissed successfully: <c>Coachless extraction failed (slot "Starter"
-    /// yielded no items)</c>. Five other slots had read fine and all five were
+    /// yielded no items)</c>. The other slots had read fine and were
     /// discarded, because any per-slot absence — missing section, no rows, no
     /// readable item icon — returned <c>{ error }</c> for the whole page. Each
     /// of those three now records a <c>meta.notes</c> line (the icon case also
@@ -570,30 +573,45 @@ public static class SiteImportExtractors
             else
               notes.push('coachless: the URL carried no role and the page rendered no active role');
           }
-            var SLOT_ORDER = ['Starter', '1st Item', 'Boots', '2nd Item', '3rd Item', '4th+ Item'];
+            var SLOT_PLAN = [
+              { title: 'Starter', source: 'Starter' },
+              { title: '1st Item', source: '1st Item' },
+              { title: 'Boots', source: 'Boots' },
+              { title: '2nd Item', source: '2nd Item' },
+              { title: '3rd Item', source: '3rd Item' }
+            ];
+            // Coachless combines every full-item stage after 3rd into the
+            // table titled "4th+ Item". ADC builds have three remaining
+            // stages; every other role has two. An absent row/table simply
+            // omits that output slot rather than inventing an item.
+            var lateSlots = /^(adc|bottom|bot|carry)$/.test(role) ? 3 : 2;
+            for (var late = 0; late < lateSlots; late++) {
+              SLOT_PLAN.push({ title: (late + 4) + 'th Item', source: '4th+ Item' });
+            }
             var looked = slotTables();
             var blocks = [];
             var usedItemIds = [];
-            for (var b = 0; b < SLOT_ORDER.length; b++) {
+            for (var b = 0; b < SLOT_PLAN.length; b++) {
+              var plan = SLOT_PLAN[b];
               var entry = null;
               for (var e = 0; e < looked.length; e++) {
-                if (looked[e].title === SLOT_ORDER[b]) { entry = looked[e]; break; }
+                if (looked[e].title === plan.source) { entry = looked[e]; break; }
               }
               // ONE EMPTY SLOT IS NOT A FAILED IMPORT (2.1.0). Field log
               // 2026-09-08, Nasus top, AFTER the consent wall was dismissed
               // successfully: 'Coachless extraction failed (slot "Starter"
-              // yielded no items)'. Five other slots had read fine and every
+              // yielded no items)'. The other slots had read fine and every
               // one of them was thrown away, because a per-slot absence
               // aborted the whole read. A slot the page cannot fill is now a
               // meta note and an omitted block; only a page that fills NO
               // slot at all is still a typed failure.
               if (!entry) {
-                notes.push('coachless: slot "' + SLOT_ORDER[b] + '" is not on the page -- omitted');
+                notes.push('coachless: slot "' + plan.title + '" is not on the page -- omitted');
                 continue;
               }
               var cand = dataRows(entry.table);
               if (!cand.length) {
-                notes.push('coachless: slot "' + SLOT_ORDER[b] + '" has no rows -- omitted');
+                notes.push('coachless: slot "' + plan.title + '" has no rows -- omitted');
                 continue;
               }
               var row = null;
@@ -630,13 +648,13 @@ public static class SiteImportExtractors
                     if (String(all[v].getAttribute('src') || '').indexOf('/img/item/') >= 0) itemish++;
                   }
                 }
-                notes.push('coachless: slot "' + SLOT_ORDER[b] + '" yielded no items -- omitted (' +
+                notes.push('coachless: slot "' + plan.title + '" yielded no items -- omitted (' +
                   cand.length + ' rows, candidates have ' + itemish +
                   ' item-icon, ' + hidden + ' hidden)');
                 continue;
               }
               for (var used = 0; used < ids.length; used++) usedItemIds.push(ids[used]);
-              blocks.push({ title: SLOT_ORDER[b], itemIds: ids });
+              blocks.push({ title: plan.title, itemIds: ids });
             }
             // Deliberately NOT the words "no build": preserve the per-slot
             // detail this branch carries into the log.

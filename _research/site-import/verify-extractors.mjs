@@ -270,11 +270,12 @@ check('ugg starting', titles.includes('Starting Items=1120,2003'), titles);
 check('ugg core', titles.includes('Core Items=6697,3009,3046'), titles);
 
 const clUrl = 'https://coachless.gg/builds/jhin?role=adc';
-// One immutable document, one read: the initial top-WPA row in each item slot.
+// One immutable document, one read: initial top-WPA rows plus all available
+// late-item candidates from Coachless's combined 4th+ table.
 const clDoc = makeDocument(clHtml);
 const clEarly = runOnDocument(clItemsJs, clDoc, clUrl);
-check('coachless one-shot read returns every initial top row',
-  (clEarly.itemBlocks || []).length === 6 &&
+check('coachless ADC read returns six full items plus boots',
+  (clEarly.itemBlocks || []).length === 8 &&
   (clEarly.itemBlocks || []).every((b) => !Object.hasOwn(b, 'selected')),
   JSON.stringify(clEarly).slice(0, 300));
 
@@ -283,11 +284,20 @@ console.log('coachless payload: ' + JSON.stringify(payload).slice(0, 600));
 check('coachless source', payload.source === 'coachless', payload.source);
 check('coachless slug/role', payload.championSlug === 'jhin' && payload.role === 'adc', payload.championSlug + '/' + payload.role);
 check('coachless runes absent (page has no rune page)', payload.runes === null || payload.runes === undefined, JSON.stringify(payload.runes));
-check('coachless has slot blocks', (payload.itemBlocks || []).length === 6, (payload.itemBlocks || []).length);
+const clExpectedTitles = ['Starter', '1st Item', 'Boots', '2nd Item', '3rd Item', '4th Item', '5th Item', '6th Item'];
+check('coachless ADC blocks preserve item-set order through 6th Item',
+  JSON.stringify((payload.itemBlocks || []).map((b) => b.title)) === JSON.stringify(clExpectedTitles),
+  JSON.stringify((payload.itemBlocks || []).map((b) => b.title)));
+check('coachless ADC blocks contain globally unique items',
+  new Set((payload.itemBlocks || []).flatMap((b) => b.itemIds)).size === (payload.itemBlocks || []).flatMap((b) => b.itemIds).length,
+  JSON.stringify(payload.itemBlocks));
 const blockOf = (title) => (payload.itemBlocks || []).find((b) => b.title === title);
 check('coachless Starter initial top row', JSON.stringify(blockOf('Starter').itemIds) === JSON.stringify([1120]), JSON.stringify(blockOf('Starter')));
 check('coachless 1st initial top row', JSON.stringify(blockOf('1st Item').itemIds) === JSON.stringify([3095]), JSON.stringify(blockOf('1st Item')));
 check('coachless 2nd initial top row', JSON.stringify(blockOf('2nd Item').itemIds) === JSON.stringify([3046]), JSON.stringify(blockOf('2nd Item')));
+check('coachless ADC late rows fill every available full-item slot',
+  JSON.stringify(['4th Item', '5th Item', '6th Item'].map((title) => blockOf(title).itemIds[0])) === JSON.stringify([3026, 3033, 3142]),
+  JSON.stringify(payload.itemBlocks));
 check('coachless every block is top-row data without selection provenance',
   payload.itemBlocks.every((b) => !Object.hasOwn(b, 'selected')), JSON.stringify(payload.itemBlocks));
 
@@ -461,20 +471,27 @@ check('a role-bearing url still reports its role as coming from the url',
 check('and a role-bearing url adds no discovery note',
   !nasusNotes.some((n) => n.includes('the URL carried no role')), JSON.stringify(nasusNotes));
 
-// Coachless Nasus top: reads clean statically, including Starter.
+// Coachless Nasus top: regular lanes receive five full items plus boots,
+// including the two best unique rows from the combined 4th+ table.
 const clNasusHtml = readFileSync(join(dir, 'coachless-nasus-top.html'), 'utf8');
 const clNasusUrl = 'https://coachless.gg/builds/nasus?role=top';
 const clNasusDoc = makeDocument(clNasusHtml);
 const clNasusRead = runOnDocument(clItemsJs, clNasusDoc, clNasusUrl);
 console.log('coachless nasus: ' + JSON.stringify(clNasusRead).slice(0, 400));
 check('coachless nasus reads every slot including Starter',
-  (clNasusRead.itemBlocks || []).length === 6 &&
+  (clNasusRead.itemBlocks || []).length === 7 &&
   (clNasusRead.itemBlocks || []).some((b) => b.title === 'Starter' && b.itemIds.length > 0),
   JSON.stringify(clNasusRead).slice(0, 300));
 const clNasusTitles = (clNasusRead.itemBlocks || []).map((b) => b.title);
 check('coachless item blocks put Boots immediately after 1st Item',
-  JSON.stringify(clNasusTitles) === JSON.stringify(['Starter', '1st Item', 'Boots', '2nd Item', '3rd Item', '4th+ Item']),
+  JSON.stringify(clNasusTitles) === JSON.stringify(['Starter', '1st Item', 'Boots', '2nd Item', '3rd Item', '4th Item', '5th Item']),
   JSON.stringify(clNasusTitles));
+check('coachless regular lane fills both available late-item slots',
+  JSON.stringify(['4th Item', '5th Item'].map((title) => clNasusRead.itemBlocks.find((b) => b.title === title)?.itemIds?.[0])) === JSON.stringify([3053, 3742]),
+  JSON.stringify(clNasusRead.itemBlocks));
+check('coachless Nasus blocks contain globally unique items',
+  new Set((clNasusRead.itemBlocks || []).flatMap((b) => b.itemIds)).size === (clNasusRead.itemBlocks || []).flatMap((b) => b.itemIds).length,
+  JSON.stringify(clNasusRead.itemBlocks));
 
 // A duplicate top row must not make the same item occupy two slots. Mutate
 // only the 1st Item table's top icon to the Starter id; the extractor should
@@ -503,7 +520,8 @@ check('coachless item blocks contain no repeated item ids',
 
 // THE ACTUAL FIX. Strip the Starter table's item icons -- the live shape that
 // produced 'slot "Starter" yielded no items'. Before the fix this discarded ALL
-// SIX slots; now Starter is omitted with a note and the other five still write.
+// available slots; now Starter is omitted with a note and every remaining
+// unique slot still writes.
 function stripStarterIcons(html) {
   const at = html.indexOf('Starter');
   if (at < 0) throw new Error('fixture has no Starter section');
@@ -522,9 +540,9 @@ const degradedTitles = (clDegraded.itemBlocks || []).map((b) => b.title);
 const degradedNotes = ((clDegraded.meta || {}).notes) || [];
 console.log('coachless degraded: ' + JSON.stringify(degradedTitles) + ' notes ' + JSON.stringify(degradedNotes));
 check('an empty Starter omits its block instead of failing the import',
-  degradedTitles.length === 5 && !degradedTitles.includes('Starter'),
+  degradedTitles.length === 6 && !degradedTitles.includes('Starter'),
   JSON.stringify(clDegraded).slice(0, 300));
-check('and the other five slots still carry their items',
+check('and the other six slots still carry their items',
   (clDegraded.itemBlocks || []).every((b) => b.itemIds.length > 0),
   JSON.stringify(clDegraded.itemBlocks));
 check('and the omission is named in meta.notes with the row census',
@@ -799,7 +817,7 @@ for (const champ of champs) {
     bad.join('; ') + ' :: ' + JSON.stringify(r.shardIds));
 }
 
-// -- The Coachless one-shot initial top-row read on every sweep builds page --
+// -- The Coachless one-shot full-slot read on every sweep builds page ---------
 for (const champ of champs) {
   const role = URL_ROLE[ROLES[champ]];
   const html = readFileSync(join(sweepDir, `coachless-${champ}-${ROLES[champ]}.html`), 'utf8');
@@ -813,8 +831,9 @@ for (const champ of champs) {
     continue;
   }
   const blocks = out.itemBlocks || [];
+  const expectedBlocks = ROLES[champ] === 'adc' ? 8 : 7;
   check(`sweep coachless ${champ} yields item blocks`,
-    blocks.length === 6 && blocks.every(b => b.itemIds.length > 0 && !Object.hasOwn(b, 'selected')),
+    blocks.length === expectedBlocks && blocks.every(b => b.itemIds.length > 0 && !Object.hasOwn(b, 'selected')),
     JSON.stringify(blocks).slice(0, 240));
 }
 
