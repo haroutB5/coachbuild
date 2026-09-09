@@ -308,7 +308,10 @@ public partial class App : WpfApplication
                 Paths.Root,
                 log: _log,
                 skillOrderFetch: skillReader.FetchAsync,
-                rankSampleSecret: () => ResolveRankSampleSecret(settingsStore));
+                rankSampleSecret: () => ResolveRankSampleSecret(settingsStore),
+                laneScoreDemo: Options.LaneScoreDemo);
+            if (Options.LaneScoreDemo)
+                _log?.Info("lane-score: DEMO MODE -- the card is fabricated and NOTHING will be written");
             nativeServices.PageRequested += OnNativePageRequested;
             _services = nativeServices;
         }
@@ -1337,6 +1340,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     private readonly GameflowPoller _gameflow;
     private readonly LivePollingCoordinator _livePolling;
     private readonly RankCaptureService _rankCapture;
+    private readonly LaneScoreService _laneScores;
     private readonly IRankSampleSink _rankSink;
     private readonly DiagnosticsUploadService _diagnostics;
     /// <summary>The one client this instance built, if it built one. Disposed on teardown.</summary>
@@ -1434,7 +1438,13 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         // RankSampleClient serves both POSTs; see the construction below.
         IDiagnosticsSink? diagnosticsSink = null,
         RankCaptureOptions? rankCaptureOptions = null,
-        Func<int, int, CancellationToken, Task<SkillOrderResult>>? skillOrderFetch = null)
+        Func<int, int, CancellationToken, Task<SkillOrderResult>>? skillOrderFetch = null,
+        // --lane-score-demo. Fabricated card, writes nothing, reachable only by
+        // typing the exact flag; see CommandLineOptions.LaneScoreDemo.
+        bool laneScoreDemo = false,
+        // Test seam: a store over a temp directory. Production writes to
+        // %LOCALAPPDATA%\CoachBuild\lane-scores.json, next to companion.log.
+        LaneScoreStore? laneScoreStore = null)
     {
         if (!SessionTokenStore.IsValid(sessionToken))
             throw new ArgumentException("A valid persistent session token is required.", nameof(sessionToken));
@@ -1453,6 +1463,22 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         _windowDecisions = new WindowDecisionService(
             sessionToken,
             attachments: _state.FollowAttachments);
+        _laneScores = new LaneScoreService(
+            _lcu,
+            laneScoreStore ?? new LaneScoreStore(Path.Combine(logDirectory, LaneScoreStore.FileName)),
+            _log,
+            _time,
+            demo: laneScoreDemo,
+            // The NON-YANKING open, and the reason this is a callback rather
+            // than a direct call: Core does not know what a window is, and the
+            // host already routes PageRequested through OpenTargetAsync with
+            // userInitiated:false -- which refreshes the hosted page underneath
+            // whatever tab the user is reading instead of dragging them off it.
+            // A scoring prompt is the least urgent thing this app does; it does
+            // not get to steal focus. If they ignore it the game stays on disk
+            // and the card is waiting next time.
+            prompt: () => PageRequested?.Invoke(
+                new ReopenTarget(ReopenDestination.Draft, null, null)));
         _bridge = new CompanionHttpServer(
             sessionToken,
             _state,
@@ -1462,7 +1488,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             skillOrderFetch: skillOrderFetch,
             credentials: _credentials,
             log: _log,
-            ports: bridgePorts);
+            ports: bridgePorts,
+            laneScores: _laneScores);
         _skillOrders = _bridge.SkillOrderProvider;
         // Hosted collection is retired; injection remains for contract replay tests.
         _rankSink = rankSampleSink ?? RetiredHostedSink.Instance;
@@ -1493,7 +1520,20 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             // Fire-and-forget by construction. The gameflow loop drives champ
             // select; nothing it calls may take time, and Fire() returns before
             // the first LCU byte is sent.
-            rankCapture: trigger => _rankCapture.Fire(trigger, _stop.Token));
+            rankCapture: trigger =>
+            {
+                _rankCapture.Fire(trigger, _stop.Token);
+                // Same moment, same fire-and-forget contract. Reusing this
+                // callback rather than adding a second one keeps ONE definition
+                // of "a game ended" -- RankCaptureService.LeftGame, which counts
+                // Reconnect as still in-game so a mid-game drop is not mistaken
+                // for the end. That predicate matters more than it looks: the
+                // app's own log shows every game on this machine finishing
+                // InProgress -> Reconnect -> None and never touching
+                // PreEndOfGame or EndOfGame at all, so a trigger written against
+                // those two phase names would simply never fire.
+                if (trigger == RankCaptureTrigger.GameEnd) _laneScores.FireGameEnd(_stop.Token);
+            });
         // Live Client Data names the local player's champion; /api/skill-order
         // is keyed by numeric id. Nothing bridged that gap before 1.0.11.
         _ownsChampions = championDirectory is null;
@@ -1509,6 +1549,9 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     }
 
     public event Action<ReopenTarget>? PageRequested;
+
+    /// <summary>The lane-score feature, exposed so tests can drive a capture without a socket.</summary>
+    public LaneScoreService LaneScoreService => _laneScores;
 
     /// <inheritdoc />
 

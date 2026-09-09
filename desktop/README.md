@@ -73,6 +73,16 @@ Runtime data is kept under `%LOCALAPPDATA%\CoachBuild`: the existing durable
 folder. Credentials are owned by the LCU/state lane; the UI does not put them
 in hosted page URLs.
 
+Since 2.3.0 that directory also holds `lane-scores.json`: the user's own 1-10
+ratings of how each ranked lane phase went, and the personal matchup history the
+champ-select "Your lane history vs {Enemy}" panel is built from. **It is local
+only.** Nothing about it is uploaded and there is no database behind it — the
+file on this machine is the whole feature. It is written atomically (temp file
+then move), so a crash mid-write can never truncate a history that cannot be
+rebuilt from anywhere else. Deleting the file resets the feature to empty and
+loses nothing else; see the "Lane scores" section of the root `CLAUDE.md` for
+the capture, dedupe and aggregation rules.
+
 ## Build and package
 
 The expected commands are:

@@ -78,7 +78,25 @@ public static class CompanionRoutes
     /// "older bridge, stay console-only"), never version-gated.
     /// </summary>
     public const string ClientLog = "/client-log";
+
+    /// <summary>The unscored ranked game, if any. <c>{"pending":null}</c> when there is none.</summary>
+    public const string LaneScoresPending = "/lane-scores/pending";
+
+    /// <summary>Submit a score, or a skip. See <see cref="LaneScoreSubmitRequest"/>.</summary>
+    public const string LaneScoresSubmit = "/lane-scores";
+
+    /// <summary>The user's own scored history against one enemy in one role.</summary>
+    public const string LaneScoresRecommendations = "/lane-scores/recommendations";
 }
+
+/// <summary>
+/// The <c>GET /lane-scores/pending</c> envelope. An object with a nullable
+/// member rather than a bare <c>null</c> body, so "nothing to score" and "this
+/// bridge is too old to know about the feature" stay distinguishable at the
+/// client: the first is <c>200 {"pending":null}</c>, the second is a 404.
+/// </summary>
+public sealed record LaneScorePendingResponse(
+    [property: JsonPropertyName("pending")] LaneScoreGame? Pending);
 
 public sealed record CompanionLastOpen(
     [property: JsonPropertyName("championId")] int ChampionId,

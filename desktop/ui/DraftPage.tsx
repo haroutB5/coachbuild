@@ -5,7 +5,10 @@ import type { ChampionRef } from "@/lib/types";
 import { loadDdragon } from "@/lib/ddragonClient";
 import DraftControls from "@/components/hextech/draft/DraftControls";
 import CounterPicksStrip from "@/components/hextech/draft/CounterPicksStrip";
-import { LANE_ORDER, LANE_LABEL, type LaneId } from "@/components/hextech/heroContracts";
+import LaneScoreCard from "@/components/hextech/draft/LaneScoreCard";
+import LaneHistoryPanel from "@/components/hextech/draft/LaneHistoryPanel";
+import { LANE_ORDER, LANE_LABEL, LANE_TO_ROLE_ID, type LaneId } from "@/components/hextech/heroContracts";
+import { fetchPendingLaneScore, fetchLaneRecommendations, submitLaneScore, skipLaneScore } from "@/components/live/laneScoresClient";
 import { refreshStatus, getStoredSession, setStoredSession, type CompanionStatus } from "@/components/live/companionClient";
 import { resolveDraftLiveTarget, resolveChampSelectEntry, INITIAL_CHAMP_SELECT_ENTRY_STATE } from "@/components/live/draftLiveSync";
 import { loadLocalCounters } from "./localCounters";
@@ -77,6 +80,8 @@ export default function DraftPage() {
       <a href="#live-setup" className="text-accent-300">Connection status</a>
     </header>
     {championError && <p role="alert">Champion data is unavailable from DDragon. Check your connection and reload.</p>}
+    <LaneScoreCard champIcons={icons} loadPending={fetchPendingLaneScore}
+      submitScore={submitLaneScore} skipScore={skipLaneScore} />
     <DraftControls lane={lane} laneOptions={laneOptions} onLaneChange={handleLaneChange}
       hover={hover} allyIds={allyIds} champIcons={icons} onPick={handleHoverChange} onClearPick={handleClearHover}
       onAddAlly={champ => setAllyIds(ids => ids.includes(champ.id) ? ids : [...ids, champ.id].slice(0, 4))}
@@ -88,6 +93,8 @@ export default function DraftPage() {
     <p className="text-sm text-mut">Mark an enemy as your lane opponent to prioritise their counters. Without a mark, counters use the first visible enemy.</p>
     <CounterPicksStrip enemyId={counterEnemy} enemyName={counterEnemy ? icons.get(counterEnemy)?.name ?? null : null}
       lane={lane} champIcons={icons} loadCounters={loadLocalCounters} />
+    <LaneHistoryPanel enemyId={counterEnemy} enemyName={counterEnemy ? icons.get(counterEnemy)?.name ?? null : null}
+      roleId={LANE_TO_ROLE_ID[lane]} champIcons={icons} loadRecommendations={fetchLaneRecommendations} />
     <section className="rounded-lg bg-panel p-4"><h2 className="font-semibold">Automatic imports</h2>
       <p className="mt-2 text-sm text-mut">Hover a champion to import u.gg and Coachless rune pages and item builds. Rune pages are prioritised so you can choose one during champion select.</p>
     </section>

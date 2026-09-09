@@ -17,6 +17,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
     private readonly ItemSetApplyService _itemSets;
     private readonly ClientLogService _clientLog;
     private readonly ISkillOrderProvider _skillOrders;
+    private readonly LaneScoreService _laneScores;
     private readonly RedactedLog _log;
     private readonly int[] _ports;
     private readonly bool _ownsLcu;
@@ -41,7 +42,11 @@ public sealed class CompanionHttpServer : IAsyncDisposable
         RedactedLog? log = null,
         IEnumerable<int>? ports = null,
         HttpMessageHandler? countersTransport = null,
-        Func<int, int, CancellationToken, Task<SkillOrderResult>>? skillOrderFetch = null)
+        Func<int, int, CancellationToken, Task<SkillOrderResult>>? skillOrderFetch = null,
+        // Optional, like every other collaborator, so a test can hand in a
+        // service over a temp-directory store. The production default writes to
+        // %LOCALAPPDATA%\CoachBuild\lane-scores.json.
+        LaneScoreService? laneScores = null)
     {
         if (string.IsNullOrWhiteSpace(sessionToken)) throw new ArgumentException("A session token is required", nameof(sessionToken));
         _sessionToken = sessionToken;
@@ -90,6 +95,8 @@ public sealed class CompanionHttpServer : IAsyncDisposable
             _skillOrders = skillOrders;
         }
         _state.RegisterSkillOrderProvider(_skillOrders);
+        _laneScores = laneScores ?? new LaneScoreService(
+            _lcu, new LaneScoreStore(LaneScoreStore.DefaultPath()), _log);
         _ports = (ports ?? CompanionWire.BridgePorts).Distinct().ToArray();
         if (_ports.Length == 0) throw new ArgumentException("At least one bridge port is required", nameof(ports));
     }
@@ -101,6 +108,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
     public RuneApplyService RuneApplyService => _runes;
     public ItemSetApplyService ItemSetApplyService => _itemSets;
     public ISkillOrderProvider SkillOrderProvider => _skillOrders;
+    public LaneScoreService LaneScoreService => _laneScores;
     public bool IsRunning => _listener?.IsListening == true;
 
     public Task StartAsync(CancellationToken cancellationToken = default)
@@ -366,6 +374,58 @@ public sealed class CompanionHttpServer : IAsyncDisposable
                 var body = await ReadJsonAsync<ClientLogRequest>(request, cancellationToken).ConfigureAwait(false);
                 var logged = _clientLog.Accept(body?.Lines);
                 await HttpResponseWriter.WriteJsonAsync(response, 200, logged, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            // ---- lane scores ------------------------------------------------
+            // No EnsureCredentials() on any of the three: these read and write a
+            // LOCAL file. The League client being shut afterwards is exactly when
+            // a user is most likely to sit down and score their game, and failing
+            // the card because the client has closed would make the feature
+            // useless at the only moment it matters.
+            if (string.Equals(path, CompanionRoutes.LaneScoresPending, StringComparison.Ordinal) &&
+                string.Equals(request.HttpMethod, "GET", StringComparison.Ordinal))
+            {
+                await HttpResponseWriter.WriteJsonAsync(response, 200,
+                    new LaneScorePendingResponse(_laneScores.Pending()), cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (string.Equals(path, CompanionRoutes.LaneScoresSubmit, StringComparison.Ordinal) &&
+                string.Equals(request.HttpMethod, "POST", StringComparison.Ordinal))
+            {
+                var body = await ReadJsonAsync<LaneScoreSubmitRequest>(request, cancellationToken)
+                    .ConfigureAwait(false);
+                // Every rule lives in LaneScoreStore.Submit, not here, so a
+                // second caller cannot bypass them and so they are testable
+                // without a socket. 200-with-ok:false rather than a 4xx matches
+                // the /apply-runes precedent: the reason is for the user to read.
+                var result = _laneScores.Submit(body);
+                await HttpResponseWriter.WriteJsonAsync(response, 200, result, cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            if (string.Equals(path, CompanionRoutes.LaneScoresRecommendations, StringComparison.Ordinal) &&
+                string.Equals(request.HttpMethod, "GET", StringComparison.Ordinal))
+            {
+                if (!int.TryParse(request.QueryString["enemy"], out var enemyChampionId) || enemyChampionId <= 0)
+                {
+                    await HttpResponseWriter.WriteJsonAsync(response, 400, new CompanionError("bad-enemy"), cancellationToken)
+                        .ConfigureAwait(false);
+                    return;
+                }
+                // The role is required, not defaulted. Aggregating "any role"
+                // would silently mix a Volibear top game with a Volibear jungle
+                // game into one mean, and the user would have no way to see it.
+                if (!int.TryParse(request.QueryString["role"], out var roleId) || !LaneRoles.IsValid(roleId))
+                {
+                    await HttpResponseWriter.WriteJsonAsync(response, 400, new CompanionError("bad-role"), cancellationToken)
+                        .ConfigureAwait(false);
+                    return;
+                }
+                await HttpResponseWriter.WriteJsonAsync(response, 200,
+                    _laneScores.Recommend(enemyChampionId, roleId), cancellationToken).ConfigureAwait(false);
                 return;
             }
 

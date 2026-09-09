@@ -1,5 +1,31 @@
 # Changelog
 
+## Desktop 2.3.0 (2026-09-10)
+
+- **Lane scores.** After a ranked game (solo/duo 420 or flex 440 only), the
+  companion window offers a card asking how the lane phase went, 1-10, against
+  the enemy laner. Those scores build a personal matchup history, and in champ
+  select a "Your lane history vs {Enemy}" panel ranks your own champions into
+  that enemy by mean score, alongside — and clearly separated from — the
+  existing counters strip.
+- The data is **local only**: `%LOCALAPPDATA%\CoachBuild\lane-scores.json`,
+  written atomically (temp file + move), never uploaded anywhere. There is no
+  database behind this feature.
+- Sample size is always shown next to the mean, and a single game is marked as
+  such. No confidence score is invented, and the inverse matchup is never
+  inferred: scoring Volibear 9/10 into Gwen says nothing about Gwen into
+  Volibear, so nothing reports it.
+- When the client does not give usable position data, the game is recorded as
+  "opponent unknown" and the card asks which of the five enemies you laned
+  against, rather than guessing. A guessed opponent would silently poison the
+  recommendation; an unknown one costs one tap.
+- Games are deduplicated by match id, and a scored or skipped game is never
+  offered again, including across restarts.
+- The card never steals focus and never pulls you off a tab you are reading; it
+  waits until you come back.
+- New dev-only flag `--lane-score-demo` renders the card with fabricated data
+  and writes nothing, so the UI can be checked without playing a ranked game.
+
 ## Desktop 2.2.7 (2026-09-09)
 
 - Restored skill-order recommendations using u.gg's published Skill Path

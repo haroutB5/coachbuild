@@ -181,6 +181,80 @@ This endpoint exists because the parse used to live in a server route
 `desktop/ui/localCounters.ts` keeps the 24-hour cache that route's runtime cache
 used to provide, in-process, bounded at 30 entries.
 
+## Lane scores (2.3.0) — the user's own matchup history, local only
+
+After a **ranked** game ends the companion offers a card: "How did your lane go?",
+1-10 against the enemy laner. Those scores aggregate into a champ-select panel,
+"Your lane history vs {Enemy}", which sits next to the counters strip and ranks
+the user's *own* champions into that enemy.
+
+**The data is local and stays local.** One file,
+`%LOCALAPPDATA%\CoachBuild\lane-scores.json`, written atomically (temp file +
+`File.Move` overwrite). Nothing is uploaded, and there is no database behind this
+feature — Neon is decommissioned and this was designed after that, not migrated
+off it. The file is a single JSON document rather than JSONL because atomic
+writes rewrite the whole file anyway, so JSONL's cheap-append advantage is not
+available, while a single document gives `schemaVersion` one unambiguous home.
+
+Code: `CoachBuild.Core/LaneScore{Model,Store,Capture,Aggregator,Service}.cs`.
+UI: `components/hextech/draft/LaneScoreCard.tsx` and `LaneHistoryPanel.tsx`.
+
+```
+GET  /lane-scores/pending?session=          {"pending": <game>|null}
+POST /lane-scores?session=                  {matchId, score 1-10, opponentChampionId?, note?}
+                                            or {matchId, skip:true} -> {ok, reason?}
+GET  /lane-scores/recommendations?enemy=&role=&session=
+                                            {enemyChampionId, roleId, totalGames, best[], worst[]}
+```
+
+None of the three calls the LCU — they read and write a local file — so the card
+still works with the League client shut, which is exactly when a user sits down
+to score the game they just played.
+
+Rules that are product decisions, not implementation details:
+
+- **Ranked only**, and the allowed set is one constant (`RankedQueues`: 420 solo,
+  440 flex). The accepted consequence is that the card cannot be reached in the
+  practice tool, which is why `--lane-score-demo` exists — it fabricates a card
+  and writes nothing. Two independent locks keep it out of real data: a demo
+  service never touches the store at all, and the store rejects any match id
+  carrying `LaneScoreService.DemoMatchIdPrefix`.
+- **Never guess the opponent.** If position data is absent or ambiguous the game
+  is recorded with `opponentChampionId: null` and the card asks the user to pick
+  from the five enemy champions. A wrong opponent silently poisons the
+  recommendation forever; an unknown one costs one tap. This is the same
+  reasoning that removed index-based lane inference from champ select (audit
+  P2-1) — `theirTeam` is compacted, so index is not role.
+- **Never infer the inverse matchup.** Volibear 9/10 into Gwen is a fact about
+  picking Volibear when Gwen is locked. It says nothing about Gwen into
+  Volibear, and no code path reads a record backwards.
+- **Sample honesty.** Every mean travels with its `games` count on the wire, and
+  n=1 is marked as a single game in the UI. No confidence score, no shrinkage
+  toward the middle, no bar length — n and the mean are the only facts there are.
+  The panel is also labelled unmistakably as *your games*, because the counters
+  strip beside it is thousands of games and the two must not read as one dataset.
+- **Trigger.** Capture hangs off the existing `RankCaptureTrigger.GameEnd`, i.e.
+  `RankCaptureService.LeftGame`, which counts `Reconnect` as still in-game. This
+  matters more than it looks: companion.log shows every game on the dev machine
+  finishing `InProgress -> Reconnect -> None` and never touching `PreEndOfGame`
+  or `EndOfGame`, so a trigger written against those two phase names would never
+  have fired.
+- **The prompt never yanks.** It raises `PageRequested`, which the host routes
+  through `OpenTargetAsync(userInitiated: false)` / `OpenCompanionAsync` —
+  refreshing the hosted page underneath whatever tab the user is reading. If they
+  ignore it, the game is already on disk and the card is waiting next time.
+
+**Unverified against a live client, and honest about it.** `LaneScoreCapture`
+was written with no League client running on the dev machine (companion.log
+records `lcu_discovery_failed` across all four discovery layers), so the exact
+field the platform uses for a participant's position is not confirmed. Rather
+than pick a spelling and hope, the parser probes a candidate list, reports which
+field won in `LaneScoreGame.PositionSource`, and logs a **names-and-kinds-only**
+key inventory (`LaneScoreCapture.Describe` — no values, so no puuids or summoner
+names reach a log users are asked to send us). The first real ranked game turns
+this from a guess into a measurement. Anything unresolved falls into the
+opponent-unknown path above, so a wrong spelling costs a tap, never a wrong fact.
+
 ## What the Draft page inherits, unchanged and still load-bearing
 
 These are the parts of the v1 draft work that survived, with the reasons that
