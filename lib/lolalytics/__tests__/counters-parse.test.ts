@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   LOLALYTICS_MIN_GAMES,
+  LOLALYTICS_MAX_SUGGESTIONS,
   LolalyticsCountersError,
   championSlugForCounters,
   countersPageUrl,
@@ -154,18 +155,63 @@ describe("rankCounterSuggestions — direction convention + sample gate", () => 
     expect(velkoz.games).toBe(1530);
   });
 
-  it("ranks only champions that beat the enemy, candidate win rate descending", () => {
+  it("ranks counters by normalised matchup edge", () => {
     const parsed = parseCountersPage(FIXTURE_HTML, { slug: "viktor", subjectName: "Viktor" });
     const ranked = rankCounterSuggestions(parsed.rows, byName, 0, 15);
     expect(ranked.suggestions.map((s) => s.champId)).toEqual([2, 161, 101]);
-    expect(ranked.suggestions.some((s) => s.champId === 901)).toBe(false); // Smolder loses to Viktor (34.07% candidate WR)
+    expect(ranked.suggestions.some((s) => s.champId === 901)).toBe(false); // positive page Δ2: not a counter
   });
 
-  it(`applies the ${LOLALYTICS_MIN_GAMES}-game sample gate (Olaf n=105 and Smolder n=452 hidden, counted)`, () => {
+  it(`matches LoLalytics' ${LOLALYTICS_MIN_GAMES}-game sample floor`, () => {
     const parsed = parseCountersPage(FIXTURE_HTML, { slug: "viktor", subjectName: "Viktor" });
     const ranked = rankCounterSuggestions(parsed.rows, byName);
+    expect(ranked.suggestions.map((s) => s.champId)).toEqual([2, 161, 101]);
+    expect(ranked.gated).toBe(0);
+  });
+
+  it("keeps a counter at exactly 100 games and gates one at 99", () => {
+    const rows = [
+      { oppName: "Olaf", oppSlug: "olaf", pageWinPct: 43, fieldWinPct: 50, delta1pp: -7, delta2pp: -5, games: 100 },
+      { oppName: "Vel'Koz", oppSlug: "velkoz", pageWinPct: 43, fieldWinPct: 50, delta1pp: -7, delta2pp: -4, games: 99 },
+    ];
+    const ranked = rankCounterSuggestions(rows, byName);
+    expect(ranked.suggestions.map((s) => s.champId)).toEqual([2]);
+    expect(ranked.gated).toBe(1);
+  });
+
+  it("includes a below-50% raw matchup when its normalised edge is positive", () => {
+    const rows = [
+      { oppName: "Vel'Koz", oppSlug: "velkoz", pageWinPct: 52, fieldWinPct: 50, delta1pp: 2, delta2pp: -4, games: 900 },
+      { oppName: "Xerath", oppSlug: "xerath", pageWinPct: 49, fieldWinPct: 50, delta1pp: -1, delta2pp: -2, games: 900 },
+    ];
+    const ranked = rankCounterSuggestions(rows, byName);
     expect(ranked.suggestions.map((s) => s.champId)).toEqual([161, 101]);
-    expect(ranked.gated).toBe(2);
+    expect(ranked.suggestions[0].winRate).toBeCloseTo(0.48, 2);
+    expect(ranked.suggestions[0].delta2pp).toBe(4);
+  });
+
+  it("caps the ranked response at the ten options the Draft tab displays", () => {
+    expect(LOLALYTICS_MAX_SUGGESTIONS).toBe(10);
+    const rows = Array.from({ length: 12 }, (_, index) => ({
+      oppName: `Counter ${index + 1}`,
+      oppSlug: `counter${index + 1}`,
+      pageWinPct: 48,
+      fieldWinPct: 50,
+      delta1pp: -2,
+      delta2pp: -(12 - index),
+      games: 1_000,
+    }));
+    const champions = new Map(rows.map((row, index) => [
+      row.oppSlug,
+      { id: index + 1, name: row.oppName },
+    ]));
+    const ranked = rankCounterSuggestions(rows, champions);
+    expect(ranked.suggestions).toHaveLength(10);
+    expect(ranked.suggestions.map((s) => s.champId)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+    // A wider caller request cannot widen the product's ten-row contract.
+    const widened = rankCounterSuggestions(rows, champions, 0, 15);
+    expect(widened.suggestions).toHaveLength(10);
   });
 
   it("throws unmapped-champions when no row resolves (list gap, not 'no counters')", () => {
@@ -204,7 +250,7 @@ describe("counter-pick pool provider + rank-preserving intersection", () => {
     expect(split.poolPicks.map((s) => s.champId)).toEqual([161, 45]);
   });
 
-  it("falls back to the global top five when neither pool is available", () => {
+  it("falls back to the global ranked suggestions when neither pool is available", () => {
     const pool = resolveCounterPickPool({ lcuPoolChampIds: null, mystatsPoolChampIds: null });
     const split = splitCounterSuggestions(ranked, pool, 5, 5);
     expect(pool.source).toBe("none");
@@ -223,9 +269,9 @@ describe("resolveCountersForEnemy", () => {
     expect(resolved.enemySlug).toBe("viktor");
     expect(resolved.tier).toBe("emerald_plus");
     expect(resolved.patch).toBe("16.17");
-    expect(resolved.suggestions.map((s) => s.champId)).toEqual([161, 101]);
+    expect(resolved.suggestions.map((s) => s.champId)).toEqual([2, 161, 101]);
     expect(resolved.parsedRows).toBe(4);
-    expect(resolved.gatedRows).toBe(2);
+    expect(resolved.gatedRows).toBe(0);
     expect(typeof resolved.fetchedAt).toBe("string");
   });
 

@@ -5,8 +5,9 @@
 // QUESTION ANSWERED: "enemy locked/hovered X in my lane — what beats X?"
 // Fetch X's OWN counters page
 //   https://lolalytics.com/lol/{slug}/counters/?lane={lane}&tier=emerald_plus&patch={patch}
-// and take the champions X is WEAK against (X's losing matchups), ranked by
-// the candidate's win rate vs X, descending.
+// and take the champions with a positive normalised edge into X (X's losing
+// matchups after baseline adjustment), ranked by candidate Δ2 descending.
+// Candidate raw win rate is retained for display and deterministic tie breaks.
 //
 // DIRECTION CONVENTION (proven, not assumed — two independent witnesses):
 //   1. Every card's tooltip sentence reads "{Page} wins against {Row} {WR}%",
@@ -47,8 +48,9 @@
 //   - Section membership: the captured SSR page has ONE sortable counters
 //     table (`q:key="counters_viktor_middle_ranked_list_emerald_plus_16.17_all__all"`)
 //     with Name / WR vs / All Champs WR / Δ1 / Δ2 / Games headers. There is
-//     no separate Weak/Strong tab marker in these bytes; weak-side rows are
-//     therefore established explicitly as pageWinPct < 50 after parsing.
+//     no separate Weak/Strong tab marker in these bytes; counter membership is
+//     therefore established after parsing from the normalised direction-flipped
+//     Δ2 (candidate Δ2 > 0), not from a raw 50% win-rate cutoff.
 //   - Direction pin: the tooltip `{Subject}<!----> wins against
 //     <!--t=..-->{Opp}<!----> <span class="text-green-..">NN.NN%`.
 // NOT on this page (the phone screenshots' Pick Rate column lives on the
@@ -73,17 +75,15 @@ import type { RoleId } from "@/lib/types";
  *  site's default bracket, matching the user's evidence screenshots) — NOT
  *  the d2_plus pin lib/draft/lolalyticsCheck.ts uses. The tripwire pins
  *  Diamond II+ because it must compare like-with-like against OUR Diamond-II
- *  bucket; counter picks want the WIDEST honest sample so the 500-game gate
- *  below admits real matchups instead of starving (Emerald+ is ~4x the
- *  Diamond-II population). */
+ *  bucket; counter picks want the WIDEST honest sample at the source page's
+ *  own 100-game floor (Emerald+ is ~4x the Diamond-II population). */
 export const LOLALYTICS_COUNTERS_TIER = "emerald_plus";
 
-/** Minimum matchup sample for a suggestion. lolalytics' own page floor is
- *  100 games ("a minimum of 100 games" header copy); counter-pick WR at that
- *  floor is noise (e.g. Viktor vs Olaf 43.81% on n=105), so the strip hides
- *  everything under 500. Rows below the gate are COUNTED (gatedCards), not
- *  silently dropped — the route reports the count. */
-export const LOLALYTICS_MIN_GAMES = 500;
+/** Minimum matchup sample for a suggestion. This matches lolalytics' own
+ *  counters-page floor ("a minimum of 100 games"). Every UI row exposes its
+ *  sample, so uncommon lane counters remain visible without pretending their
+ *  confidence matches a 5,000-game row. Rows below the gate are COUNTED. */
+export const LOLALYTICS_MIN_GAMES = 100;
 
 /** On-demand per-(enemy, lane, tier, patch) cache TTL. No Neon tables: the
  *  full matrix is never ingested, only the single enemy page the user is
@@ -91,10 +91,8 @@ export const LOLALYTICS_MIN_GAMES = 500;
  *  same getCache() path, keys namespaced `lola:counters:*`). */
 export const LOLALYTICS_COUNTERS_CACHE_TTL_SECONDS = 24 * 60 * 60;
 
-/** How many ranked suggestions the server returns per enemy. The client
- *  shows "your pool" (up to 5) + "overall" (top 5); 15 gives the pool
- *  intersection room to find the user's champions below the global top 5. */
-export const LOLALYTICS_MAX_SUGGESTIONS = 15;
+/** The Draft tab shows the ten strongest normalised lane counters. */
+export const LOLALYTICS_MAX_SUGGESTIONS = 10;
 
 export type LolalyticsCountersLane = "top" | "jungle" | "middle" | "bottom" | "support";
 export type LolalyticsCountersRoleId = Exclude<RoleId, 5>;
@@ -340,9 +338,11 @@ export interface RankCountersResult {
 }
 
 /**
- * Pure direction flip + sample gate + ranking. Sort is the site's own
- * "countered most by" order — page WR ascending == candidate winRate
- * descending — tie-broken by sample then champId for determinism. Throws
+ * Pure direction flip + sample gate + ranking. Counter membership and order
+ * use lolalytics' normalised matchup edge (delta 2), not raw win rate. Raw WR
+ * is biased by each champion's baseline strength: a 48% candidate can still
+ * be a real counter when it normally wins substantially less often. Positive
+ * candidate delta 2 wins; ties use raw WR, sample, then champId. Throws
  * `unmapped-champions` when NOTHING resolves (a champion-list gap would
  * otherwise render as "no counters", which is a lie about the data).
  */
@@ -352,6 +352,13 @@ export function rankCounterSuggestions(
   minGames: number = LOLALYTICS_MIN_GAMES,
   maxSuggestions: number = LOLALYTICS_MAX_SUGGESTIONS
 ): RankCountersResult {
+  // Keep the product contract intact even when a caller requests a wider
+  // slice (the test seam still permits a narrower one). The Draft strip and
+  // its pool split must never grow beyond ten total suggestions.
+  const requestedLimit = Number.isFinite(maxSuggestions)
+    ? Math.floor(maxSuggestions)
+    : LOLALYTICS_MAX_SUGGESTIONS;
+  const suggestionLimit = Math.max(0, Math.min(LOLALYTICS_MAX_SUGGESTIONS, requestedLimit));
   let gated = 0;
   let unmapped = 0;
   let counterRows = 0;
@@ -361,12 +368,10 @@ export function rankCounterSuggestions(
       gated += 1;
       continue;
     }
-    // This endpoint answers "what beats the enemy?", not "show every
-    // matchup." The counters page is one sortable table (there is no
-    // separate Weak tab in the captured SSR bytes), so pageWinPct < 50 is
-    // the explicit weak-side membership test. Including >=50 rows would
-    // recommend champions that actually lose to the selected enemy.
-    if (row.pageWinPct >= 50) continue;
+    // Negative delta 2 from the PAGE champion's perspective means it performs
+    // worse than its baseline into the row champion. After the direction flip,
+    // that row is a counter even when its raw matchup WR remains below 50%.
+    if (row.delta2pp >= 0) continue;
     counterRows += 1;
     const champ = champions.get(normalizeChampName(row.oppName));
     if (!champ) {
@@ -389,9 +394,11 @@ export function rankCounterSuggestions(
     );
   }
   suggestions.sort((a, b) =>
-    b.winRate !== a.winRate ? b.winRate - a.winRate : b.games !== a.games ? b.games - a.games : a.champId - b.champId
+    b.delta2pp !== a.delta2pp ? b.delta2pp - a.delta2pp :
+      b.winRate !== a.winRate ? b.winRate - a.winRate :
+        b.games !== a.games ? b.games - a.games : a.champId - b.champId
   );
-  return { suggestions: suggestions.slice(0, maxSuggestions), gated, unmapped };
+  return { suggestions: suggestions.slice(0, suggestionLimit), gated, unmapped };
 }
 
 export type CountersFetchImpl = (url: string, init?: RequestInit) => Promise<Response>;

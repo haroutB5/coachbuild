@@ -6,13 +6,11 @@
 // POOL SOURCE PRECEDENCE (user directive 2026-09-08): the companion's LCU
 // data (most-played/mastery via the bridge) is preferred; the mystats
 // ingest is slated for retirement, so it is ONLY a fallback when the LCU
-// pool is unavailable. No companion endpoint exposes a champion pool TODAY
-// (checked 2026-09-08: the bridge carries champ-select state, most-played
-// LANE, and rank samples — no mastery/pool surface), so the LCU input is an
-// explicit optional prop threaded from the page (`lcuPoolChampIds`, null
-// until such an endpoint exists) and the seam below prefers it the moment it
-// is non-empty. Adding the endpoint later must not touch this file — only
-// the call site that fills the prop.
+// pool is unavailable. The companion's `/draft/pool` endpoint supplies the
+// connected client's mastery pool; the LCU input is an explicit optional prop
+// threaded from the page (`lcuPoolChampIds`) and wins as soon as it is
+// non-empty. The mystats list remains a fallback for callers that still have
+// one, while no-pool callers receive the global list only.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type CounterPickPoolSource = "lcu" | "mystats" | "none";
@@ -54,11 +52,14 @@ export interface CounterPickSplit<T extends PoolSplitSuggestion> {
 }
 
 /**
- * Pure rank-preserving split. "Intersect with the user's pool first, fall
- * back to global top 5": poolPicks is the intersection (cap poolLimit),
- * overallPicks is the global top overallLimit with pool members removed. An
- * empty pool (source "none") yields poolPicks: [] and the plain global top
- * — the caller renders the "overall" group alone, which IS the fallback.
+ * Pure rank-preserving split. "Intersect with the user's pool first, then
+ * fill the remaining group from the global list": poolPicks is the
+ * intersection (cap poolLimit), overallPicks is the global top overallLimit
+ * with pool members removed. The Draft caller supplies its top-ten ranked
+ * input and uses ten as each group cap, so the two rendered groups together
+ * never exceed ten; the helper remains generic for smaller test caps. An
+ * empty pool (source "none") yields poolPicks: [] and the plain global list,
+ * which is the fallback.
  */
 export function splitCounterSuggestions<T extends PoolSplitSuggestion>(
   ranked: readonly T[],

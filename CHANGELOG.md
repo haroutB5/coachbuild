@@ -2,6 +2,10 @@
 
 ## Desktop 2.2.3 (2026-09-09)
 
+- Draft now shows the ten strongest lane counters instead of starving the
+  list down to one or two raw-win-rate winners. The card names its source:
+  the selected enemy's LoLalytics Counters page for the current patch,
+  Emerald+, and the selected lane. Ranking uses normalized matchup edge.
 - Coachless rune imports now follow the site's confidence styling before
   ranking by WPA. Cards marked `is-low-occurrence` are the dim, low-sample
   choices shown on the page; those are excluded for keystones, primary and
