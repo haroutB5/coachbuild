@@ -143,8 +143,8 @@ public sealed class SiteImportExtractorTests
         // The same envelope the runes read uses, which RunesSettleProbe reads.
         Assert.Contains("retryable: true", read, StringComparison.Ordinal);
         Assert.Contains("function failWait(", read, StringComparison.Ordinal);
-        // The decision, not just the capability: rows on the page mean a verdict.
-        Assert.Contains("renderedRows() > 0 ? fail(barren) : failWait(barren)", read, StringComparison.Ordinal);
+        // Rows can precede their icons; both must exist before an empty verdict.
+        Assert.Contains("renderedRows() > 0 && hasItemIcon ? fail(barren) : failWait(barren)", read, StringComparison.Ordinal);
         // And the census still travels on the failure either way.
         Assert.Contains("every item slot on the page was empty", read, StringComparison.Ordinal);
         // Only the whole-page branch may wait: a wrong URL can never become a

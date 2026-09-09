@@ -1,5 +1,14 @@
 # Changelog
 
+## Desktop 2.2.7 (2026-09-09)
+
+- Restored skill-order recommendations using u.gg's published Skill Path
+  for the selected champion/lane (World Emerald+ recommended build).
+  The existing overlay, lane resolver, per-game cache and retry mechanism
+  are unchanged. Partial source paths are shown only as published, not filled in.
+- A short-lived hidden u.gg reader works independently of the Research
+  window and item/rune imports, including when Research closes at game start.
+
 ## Desktop 2.2.6 (2026-09-09)
 
 - Import browsers are protected from idle cleanup during reads, and their

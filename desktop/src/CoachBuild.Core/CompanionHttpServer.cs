@@ -40,7 +40,8 @@ public sealed class CompanionHttpServer : IAsyncDisposable
         LcuCredentialResolver? credentials = null,
         RedactedLog? log = null,
         IEnumerable<int>? ports = null,
-        HttpMessageHandler? countersTransport = null)
+        HttpMessageHandler? countersTransport = null,
+        Func<int, int, CancellationToken, Task<SkillOrderResult>>? skillOrderFetch = null)
     {
         if (string.IsNullOrWhiteSpace(sessionToken)) throw new ArgumentException("A session token is required", nameof(sessionToken));
         _sessionToken = sessionToken;
@@ -81,7 +82,7 @@ public sealed class CompanionHttpServer : IAsyncDisposable
         _clientLog = new ClientLogService(_log);
         if (skillOrders is null)
         {
-            _skillOrders = new SkillOrderProvider();
+            _skillOrders = new SkillOrderProvider(fetch: skillOrderFetch);
             _ownsSkillOrders = true;
         }
         else

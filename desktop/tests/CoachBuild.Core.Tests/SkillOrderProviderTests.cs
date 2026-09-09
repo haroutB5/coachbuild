@@ -9,6 +9,43 @@ namespace CoachBuild.Core.Tests;
 public sealed class SkillOrderProviderTests
 {
     [Fact]
+    public async Task Injected_source_coalesces_inflight_requests_and_preserves_error_cache()
+    {
+        var calls = 0;
+        var completion = new TaskCompletionSource<SkillOrderResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var provider = new SkillOrderProvider(fetch: (_, _, _) => { calls++; return completion.Task; });
+        var first = provider.GetSkillOrderAsync(106, "TOP", CancellationToken.None);
+        var second = provider.GetSkillOrderAsync(106, "TOP", CancellationToken.None);
+        Assert.Same(first, second);
+        completion.SetException(new HttpRequestException("source unavailable"));
+        Assert.Equal(SkillOrderStatus.Error, (await first).Status);
+        Assert.Equal(SkillOrderStatus.Error, (await provider.GetSkillOrderAsync(106, "TOP", CancellationToken.None)).Status);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task Injected_source_uses_existing_cache_role_mapping_and_per_game_reset()
+    {
+        var calls = 0;
+        using var provider = new SkillOrderProvider(fetch: (champ, role, token) =>
+        {
+            calls++;
+            Assert.Equal(106, champ);
+            Assert.Equal(0, role);
+            return Task.FromResult(new SkillOrderResult(SkillOrderStatus.Ok,
+                new OverlaySkillOrder([OverlayAbility.W], 1, false, "published"), champ, 42));
+        });
+        var first = await provider.GetSkillOrderAsync(106, "TOP", CancellationToken.None);
+        Assert.Same(first, await provider.GetSkillOrderAsync(106, "0", CancellationToken.None));
+        Assert.Equal(1, calls);
+        provider.ClearSkillOrderCache();
+        await provider.GetSkillOrderAsync(106, "TOP", CancellationToken.None);
+        Assert.Equal(2, calls);
+        Assert.Equal(SkillOrderStatus.NoData, (await provider.GetSkillOrderAsync(106, "invalid", CancellationToken.None)).Status);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
     public async Task Ok_payload_maps_order_and_uses_the_same_champion_role_cache_key()
     {
         var handler = new FixtureHandler(_ => """

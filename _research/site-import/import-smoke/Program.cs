@@ -8,7 +8,7 @@ using CoachBuild.Desktop.Web;
 internal static class ImportSmoke
 {
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         app.Startup += async (_, _) =>
@@ -18,6 +18,22 @@ internal static class ImportSmoke
             try
             {
                 var profile = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "coachbuild-import-smoke-" + Guid.NewGuid().ToString("N"));
+                if (args.Contains("--skills"))
+                {
+                    using var directory = new ChampionDirectory();
+                    var reader = new UggSkillOrderReader(app.Dispatcher, profile, () => directory, Console.WriteLine);
+                    using var skillTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(110));
+                    foreach (var (id, role) in new[] { (202, 3), (106, 0), (112, 0) })
+                    {
+                        var result = await reader.FetchAsync(id, role, skillTimeout.Token);
+                        if (result.Status != SkillOrderStatus.Ok || result.Order.Order.Count != 18)
+                            throw new Exception($"Skill order missing for {id}/{role}: {result.Status}");
+                        Console.WriteLine("LIVE SKILLS " + id + " " + string.Join(',', result.Order.Order));
+                    }
+                    Console.WriteLine("LIVE SKILLS PASS; no League writes performed.");
+                    app.Shutdown(0);
+                    return;
+                }
                 window = new WebView2Window(new WebView2EnvironmentService(profile),
                     "https://coachbuild.local", new string('a', 64), profile);
                 window.Opacity = 0;

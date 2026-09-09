@@ -300,10 +300,14 @@ public partial class App : WpfApplication
 
         if (_services is NullDesktopHostServices)
         {
+            var skillReader = new UggSkillOrderReader(Dispatcher, Paths.WebView2UserDataFolder,
+                () => (_services as CoreDesktopHostServices)?.ChampionDirectory,
+                line => _log?.Info(line));
             var nativeServices = new CoreDesktopHostServices(
                 SessionToken,
                 Paths.Root,
                 log: _log,
+                skillOrderFetch: skillReader.FetchAsync,
                 rankSampleSecret: () => ResolveRankSampleSecret(settingsStore));
             nativeServices.PageRequested += OnNativePageRequested;
             _services = nativeServices;
@@ -1429,7 +1433,8 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         // The other half of the same seam. Production leaves BOTH null and one
         // RankSampleClient serves both POSTs; see the construction below.
         IDiagnosticsSink? diagnosticsSink = null,
-        RankCaptureOptions? rankCaptureOptions = null)
+        RankCaptureOptions? rankCaptureOptions = null,
+        Func<int, int, CancellationToken, Task<SkillOrderResult>>? skillOrderFetch = null)
     {
         if (!SessionTokenStore.IsValid(sessionToken))
             throw new ArgumentException("A valid persistent session token is required.", nameof(sessionToken));
@@ -1454,6 +1459,7 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
             _lcu,
             _live,
             skillOrders: skillOrders,
+            skillOrderFetch: skillOrderFetch,
             credentials: _credentials,
             log: _log,
             ports: bridgePorts);

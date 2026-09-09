@@ -61,6 +61,7 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
     private readonly Uri? _endpoint;
+    private readonly Func<int, int, CancellationToken, Task<SkillOrderResult>>? _fetch;
     private readonly TimeProvider _time;
     private readonly object _gate = new();
     private readonly Dictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
@@ -70,13 +71,15 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
     public SkillOrderProvider(
         HttpClient? client = null,
         Uri? endpoint = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        Func<int, int, CancellationToken, Task<SkillOrderResult>>? fetch = null)
     {
         _client = client ?? new HttpClient();
         _ownsClient = client is null;
         // v2 has no hosted recommender. The native overlay still shows live
         // ability state; an order is available only with an explicit provider.
         _endpoint = endpoint;
+        _fetch = fetch;
         // The 15 s / 60 s failure cooldowns below are the reason the caller's
         // retry backoff has to be longer than they are. They were untestable
         // while they read the ambient clock, so nothing pinned that
@@ -94,7 +97,7 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
         CancellationToken ct)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(SkillOrderProvider));
-        if (_endpoint is null) return Task.FromResult(NoData(championId));
+        if (_endpoint is null && _fetch is null) return Task.FromResult(NoData(championId));
         if (championId <= 0) return Task.FromResult(NoData(championId));
         var roleId = RoleId(role);
         if (roleId is null) return Task.FromResult(NoData(championId));
@@ -137,23 +140,30 @@ public sealed class SkillOrderProvider : ISkillOrderProvider, IPerGameSkillOrder
         SkillOrderResult result;
         try
         {
-            var uri = BuildUri(championId, roleId);
-            using var response = await _client.GetAsync(
-                uri,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
+            if (_fetch is not null)
             {
-                result = Error(championId);
+                result = await _fetch(championId, roleId, cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                using var document = await JsonDocument.ParseAsync(
-                    stream,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
-                result = Parse(document.RootElement, championId);
+                var uri = BuildUri(championId, roleId);
+                using var response = await _client.GetAsync(
+                    uri,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    result = Error(championId);
+                }
+                else
+                {
+                    await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    using var document = await JsonDocument.ParseAsync(
+                        stream,
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                    result = Parse(document.RootElement, championId);
+                }
             }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
