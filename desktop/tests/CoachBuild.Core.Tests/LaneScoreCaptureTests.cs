@@ -25,6 +25,55 @@ public sealed class LaneScoreCaptureTests
 
     private static JsonElement Json(string raw) => JsonDocument.Parse(raw).RootElement.Clone();
 
+    [Fact]
+    public void MatchHistoryJoinsIdentityToParticipantByIdRatherThanArrayOrder()
+    {
+        var payload = Json("""
+            {"gameId":42,"queueId":420,
+             "participantIdentities":[
+               {"participantId":8,"player":{"puuid":"enemy"}},
+               {"participantId":3,"player":{"puuid":"my-puuid"}}],
+             "participants":[
+               {"participantId":3,"championId":106,"teamId":100,"timeline":{"lane":"TOP","role":"SOLO"}},
+               {"participantId":8,"championId":887,"teamId":200,"timeline":{"lane":"TOP","role":"SOLO"}}]}
+            """);
+        var game = LaneScoreCapture.TryBuild(payload, MyPuuid, Now);
+        Assert.NotNull(game);
+        Assert.Equal(106, game.MyChampionId);
+        Assert.Equal(887, game.OpponentChampionId);
+        Assert.Equal(LaneRoles.Top, game.RoleId);
+    }
+
+    [Fact]
+    public void ALocalPlayerOnlySummaryMustNotBecomeAnUnscorableCard()
+    {
+        var payload = Json("""{"gameId":42,"queueId":420,"participants":[{"isLocalPlayer":true,"championId":106,"teamId":100}]}""");
+        Assert.Null(LaneScoreCapture.TryBuild(payload, MyPuuid, Now));
+        Assert.Equal("42", LaneScoreCapture.RankedMatchId(payload));
+    }
+
+    [Theory]
+    [InlineData("{\"games\":{\"games\":[null]}}")]
+    [InlineData("{\"games\":{\"games\":[42]}}")]
+    [InlineData("{\"games\":null}")]
+    public void MalformedHistoryEntriesAreNotRecordable(string raw)
+    {
+        Assert.Null(LaneScoreCapture.TryBuild(Json(raw), MyPuuid, Now));
+    }
+
+    [Fact]
+    public void MissingLocalTeamDoesNotClassifyAlliesAsEnemies()
+    {
+        var payload = Json("""
+            {"gameId":42,"queueId":420,"participants":[
+              {"isLocalPlayer":true,"championId":106,"teamPosition":"TOP"},
+              {"championId":64,"teamId":100,"teamPosition":"JUNGLE"},
+              {"championId":887,"teamId":200,"teamPosition":"TOP"}
+            ]}
+            """);
+        Assert.Null(LaneScoreCapture.TryBuild(payload, MyPuuid, Now));
+    }
+
     /// <summary>The flat match-history shape: one `participants` array, positions on the participant.</summary>
     private static JsonElement MatchHistoryGame(
         int queueId = RankedQueues.SoloDuo,

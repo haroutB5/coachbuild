@@ -89,7 +89,6 @@ public sealed class LaneScoreStore
         {
             if (!File.Exists(_path)) return new LaneScoreDocument();
             var raw = File.ReadAllText(_path);
-            if (string.IsNullOrWhiteSpace(raw)) return new LaneScoreDocument();
             var document = JsonSerializer.Deserialize<LaneScoreDocument>(raw, DocumentJson);
             if (document is null)
             {
@@ -102,6 +101,14 @@ public sealed class LaneScoreStore
             document.Pending ??= [];
             document.Scores ??= [];
             document.Skipped ??= [];
+            // JSON permits null elements even in non-nullable C# lists. Refuse
+            // the document rather than crashing or dropping history on a write.
+            if (document.Pending.Any(game => game is null || game.EnemyChampionIds is null) ||
+                document.Scores.Any(record => record?.Game is null || record.Game.EnemyChampionIds is null))
+            {
+                readable = false;
+                return new LaneScoreDocument();
+            }
             return document;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -120,13 +127,14 @@ public sealed class LaneScoreStore
     /// months building because a disk hiccup made one read fail. An unreadable
     /// file makes the mutation a no-op and the caller is told.</para>
     /// </summary>
-    private T Mutate<T>(Func<LaneScoreDocument, T> mutation, T unreadableResult)
+    private T Mutate<T>(Func<LaneScoreDocument, T> mutation, T unreadableResult, Func<T, bool> shouldWrite)
     {
         lock (GetGate())
         {
             var document = ReadCore(out var readable);
             if (!readable && File.Exists(_path)) return unreadableResult;
             var result = mutation(document);
+            if (!shouldWrite(result)) return result;
             document.SchemaVersion = LaneScoreDocument.CurrentSchemaVersion;
             Write(document);
             return result;
@@ -179,7 +187,7 @@ public sealed class LaneScoreStore
             if (document.Knows(game.MatchId)) return false;
             document.Pending.Add(game);
             return true;
-        }, unreadableResult: false);
+        }, unreadableResult: false, shouldWrite: static added => added);
     }
 
     /// <summary>
@@ -230,6 +238,14 @@ public sealed class LaneScoreStore
             if (request.Score is not { } score || score < 1 || score > 10)
                 return LaneScoreSubmission.Rejected("bad-score");
 
+            var roleId = game.RoleId;
+            if (!LaneRoles.IsValid(roleId))
+            {
+                if (!LaneRoles.IsValid(request.RoleId))
+                    return LaneScoreSubmission.Rejected("role-required");
+                roleId = request.RoleId;
+            }
+
             var opponentId = game.OpponentChampionId;
             if (opponentId is null or <= 0)
             {
@@ -254,6 +270,7 @@ public sealed class LaneScoreStore
 
             var resolved = game with
             {
+                RoleId = roleId,
                 OpponentChampionId = opponentId,
                 OpponentChampionName = opponentId == game.OpponentChampionId
                     ? game.OpponentChampionName
@@ -269,7 +286,7 @@ public sealed class LaneScoreStore
                 ScoredAt = now.ToString("O"),
             });
             return LaneScoreSubmission.Accepted;
-        }, unreadableResult: LaneScoreSubmission.Rejected("store-unreadable"));
+        }, unreadableResult: LaneScoreSubmission.Rejected("store-unreadable"), shouldWrite: static result => result.Ok);
     }
 
     /// <summary>Bounded and trimmed. A note is a memory aid, not a document.</summary>
@@ -289,6 +306,9 @@ public sealed record LaneScoreSubmitRequest
 
     [System.Text.Json.Serialization.JsonPropertyName("score")]
     public int? Score { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("roleId")]
+    public int? RoleId { get; init; }
 
     [System.Text.Json.Serialization.JsonPropertyName("opponentChampionId")]
     public int? OpponentChampionId { get; init; }

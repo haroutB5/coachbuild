@@ -16,9 +16,11 @@
 //
 // `WebView2WindowTests.TheDraftPageIsPackagedNextToTheAppBinary` asserts a real
 // utility class is present in the packaged CSS, so this cannot regress quietly.
-export default {
+const postcssConfig = {
   plugins: {
     tailwindcss: {},
     autoprefixer: {},
   },
 };
+
+export default postcssConfig;

@@ -1,6 +1,6 @@
 # CoachBuild — technical reference
 
-**Describes desktop 2.3.2, 2026-09-10.** `desktop/src/Directory.Build.props`'s
+**Describes desktop 2.3.3, 2026-09-10.** `desktop/src/Directory.Build.props`'s
 `<Version>` is the single source of truth for the app version (it moved there in
 2.1.0; it is no longer in the csproj). If it has moved on since this date, treat
 everything below with more skepticism the further it has fallen behind, and check
@@ -234,7 +234,7 @@ UI: `components/hextech/draft/LaneScoreCard.tsx` and `LaneHistoryPanel.tsx`.
 
 ```
 GET  /lane-scores/pending?session=          {"pending": <game>|null}
-POST /lane-scores?session=                  {matchId, score 1-10, opponentChampionId?, note?}
+POST /lane-scores?session=                  {matchId, score 1-10, opponentChampionId?, roleId?, note?}
                                             or {matchId, skip:true} -> {ok, reason?}
 GET  /lane-scores/recommendations?enemy=&role=&session=
                                             {enemyChampionId, roleId, totalGames, best[], worst[]}
@@ -243,6 +243,19 @@ GET  /lane-scores/recommendations?enemy=&role=&session=
 None of the three calls the LCU — they read and write a local file — so the card
 still works with the League client shut, which is exactly when a user sits down
 to score the game they just played.
+
+Capture joins match-history `participantIdentities[].player.puuid` to
+`participants[]` by `participantId`. If a ranked list entry cannot supply the
+players, capture requests `/lol-match-history/v1/games/{id}` and verifies its id
+before storing it. An already-known game does not end the settle retries.
+An unknown player role must be chosen on the card (`roleId`, 0–4) before saving;
+skip remains available. Successful submissions refresh the displayed history.
+“Last played” uses the game date, rather than the date the score was entered.
+
+The built-page regression check is `node scripts/test-lane-score-ui.mjs` after
+`npm run build`. It uses Chromium with a simulated bridge and CDN and never
+reads or writes the real lane history. It checks role/opponent selection,
+failed-save recovery, polling during a delayed save, history refresh and skip.
 
 Rules that are product decisions, not implementation details:
 

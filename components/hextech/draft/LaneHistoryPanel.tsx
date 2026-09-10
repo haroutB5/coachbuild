@@ -29,13 +29,14 @@ function HistoryList({ title, subtitle, rows, tone, champIcons }: {
           // star rating — n and the mean are the only facts we have.
           const single = row.games === 1;
           const lastPlayed = formatLastPlayed(row.lastPlayedAt);
+          const name = champIcons.get(row.championId)?.name ?? row.championName;
           return <li key={row.championId} className="flex items-center gap-2.5 py-2">
             <span className="h-8 w-8 shrink-0 overflow-hidden rounded">
-              <IconWithFallback src={champIcons.get(row.championId)?.icon ?? ""} alt={row.championName}
-                fallbackGlyph={row.championName} size={32} className="h-full w-full object-cover" />
+              <IconWithFallback src={champIcons.get(row.championId)?.icon ?? ""} alt={name}
+                fallbackGlyph={name} size={32} className="h-full w-full object-cover" />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm">{row.championName}</span>
+              <span className="block truncate text-sm">{name}</span>
               {lastPlayed && <span className="block text-[11px] text-mut">Last played {lastPlayed}</span>}
             </span>
             <span className="shrink-0 text-right">
@@ -70,10 +71,11 @@ function HistoryList({ title, subtitle, rows, tone, champIcons }: {
  * Renders null when there is no opponent or no scored games at all — an empty
  * personal box in every champ select is noise.
  */
-export default function LaneHistoryPanel({ enemyId, enemyName, roleId, champIcons, loadRecommendations }: {
+export default function LaneHistoryPanel({ enemyId, enemyName, roleId, champIcons, loadRecommendations, refreshKey = 0 }: {
   enemyId: number | null; enemyName: string | null; roleId: number;
   champIcons: Map<number, ChampionIconEntry>;
   loadRecommendations: (enemy: number, role: number, signal: AbortSignal) => Promise<LaneRecommendations>;
+  refreshKey?: number;
 }) {
   const [state, setState] = useState<PanelState>({ status: "loading" });
   const reqId = useRef(0);
@@ -89,7 +91,7 @@ export default function LaneHistoryPanel({ enemyId, enemyName, roleId, champIcon
       if (!controller.signal.aborted && id === reqId.current) setState({ status: "error" });
     });
     return () => controller.abort();
-  }, [enemyId, roleId, loadRecommendations]);
+  }, [enemyId, roleId, loadRecommendations, refreshKey]);
 
   if (enemyId === null) return null;
   if (state.status === "ok" && state.data.totalGames === 0) return null;

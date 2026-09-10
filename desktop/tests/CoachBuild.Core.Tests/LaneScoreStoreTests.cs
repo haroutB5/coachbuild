@@ -33,6 +33,123 @@ public sealed class LaneScoreStoreTests : IDisposable
 
     private LaneScoreStore Store() => new(_path);
 
+    [Theory]
+    [InlineData(420, true)]
+    [InlineData(440, true)]
+    [InlineData(450, false)]
+    public async Task RankedSummariesFetchTheFullMatchBeforeOfferingAScore(int queue, bool expected)
+    {
+        var lcu = new MockLcuApi();
+        lcu.Enqueue(HttpMethod.Get, "/lol-summoner/v1/current-summoner",
+            new LcuResponse(true, 200, MockLcuApi.Json("""{"puuid":"me"}""")));
+        lcu.Enqueue(HttpMethod.Get, LaneScoreService.MatchHistoryPath,
+            new LcuResponse(true, 200, MockLcuApi.Json($$$"""{"games":{"games":[{"gameId":42,"queueId":{{{queue}}},"participants":[{"championId":106,"teamId":100}]}]}}""")));
+        lcu.Enqueue(HttpMethod.Get, "/lol-match-history/v1/games/42",
+            new LcuResponse(true, 200, MockLcuApi.Json($$$"""
+                {"gameId":42,"queueId":{{{queue}}},
+                 "participantIdentities":[{"participantId":1,"player":{"puuid":"me"}}],
+                 "participants":[{"participantId":1,"championId":106,"teamId":100,"teamPosition":"TOP"},
+                                 {"participantId":2,"championId":887,"teamId":200,"teamPosition":"TOP"}]}
+                """)));
+        var service = new LaneScoreService(lcu, Store(), settleAttempts: 0);
+        await service.CaptureAsync();
+        Assert.Equal(expected, Store().Pending() is not null);
+        Assert.Equal(expected ? 1 : 0, lcu.Count(HttpMethod.Get, "/lol-match-history/v1/games/42"));
+        if (expected) Assert.Equal(887, Store().Pending()!.OpponentChampionId);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(-1)]
+    [InlineData(5)]
+    public void UnknownRoleMustBeChosenBeforeScoring(int? role)
+    {
+        var store = Store();
+        store.Capture(Game(roleId: null));
+        var result = store.Submit(new LaneScoreSubmitRequest { MatchId = Game().MatchId, Score = 8, RoleId = role }, DateTimeOffset.UtcNow);
+        Assert.Equal("role-required", result.Reason);
+        Assert.Empty(store.Read().Scores);
+        Assert.Single(store.Read().Pending);
+    }
+
+    [Fact]
+    public void ChoosingAnUnknownRoleMakesTheScoreReachableInRecommendations()
+    {
+        var store = Store();
+        store.Capture(Game(roleId: null));
+        Assert.True(store.Submit(new LaneScoreSubmitRequest { MatchId = Game().MatchId, Score = 8, RoleId = LaneRoles.Utility }, DateTimeOffset.UtcNow).Ok);
+        Assert.Equal(1, LaneScoreAggregator.Recommend(store.Read().Scores, 887, LaneRoles.Utility).TotalGames);
+        Assert.Equal(0, LaneScoreAggregator.Recommend(store.Read().Scores, 887, LaneRoles.Bottom).TotalGames);
+    }
+
+    [Fact]
+    public void UnknownRoleCanStillBeSkipped()
+    {
+        var store = Store();
+        store.Capture(Game(roleId: null));
+        Assert.True(store.Submit(new LaneScoreSubmitRequest { MatchId = Game().MatchId, Skip = true }, DateTimeOffset.UtcNow).Ok);
+        Assert.Null(store.Pending());
+    }
+
+    [Fact]
+    public void RejectedAndDuplicateWritesDoNotTouchTheHistoryFile()
+    {
+        var store = Store();
+        Assert.True(store.Capture(Game()));
+        var stamp = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(_path, stamp);
+        Assert.False(store.Capture(Game()));
+        Assert.False(store.Submit(new LaneScoreSubmitRequest { MatchId = Game().MatchId, Score = 99 }, DateTimeOffset.UtcNow).Ok);
+        Assert.Equal(stamp, File.GetLastWriteTimeUtc(_path));
+    }
+
+    [Theory]
+    [InlineData("{\"pending\":[null]}")]
+    [InlineData("{\"scores\":[null]}")]
+    [InlineData("{\"scores\":[{\"game\":null,\"score\":8}]}")]
+    [InlineData("{\"pending\":[{\"matchId\":\"old\",\"enemyChampionIds\":null}]}")]
+    [InlineData("   ")]
+    public void InvalidStoredRecordsAreReadSafelyAndNeverOverwritten(string raw)
+    {
+        File.WriteAllText(_path, raw);
+        var store = Store();
+        Assert.Null(store.Pending());
+        Assert.Empty(store.Read().Scores);
+        Assert.False(store.Capture(Game()));
+        Assert.Equal("store-unreadable", store.Submit(new LaneScoreSubmitRequest { MatchId = "old", Skip = true }, DateTimeOffset.UtcNow).Reason);
+        Assert.Equal(raw, File.ReadAllText(_path));
+    }
+
+    [Fact]
+    public async Task CaptureRetriesWhenHistoryStillContainsThePreviousKnownGame()
+    {
+        var store = Store();
+        store.Capture(Game());
+        var lcu = new MockLcuApi();
+        var prompts = 0;
+        foreach (var id in new[] { Game().MatchId, "new-game" })
+            lcu.Enqueue(HttpMethod.Get, LaneScoreService.MatchHistoryPath, new LcuResponse(true, 200,
+                MockLcuApi.Json($$"""{"gameId":"{{id}}","queueId":420,"participants":[{"isLocalPlayer":true,"championId":106,"teamId":100,"teamPosition":"TOP"},{"championId":887,"teamId":200,"teamPosition":"TOP"}]}""")));
+        var service = new LaneScoreService(lcu, store, prompt: () => prompts++, settleAttempts: 1,
+            delay: (_, _) => Task.CompletedTask);
+
+        await service.CaptureAsync();
+
+        Assert.Equal("new-game", store.Pending()!.MatchId);
+        Assert.Equal(2, lcu.Count(HttpMethod.Get, LaneScoreService.MatchHistoryPath));
+        Assert.Equal(1, prompts);
+    }
+
+    [Fact]
+    public async Task DirectDemoCaptureDoesNotReadTheClientOrWriteRealGames()
+    {
+        var lcu = new MockLcuApi();
+        var service = new LaneScoreService(lcu, Store(), demo: true, settleAttempts: 0);
+        await service.CaptureAsync();
+        Assert.Empty(lcu.Calls);
+        Assert.False(File.Exists(_path));
+    }
+
     private static LaneScoreGame Game(
         string matchId = "7351234567",
         int queueId = RankedQueues.SoloDuo,

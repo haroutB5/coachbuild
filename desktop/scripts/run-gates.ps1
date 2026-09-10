@@ -51,14 +51,15 @@ foreach ($relative in $projects) {
 
     Write-Host "gate: running $relative"
     $output = & $Dotnet test $project -c $Configuration 2>&1
+    $exitCode = $LASTEXITCODE
     $passed = $output | Select-String -Pattern '^Passed!' -Quiet
     $summary = ($output | Select-String -Pattern 'Passed!|Failed!' | Select-Object -First 1)
 
-    if ($passed) {
+    if ($passed -and $exitCode -eq 0) {
         Write-Host "  $summary"
     } else {
         # No "Passed!" line at all is the exact silent-skip shape this guards.
-        Write-Warning "  no Passed! line for $relative (exit $LASTEXITCODE)"
+        Write-Warning "  suite did not pass cleanly: $relative (exit $exitCode, Passed! present: $passed)"
         $output | Select-Object -Last 15 | ForEach-Object { Write-Host "    $_" }
         $failed += $relative
     }

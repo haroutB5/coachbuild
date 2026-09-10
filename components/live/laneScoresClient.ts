@@ -43,6 +43,8 @@ export interface PendingLaneScore {
 export interface LaneScoreSubmission {
   matchId: string;
   score: number;
+  /** Required when the client could not identify the player's role. */
+  roleId?: RoleId | null;
   /** Required when the pending record carried a null opponent. */
   opponentChampionId?: number | null;
   note?: string;
@@ -50,7 +52,7 @@ export interface LaneScoreSubmission {
 
 export type LaneScoreFailureReason =
   | "unknown-match" | "already-scored" | "bad-score"
-  | "opponent-required" | "bad-opponent" | "bad-request";
+  | "opponent-required" | "bad-opponent" | "bad-request" | "role-required" | "store-unreadable";
 
 export type LaneScoreResult = { ok: true } | { ok: false; reason: string; message: string };
 
@@ -64,6 +66,8 @@ export function laneScoreFailureMessage(reason: string): string {
     case "opponent-required": return "Pick the champion you laned against before saving.";
     case "bad-opponent": return "That champion was not on the enemy team in this game.";
     case "bad-request": return "CoachBuild could not read that submission.";
+    case "role-required": return "Pick the role you played before saving.";
+    case "store-unreadable": return "CoachBuild could not read your saved lane history. Your existing file has been left unchanged.";
     default: return "The score was not saved.";
   }
 }
@@ -114,6 +118,7 @@ export async function fetchPendingLaneScore(signal?: AbortSignal): Promise<Pendi
  *  non-destructive card error, not an exception. */
 export async function submitLaneScore(submission: LaneScoreSubmission, signal?: AbortSignal): Promise<LaneScoreResult> {
   const payload: Record<string, unknown> = { matchId: submission.matchId, score: submission.score };
+  if (typeof submission.roleId === "number") payload.roleId = submission.roleId;
   if (typeof submission.opponentChampionId === "number") payload.opponentChampionId = submission.opponentChampionId;
   const note = submission.note?.trim();
   if (note) payload.note = note.slice(0, MAX_LANE_NOTE_LENGTH);

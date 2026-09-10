@@ -107,6 +107,7 @@ public sealed class LaneScoreService
     /// <summary>One capture, start to finish. Never throws, for any input, from any dependency.</summary>
     public async Task CaptureAsync(CancellationToken cancellationToken = default)
     {
+        if (_demo) return;
         try
         {
             await CaptureCoreAsync(cancellationToken).ConfigureAwait(false);
@@ -133,6 +134,18 @@ public sealed class LaneScoreService
                 if (!response.Ok || response.Content is not { } content) continue;
 
                 var game = LaneScoreCapture.TryBuild(content, ownPuuid, _time.GetUtcNow());
+                if (game is null && path == MatchHistoryPath &&
+                    LaneScoreCapture.RankedMatchId(content) is { } matchId)
+                {
+                    var detail = await _lcu.SendAsync(HttpMethod.Get,
+                        "/lol-match-history/v1/games/" + Uri.EscapeDataString(matchId),
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                    if (detail.Ok && detail.Content is { } full)
+                    {
+                        var candidate = LaneScoreCapture.TryBuild(full, ownPuuid, _time.GetUtcNow());
+                        if (candidate?.MatchId == matchId) game = candidate;
+                    }
+                }
                 if (game is null)
                 {
                     // Not ranked, or a shape we could not read. The inventory
@@ -146,8 +159,10 @@ public sealed class LaneScoreService
 
                 if (!_store.Capture(game))
                 {
-                    SafeLog(() => _log.Info($"lane-score: {Source(path)} game already known -- not re-prompting"));
-                    return;
+                    // History can still point at the previous game while the
+                    // platform settles. A duplicate must not end the retry loop.
+                    SafeLog(() => _log.Info($"lane-score: {Source(path)} game not added; continuing settle checks"));
+                    continue;
                 }
 
                 SafeLog(() => _log.Info(

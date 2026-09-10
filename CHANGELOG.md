@@ -1,5 +1,23 @@
 # Changelog
 
+## Desktop 2.3.3 (2026-09-10)
+
+- Fixed lane-score capture from match history by joining player identities to
+  participants and fetching full match details when needed. Delayed history
+  showing an already-known game no longer stops capture retries.
+- Games with an unknown role now ask which role you played before saving, so
+  their scores can appear in the right recommendations. Skip remains available.
+- Saving no longer loses its selection when a background poll completes.
+  Recommendations refresh after saving, champion names resolve from the roster,
+  and Last played shows the game date rather than the scoring date.
+- Malformed local history is preserved without crashing. Duplicate captures and
+  rejected submissions no longer rewrite the history file.
+- Bridge polling retains its timeout when a cancellation signal is supplied.
+  Desktop release gates now require both a passing summary and a successful exit.
+- Verified with 1,694 automated tests, the built-page browser check, and live
+  u.gg skill-order and u.gg/Coachless import checks. Real ranked game-end capture
+  still requires field verification.
+
 ## Desktop 2.3.2 (2026-09-10)
 
 - **Your support games and your ADC games are no longer the same bucket.** Match

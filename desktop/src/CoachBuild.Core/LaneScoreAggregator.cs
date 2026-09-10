@@ -72,7 +72,7 @@ public static class LaneScoreAggregator
                 Mean: Math.Round(group.Average(record => (double)record.Score), 1,
                     MidpointRounding.AwayFromZero),
                 LastPlayedAt: group
-                    .Select(record => record.ScoredAt ?? record.Game.PlayedAt)
+                    .Select(record => record.Game.PlayedAt ?? record.ScoredAt)
                     .Where(stamp => !string.IsNullOrWhiteSpace(stamp))
                     .OrderByDescending(stamp => stamp, StringComparer.Ordinal)
                     .FirstOrDefault()))

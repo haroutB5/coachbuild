@@ -100,7 +100,7 @@ public static class LaneScoreCapture
         if (participants.Count == 0) return null;
 
         var me = FindLocalPlayer(participants, ownPuuid);
-        if (me is null || me.ChampionId <= 0) return null;
+        if (me is null || me.ChampionId <= 0 || me.TeamId is null or <= 0) return null;
 
         var enemies = participants
             .Where(participant => participant.TeamId is not null && participant.TeamId != me.TeamId)
@@ -108,6 +108,9 @@ public static class LaneScoreCapture
             .ToArray();
 
         var enemyIds = enemies.Select(participant => participant.ChampionId).Distinct().ToArray();
+        // A match-list summary may contain only the local player. It cannot
+        // supply an opponent picker; the service must fetch the full game.
+        if (enemyIds.Length == 0) return null;
 
         // The opponent, or an honest null. Note that BOTH sides must have a
         // position: knowing that I was TOP tells me nothing if no enemy says
@@ -275,7 +278,17 @@ public static class LaneScoreCapture
         {
             foreach (var element in flat.EnumerateArray())
             {
-                if (ReadParticipant(element, null) is { } participant) result.Add(participant);
+                if (ReadParticipant(element, null) is not { } participant) continue;
+                if (participant.Puuid is null && ReadInt(element, ["participantId"]) is { } id &&
+                    root.TryGetProperty("participantIdentities", out var identities) && identities.ValueKind == JsonValueKind.Array)
+                {
+                    var matching = identities.EnumerateArray()
+                        .Where(identity => ReadInt(identity, ["participantId"]) == id)
+                        .ToArray();
+                    if (matching.Length == 1 && matching[0].TryGetProperty("player", out var player))
+                        participant = participant with { Puuid = ReadString(player, ["puuid"]) };
+                }
+                result.Add(participant);
             }
             if (result.Count > 0) return result;
         }
@@ -552,6 +565,13 @@ public static class LaneScoreCapture
             }
         }
         return null;
+    }
+
+    /// <summary>The ranked summary's id, used only to request its full match.</summary>
+    public static string? RankedMatchId(JsonElement payload)
+    {
+        var root = UnwrapGame(payload);
+        return RankedQueues.IsRanked(ReadInt(root, QueueIdKeys)) ? ReadGameId(root) : null;
     }
 
     private static string? ReadTimestamp(JsonElement root)

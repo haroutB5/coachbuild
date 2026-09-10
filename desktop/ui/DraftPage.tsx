@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChampionRef } from "@/lib/types";
 import { loadDdragon } from "@/lib/ddragonClient";
 import DraftControls from "@/components/hextech/draft/DraftControls";
@@ -25,6 +25,7 @@ export default function DraftPage() {
   const [allyIds, setAllyIds] = useState<number[]>([]);
   const [laneOpponentId, setLaneOpponentId] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [historyRevision, setHistoryRevision] = useState(0);
   const entry = useRef(INITIAL_CHAMP_SELECT_ENTRY_STATE);
 
   useEffect(() => {
@@ -53,7 +54,6 @@ export default function DraftPage() {
     const transition = resolveChampSelectEntry(entry.current, status?.phase ?? null);
     entry.current = transition.next;
     // This effect applies an external LCU snapshot as one consistent UI update.
-    /* eslint-disable react-hooks/set-state-in-effect */
     if (transition.isEntry) { setDirty(false); setLaneOpponentId(null); setAllyIds([]); }
     const target = resolveDraftLiveTarget({ phase: status?.phase ?? null, champSelect: status?.champSelect ?? null, dirty: transition.isEntry ? false : dirty });
     if (!target) return;
@@ -61,7 +61,6 @@ export default function DraftPage() {
     setEnemyIds(target.enemies);
     setHover(target.hover);
     setLaneOpponentId(current => current !== null && target.enemies.includes(current) ? current : null);
-    /* eslint-enable react-hooks/set-state-in-effect */
   }, [status, dirty]);
 
 
@@ -71,7 +70,7 @@ export default function DraftPage() {
   function handleAddEnemy(champ: ChampionRef) { setDirty(true); setEnemyIds(ids => ids.includes(champ.id) ? ids : [...ids, champ.id].slice(0, 5)); }
   function handleRemoveEnemy(id: number) { setDirty(true); setEnemyIds(ids => ids.filter(x => x !== id)); if (laneOpponentId === id) setLaneOpponentId(null); }
   function handleToggleLaneOpponent(id: number) { setLaneOpponentId(current => current === id ? null : id); }
-  const icons = new Map(champions.map(champ => [champ.id, champ]));
+  const icons = useMemo(() => new Map(champions.map(champ => [champ.id, champ])), [champions]);
   const counterEnemy = laneOpponentId ?? enemyIds[0] ?? null;
 
   return <main className="mx-auto max-w-[1200px] space-y-5 p-6">
@@ -81,7 +80,8 @@ export default function DraftPage() {
     </header>
     {championError && <p role="alert">Champion data is unavailable from DDragon. Check your connection and reload.</p>}
     <LaneScoreCard champIcons={icons} loadPending={fetchPendingLaneScore}
-      submitScore={submitLaneScore} skipScore={skipLaneScore} />
+      submitScore={submitLaneScore} skipScore={skipLaneScore}
+      onResolved={() => setHistoryRevision(value => value + 1)} />
     <DraftControls lane={lane} laneOptions={laneOptions} onLaneChange={handleLaneChange}
       hover={hover} allyIds={allyIds} champIcons={icons} onPick={handleHoverChange} onClearPick={handleClearHover}
       onAddAlly={champ => setAllyIds(ids => ids.includes(champ.id) ? ids : [...ids, champ.id].slice(0, 4))}
@@ -94,7 +94,8 @@ export default function DraftPage() {
     <CounterPicksStrip enemyId={counterEnemy} enemyName={counterEnemy ? icons.get(counterEnemy)?.name ?? null : null}
       lane={lane} champIcons={icons} loadCounters={loadLocalCounters} />
     <LaneHistoryPanel enemyId={counterEnemy} enemyName={counterEnemy ? icons.get(counterEnemy)?.name ?? null : null}
-      roleId={LANE_TO_ROLE_ID[lane]} champIcons={icons} loadRecommendations={fetchLaneRecommendations} />
+      roleId={LANE_TO_ROLE_ID[lane]} champIcons={icons} loadRecommendations={fetchLaneRecommendations}
+      refreshKey={historyRevision} />
     <section className="rounded-lg bg-panel p-4"><h2 className="font-semibold">Automatic imports</h2>
       <p className="mt-2 text-sm text-mut">Hover a champion to import u.gg and Coachless rune pages and item builds. Rune pages are prioritised so you can choose one during champion select.</p>
     </section>

@@ -7,8 +7,8 @@ import { getStoredPort, getStoredSession } from "@/components/live/companionClie
  *
  * `init` is optional and additive so the original `(path, signal)` call shape
  * keeps working: pass a method/body through it for POSTs. An explicit
- * `signal` argument always wins over `init.signal`, and when neither is given
- * the 20s timeout still applies — a bridge call must never hang forever.
+ * `signal` argument always wins over `init.signal`. Cancellation is combined
+ * with the 20s timeout so a mounted polling component cannot hang forever.
  */
 export async function localBridgeFetch(path: string, signal?: AbortSignal, init?: RequestInit): Promise<Response> {
   const port = getStoredPort();
@@ -17,7 +17,9 @@ export async function localBridgeFetch(path: string, signal?: AbortSignal, init?
   const url = new URL(path, `http://127.0.0.1:${port}`);
   if (url.origin !== `http://127.0.0.1:${port}`) throw new Error("Invalid bridge destination");
   url.searchParams.set("session", session);
-  return fetch(url, { ...init, signal: signal ?? init?.signal ?? AbortSignal.timeout(20000) });
+  const callerSignal = signal ?? init?.signal;
+  const timeout = AbortSignal.timeout(20000);
+  return fetch(url, { ...init, signal: callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout });
 }
 
 /** POST JSON to the bridge. Kept next to the GET path so the session/origin

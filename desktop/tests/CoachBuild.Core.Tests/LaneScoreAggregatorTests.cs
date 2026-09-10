@@ -14,6 +14,17 @@ namespace CoachBuild.Core.Tests;
 /// </summary>
 public sealed class LaneScoreAggregatorTests
 {
+    [Fact]
+    public void LastPlayedUsesTheGameDateEvenWhenAnOlderGameWasScoredLater()
+    {
+        var recent = Record(106, 887, 8, scoredAt: "2026-09-09T12:00:00Z");
+        recent = recent with { Game = recent.Game with { PlayedAt = "2026-09-08T12:00:00Z" } };
+        var older = Record(106, 887, 7, scoredAt: "2026-09-10T12:00:00Z");
+        older = older with { Game = older.Game with { PlayedAt = "2026-09-01T12:00:00Z" } };
+        var row = Assert.Single(LaneScoreAggregator.Recommend([recent, older], 887, LaneRoles.Top).Best);
+        Assert.Equal(recent.Game.PlayedAt, row.LastPlayedAt);
+    }
+
     private static LaneScoreRecord Record(
         int myChampionId,
         int opponentChampionId,
