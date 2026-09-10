@@ -295,6 +295,178 @@ public sealed class LaneScoreCaptureTests
         Assert.Null(LaneScoreCapture.TryBuild(Json("""{"gameId":1,"queueId":420,"participants":[]}"""), MyPuuid, Now));
     }
 
+    /// <summary>
+    /// A real bot-lane game as the live client publishes it: lane and role under
+    /// <c>timeline</c>, and <b>all four bot laners reporting lane BOTTOM</b>.
+    /// Position alone can never separate an ADC from a support, which is why
+    /// every bot-lane game used to ask the user who they laned against.
+    /// </summary>
+    private static JsonElement BotLaneGame(
+        string myRole = "DUO_CARRY",
+        string enemyAdcRole = "DUO_CARRY",
+        string enemySupportRole = "DUO_SUPPORT") => Json($$"""
+        {
+          "gameId": 7351299001,
+          "queueId": 420,
+          "participants": [
+            { "puuid": "{{MyPuuid}}", "championId": 22, "championName": "Ashe", "teamId": 100,
+              "timeline": { "lane": "BOTTOM", "role": "{{myRole}}" } },
+            { "puuid": "ally-sup", "championId": 412, "teamId": 100,
+              "timeline": { "lane": "BOTTOM", "role": "DUO_SUPPORT" } },
+            { "puuid": "ally-top", "championId": 86, "teamId": 100,
+              "timeline": { "lane": "TOP", "role": "SOLO" } },
+            { "puuid": "enemy-adc", "championId": 51, "championName": "Caitlyn", "teamId": 200,
+              "timeline": { "lane": "BOTTOM", "role": "{{enemyAdcRole}}" } },
+            { "puuid": "enemy-sup", "championId": 555, "championName": "Pyke", "teamId": 200,
+              "timeline": { "lane": "BOTTOM", "role": "{{enemySupportRole}}" } },
+            { "puuid": "enemy-top", "championId": 122, "championName": "Darius", "teamId": 200,
+              "timeline": { "lane": "TOP", "role": "SOLO" } }
+          ]
+        }
+        """);
+
+    /// <summary>
+    /// The ADC's opponent is the enemy ADC, not the enemy support and not a
+    /// question. Two enemies sit at BOTTOM; role is what breaks the tie.
+    /// </summary>
+    [Fact]
+    public void BotLaneResolvesTheEnemyCarryForACarry()
+    {
+        var game = LaneScoreCapture.TryBuild(BotLaneGame(), MyPuuid, Now);
+
+        Assert.NotNull(game);
+        Assert.Equal(51, game.OpponentChampionId);
+        Assert.Equal("Caitlyn", game.OpponentChampionName);
+        // The log still names what actually worked, both halves of it.
+        Assert.Equal("timeline.lane+timeline.role", game.PositionSource);
+    }
+
+    /// <summary>And the mirror: a support lands on the enemy support.</summary>
+    [Fact]
+    public void BotLaneResolvesTheEnemySupportForASupport()
+    {
+        var game = LaneScoreCapture.TryBuild(BotLaneGame(myRole: "DUO_SUPPORT"), MyPuuid, Now);
+
+        Assert.NotNull(game);
+        Assert.Equal(555, game.OpponentChampionId);
+        Assert.Equal("Pyke", game.OpponentChampionName);
+        Assert.Equal("timeline.lane+timeline.role", game.PositionSource);
+    }
+
+    /// <summary>
+    /// My role is the client's stated unknown. An unusable role is NOT a licence
+    /// to pick one of the two — it falls straight back to asking.
+    /// </summary>
+    [Theory]
+    [InlineData("NONE")]
+    [InlineData("")]
+    public void BotLaneWithoutAUsableRoleOfMyOwnStaysAmbiguous(string myRole)
+    {
+        Assert.Null(LaneScoreCapture.NormalizeRole(myRole));
+
+        var game = LaneScoreCapture.TryBuild(BotLaneGame(myRole: myRole), MyPuuid, Now);
+
+        Assert.NotNull(game);
+        Assert.Null(game.OpponentChampionId);
+        Assert.Contains("ambiguous", game.PositionSource);
+    }
+
+    /// <summary>
+    /// The sharpest version of the same rule: my role is <c>NONE</c> and so is
+    /// exactly ONE enemy's. If unknown were a value rather than an absence,
+    /// "NONE matches NONE" would narrow to exactly one enemy and resolve — a
+    /// confident opponent built out of two participants who both said they did
+    /// not know. It must stay ambiguous.
+    /// </summary>
+    [Fact]
+    public void TwoStatedUnknownRolesDoNotMatchEachOther()
+    {
+        var game = LaneScoreCapture.TryBuild(
+            BotLaneGame(myRole: "NONE", enemyAdcRole: "NONE", enemySupportRole: "DUO_SUPPORT"),
+            MyPuuid,
+            Now);
+
+        Assert.NotNull(game);
+        Assert.Null(game.OpponentChampionId);
+        Assert.Contains("ambiguous", game.PositionSource);
+    }
+
+    /// <summary>
+    /// Roles are present on every participant and NONE of them is mine. Zero
+    /// matches is just as ambiguous as two, and a carry must never be handed the
+    /// support as an opponent.
+    /// </summary>
+    [Fact]
+    public void BotLaneWhereNoEnemyRoleMatchesStaysAmbiguous()
+    {
+        var game = LaneScoreCapture.TryBuild(
+            BotLaneGame(myRole: "DUO_CARRY", enemyAdcRole: "DUO_SUPPORT", enemySupportRole: "DUO_SUPPORT"),
+            MyPuuid,
+            Now);
+
+        Assert.NotNull(game);
+        Assert.Null(game.OpponentChampionId);
+        Assert.Contains("ambiguous", game.PositionSource);
+    }
+
+    /// <summary>
+    /// The control. Top lane is unique by position, so it resolves without role
+    /// ever being consulted — and the source string stays the position field on
+    /// its own. If this ever reads "+role" the narrowing has leaked into lanes
+    /// that never needed it.
+    /// </summary>
+    [Fact]
+    public void TopLaneStillResolvesOnPositionAloneWithNoRoleSuffix()
+    {
+        var payload = Json($$"""
+        {
+          "gameId": 7351299002, "queueId": 420,
+          "participants": [
+            { "puuid": "{{MyPuuid}}", "championId": 86, "teamId": 100,
+              "timeline": { "lane": "TOP", "role": "SOLO" } },
+            { "puuid": "enemy-top", "championId": 122, "teamId": 200,
+              "timeline": { "lane": "TOP", "role": "SOLO" } },
+            { "puuid": "enemy-adc", "championId": 51, "teamId": 200,
+              "timeline": { "lane": "BOTTOM", "role": "DUO_CARRY" } }
+          ]
+        }
+        """);
+
+        var game = LaneScoreCapture.TryBuild(payload, MyPuuid, Now);
+
+        Assert.NotNull(game);
+        Assert.Equal(122, game.OpponentChampionId);
+        Assert.Equal("timeline.lane", game.PositionSource);
+        Assert.DoesNotContain("+", game.PositionSource);
+    }
+
+    /// <summary>
+    /// The tie-breaker's own contract. <c>DUO_CARRY</c> and <c>DUO_SUPPORT</c>
+    /// must never land on the same token, and every stated unknown must be
+    /// unusable rather than a value that can accidentally match.
+    /// </summary>
+    [Theory]
+    [InlineData("DUO_CARRY", "carry")]
+    [InlineData("duo_carry", "carry")]
+    [InlineData("ADC", "carry")]
+    [InlineData("DUO_SUPPORT", "support")]
+    [InlineData("SUPPORT", "support")]
+    [InlineData("SOLO", "solo")]
+    [InlineData("NONE", null)]
+    [InlineData("INVALID", null)]
+    [InlineData("", null)]
+    [InlineData("SUPER_CARRY", null)]
+    public void RoleSpellingsAreCanonicalisedAndUnknownsStayUnusable(string raw, string? expected)
+    {
+        Assert.Equal(expected, LaneScoreCapture.NormalizeRole(raw));
+    }
+
+    [Fact]
+    public void TheCarryAndTheSupportNeverShareARoleToken()
+    {
+        Assert.NotEqual(LaneScoreCapture.NormalizeRole("DUO_CARRY"), LaneScoreCapture.NormalizeRole("DUO_SUPPORT"));
+    }
+
     /// <summary>Every spelling the platform has used for a lane maps onto the same five roles.</summary>
     [Theory]
     [InlineData("TOP", "top")]

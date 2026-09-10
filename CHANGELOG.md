@@ -1,5 +1,21 @@
 # Changelog
 
+## Desktop 2.3.1 (2026-09-10)
+
+- **Bot lane no longer asks who you laned against.** Lane-score capture matched
+  the enemy by position alone, and the ADC and the support both report lane
+  `BOTTOM` — so every bot-lane game found two enemies in your lane, called it
+  ambiguous and made you pick the opponent by hand. The live client publishes a
+  `role` (`DUO_CARRY` / `DUO_SUPPORT`) next to the lane, and that is now used as
+  a **secondary** discriminator: only when position alone is ambiguous, and only
+  when it narrows to exactly one enemy. A carry gets the enemy carry, a support
+  gets the enemy support.
+- Nothing else changed. Top, mid and jungle are unique by position and still
+  resolve on position alone with the same `PositionSource` string as before; a
+  role that is missing, blank or `NONE` is unusable and falls back to asking,
+  never to a coin flip between the two bot laners. When role does break the tie
+  the log names both fields that did it (`timeline.lane+timeline.role`).
+
 ## Desktop 2.3.0 (2026-09-10)
 
 - **Lane scores.** After a ranked game (solo/duo 420 or flex 440 only), the

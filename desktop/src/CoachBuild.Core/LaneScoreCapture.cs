@@ -50,6 +50,21 @@ public static class LaneScoreCapture
     private static readonly string[] PositionKeys =
         ["teamPosition", "individualPosition", "selectedPosition", "position", "lane"];
 
+    /// <summary>
+    /// Where a participant's ROLE might live. This is the secondary
+    /// discriminator, and it exists for exactly one reason: <b>the ADC and the
+    /// support both report lane <c>BOTTOM</c></b>, so position alone can never
+    /// separate them and every bot-lane game was landing in
+    /// <c>ambiguous:2-enemies-at-bottom</c> and asking the user to pick. The
+    /// live client on this machine publishes it as
+    /// <c>participant.timeline.role</c> alongside
+    /// <c>participant.timeline.lane</c> (a real captured participant:
+    /// <c>{"championId":202,"teamId":100,"lane":"NONE","role":"SOLO"}</c>), so
+    /// <c>role</c> leads. The rest are the same cheap insurance the other key
+    /// lists carry, and the winner is reported the same probe-and-record way.
+    /// </summary>
+    private static readonly string[] RoleKeys = ["role", "playerRole", "teamRole"];
+
     private static readonly string[] ChampionIdKeys = ["championId", "champianId", "skinId"];
     private static readonly string[] TeamIdKeys = ["teamId", "team"];
     private static readonly string[] ChampionNameKeys = ["championName", "skinName", "championKey"];
@@ -109,12 +124,25 @@ public static class LaneScoreCapture
                 opponent = candidates[0];
                 positionSource = me.PositionKey ?? "position";
             }
+            else if (candidates.Length > 1 &&
+                     me.Role is { } myRole &&
+                     NarrowByRole(candidates, myRole) is { } soleByRole)
+            {
+                // BOT LANE. The ADC and the support both report BOTTOM, so the
+                // lane alone can never separate them and this used to ask the
+                // user every single bot-lane game. Role is only consulted here,
+                // once the lane has already failed, and only when it resolves to
+                // exactly one enemy.
+                opponent = soleByRole;
+                positionSource = $"{me.PositionKey ?? "position"}+{me.RoleKey ?? "role"}";
+            }
             else
             {
                 // Zero matches (the enemy team's positions are missing or
-                // spelled differently) or more than one (two enemies claim the
-                // same lane, which happens in remakes and role-swap data). Both
-                // are ambiguous, and ambiguous means ask.
+                // spelled differently) or more than one that role could not
+                // separate either — because a role was missing, said NONE, or
+                // both enemies claim the same one. Both are ambiguous, and
+                // ambiguous means ask.
                 positionSource = candidates.Length == 0
                     ? $"unmatched:{me.PositionKey}={minePosition}"
                     : $"ambiguous:{candidates.Length}-enemies-at-{minePosition}";
@@ -205,6 +233,8 @@ public static class LaneScoreCapture
         int? TeamId,
         string? Position,
         string? PositionKey,
+        string? Role,
+        string? RoleKey,
         string? ChampionName,
         string? Puuid,
         bool LocalFlag);
@@ -275,6 +305,7 @@ public static class LaneScoreCapture
         var championId = ReadInt(element, ChampionIdKeys) ?? 0;
         var teamId = ReadInt(element, TeamIdKeys) ?? inheritedTeamId;
         var (position, positionKey) = ReadPosition(element);
+        var (role, roleKey) = ReadRole(element);
         var championName = ReadString(element, ChampionNameKeys);
         var puuid = ReadString(element, ["puuid"]);
         var localFlag =
@@ -282,7 +313,8 @@ public static class LaneScoreCapture
             ReadBool(element, "localPlayer") ??
             false;
 
-        return new Participant(championId, teamId, position, positionKey, championName, puuid, localFlag);
+        return new Participant(
+            championId, teamId, position, positionKey, role, roleKey, championName, puuid, localFlag);
     }
 
     /// <summary>
@@ -320,6 +352,77 @@ public static class LaneScoreCapture
         }
 
         return (null, null);
+    }
+
+    /// <summary>
+    /// The role, and the NAME OF THE FIELD it came from — probed and recorded
+    /// exactly the way <see cref="ReadPosition"/> handles the lane, top level
+    /// first, then <c>timeline</c>, then <c>stats</c>, because those are the
+    /// three places this client has put it.
+    ///
+    /// <para>Role is a SECONDARY discriminator only. It is never read as a lane
+    /// and never used unless the lane already came back ambiguous.</para>
+    /// </summary>
+    private static (string? Role, string? Key) ReadRole(JsonElement element)
+    {
+        foreach (var key in RoleKeys)
+        {
+            var direct = ReadString(element, [key]);
+            if (NormalizeRole(direct) is { } normalized) return (normalized, key);
+        }
+
+        if (element.TryGetProperty("timeline", out var timeline) &&
+            timeline.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var key in RoleKeys)
+            {
+                var nested = ReadString(timeline, [key]);
+                if (NormalizeRole(nested) is { } normalized) return (normalized, "timeline." + key);
+            }
+        }
+
+        if (element.TryGetProperty("stats", out var stats) && stats.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var key in RoleKeys)
+            {
+                var nested = ReadString(stats, [key]);
+                if (NormalizeRole(nested) is { } normalized) return (normalized, "stats." + key);
+            }
+        }
+
+        return (null, null);
+    }
+
+    /// <summary>
+    /// Canonicalises a role to a token that can be compared between two
+    /// participants.
+    ///
+    /// <para>Two properties are load-bearing. <b>First, <c>DUO_CARRY</c> and
+    /// <c>DUO_SUPPORT</c> must land on different tokens</b> — collapsing them
+    /// would make the narrowing pick the wrong bot laner, which is precisely the
+    /// silent poisoning this feature refuses to do. Note that
+    /// <see cref="Normalize"/> is NOT reusable here: it maps <c>SOLO</c> to null
+    /// and answers in LANE vocabulary, which is a different question.</para>
+    ///
+    /// <para><b>Second, an unusable role yields null, and null never matches
+    /// anything.</b> <c>NONE</c>, <c>INVALID</c>, blank, and any spelling we do
+    /// not recognise all mean "the client is not telling us", and the correct
+    /// response to that is the existing ambiguous path that asks the user — not
+    /// a coin flip between two enemies.</para>
+    /// </summary>
+    public static string? NormalizeRole(string? raw)
+    {
+        var value = raw?.Trim().ToUpperInvariant();
+        return value switch
+        {
+            "DUO_CARRY" or "CARRY" or "ADC" => "carry",
+            "DUO_SUPPORT" or "SUPPORT" or "SUPP" => "support",
+            "SOLO" => "solo",
+            "DUO" => "duo",
+            // NONE, INVALID, empty and every unknown spelling deliberately fall
+            // here. Unusable means ask, never guess.
+            _ => null,
+        };
     }
 
     /// <summary>
@@ -366,6 +469,24 @@ public static class LaneScoreCapture
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The one enemy in an already-lane-ambiguous set whose role matches mine,
+    /// or null if that is not exactly one.
+    ///
+    /// <para>Null is returned for zero matches and for two-or-more alike, and in
+    /// both cases the caller keeps the existing ambiguous path. An enemy whose
+    /// own role was unusable carries <c>Role == null</c>, which matches nothing —
+    /// so a missing role on either side degrades to asking, never to a guess.</para>
+    /// </summary>
+    private static Participant? NarrowByRole(Participant[] candidates, string myRole)
+    {
+        var matched = candidates
+            .Where(participant => participant.Role is not null &&
+                                  string.Equals(participant.Role, myRole, StringComparison.Ordinal))
+            .ToArray();
+        return matched.Length == 1 ? matched[0] : null;
     }
 
     private static string? ReadGameId(JsonElement root)
