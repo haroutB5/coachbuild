@@ -487,4 +487,213 @@ public sealed class LaneScoreCaptureTests
         // on what "role 4" means.
         Assert.NotNull(ComplianceRules.RoleIdFromPosition(expected));
     }
+
+    // ------------------------------------------------------------------
+    // Which ROLE ID a bot-lane game is filed under.
+    //
+    // The lane cannot answer this on its own. Match history says
+    // `timeline.lane = BOTTOM` for the ADC and the support alike, so before
+    // 2.3.2 a support's game was stored as role 3 while champ select — which
+    // reads `assignedPosition` and therefore says `utility` — asked for role 4.
+    // Two different roles aggregated into one bucket, and a support's own
+    // history was unreachable under its own id.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// The fix. A support at BOTTOM is filed as 4 (utility), the same id champ
+    /// select asks for, and the opponent narrowing is untouched by it: the enemy
+    /// support is still resolved as the opponent in the very same capture. This
+    /// asserts both halves because the change must not buy a correct bucket at
+    /// the price of the matching it sits next to.
+    /// </summary>
+    [Fact]
+    public void ASupportAtBottomIsFiledAsUtilityAndStillResolvesTheEnemySupport()
+    {
+        var game = LaneScoreCapture.TryBuild(BotLaneGame(myRole: "DUO_SUPPORT"), MyPuuid, Now);
+
+        Assert.NotNull(game);
+        Assert.Equal(LaneRoles.Utility, game.RoleId);
+        Assert.NotEqual(LaneRoles.Bottom, game.RoleId);
+        // The opponent matching, unchanged.
+        Assert.Equal(555, game.OpponentChampionId);
+        Assert.Equal("Pyke", game.OpponentChampionName);
+        Assert.Equal("timeline.lane+timeline.role", game.PositionSource);
+        // And this is the id champ select will query with, so the two sides of
+        // the feature now name the same bucket.
+        Assert.Equal(ComplianceRules.RoleIdFromPosition("utility"), game.RoleId);
+    }
+
+    /// <summary>The other bot laner is unaffected: a carry at BOTTOM is still 3.</summary>
+    [Fact]
+    public void ACarryAtBottomStaysBottom()
+    {
+        var game = LaneScoreCapture.TryBuild(BotLaneGame(myRole: "DUO_CARRY"), MyPuuid, Now);
+
+        Assert.NotNull(game);
+        Assert.Equal(LaneRoles.Bottom, game.RoleId);
+        Assert.Equal(51, game.OpponentChampionId);
+    }
+
+    /// <summary>
+    /// An unusable role at BOTTOM keeps today's answer of 3. <c>NONE</c>,
+    /// <c>INVALID</c>, blank and an unknown spelling all mean "the client is not
+    /// telling us", and a stated unknown must never be read as evidence of a
+    /// support: an absence is not a classification. Note the capture is already
+    /// ambiguous about the OPPONENT in these cases — the role id must still be
+    /// the lane's own answer, not null and not 4.
+    /// </summary>
+    [Theory]
+    [InlineData("NONE")]
+    [InlineData("INVALID")]
+    [InlineData("")]
+    [InlineData("SUPER_CARRY")]
+    public void AnUnusableRoleAtBottomKeepsBottom(string myRole)
+    {
+        Assert.Null(LaneScoreCapture.NormalizeRole(myRole));
+
+        var game = LaneScoreCapture.TryBuild(BotLaneGame(myRole: myRole), MyPuuid, Now);
+
+        Assert.NotNull(game);
+        Assert.Equal(LaneRoles.Bottom, game.RoleId);
+        Assert.Contains("ambiguous", game.PositionSource);
+    }
+
+    /// <summary>
+    /// And the role field missing ENTIRELY — not blank, not NONE, absent — is
+    /// the same story. This is the shape an older client (or the end-of-game
+    /// block) hands over, and it must degrade to the lane's answer rather than
+    /// throw the game away or guess at it.
+    /// </summary>
+    [Fact]
+    public void ABottomGameWithNoRoleFieldAtAllKeepsBottom()
+    {
+        var payload = Json($$"""
+        {
+          "gameId": 7351299003, "queueId": 420,
+          "participants": [
+            { "puuid": "{{MyPuuid}}", "championId": 22, "teamId": 100,
+              "timeline": { "lane": "BOTTOM" } },
+            { "puuid": "enemy-adc", "championId": 51, "teamId": 200,
+              "timeline": { "lane": "BOTTOM" } },
+            { "puuid": "enemy-sup", "championId": 555, "teamId": 200,
+              "timeline": { "lane": "BOTTOM" } }
+          ]
+        }
+        """);
+
+        var game = LaneScoreCapture.TryBuild(payload, MyPuuid, Now);
+
+        Assert.NotNull(game);
+        Assert.Equal(LaneRoles.Bottom, game.RoleId);
+        Assert.Null(game.OpponentChampionId);
+    }
+
+    /// <summary>
+    /// The control, through the real capture path: the three solo lanes are
+    /// untouched. Each fixture carries a role, and one of them deliberately
+    /// carries <c>DUO_SUPPORT</c> at TOP — a nonsense pairing the client should
+    /// never emit, present precisely so that a support branch which forgot to
+    /// check the lane would be caught here rather than in production.
+    /// </summary>
+    [Theory]
+    [InlineData("TOP", "SOLO", LaneRoles.Top)]
+    [InlineData("TOP", "DUO_SUPPORT", LaneRoles.Top)]
+    [InlineData("JUNGLE", "NONE", LaneRoles.Jungle)]
+    [InlineData("JUNGLE", "DUO_SUPPORT", LaneRoles.Jungle)]
+    [InlineData("MIDDLE", "SOLO", LaneRoles.Middle)]
+    [InlineData("MIDDLE", "DUO_SUPPORT", LaneRoles.Middle)]
+    public void NonBottomLanesAreUnchangedWhateverTheRoleSays(string lane, string role, int expected)
+    {
+        var payload = Json($$"""
+        {
+          "gameId": 7351299004, "queueId": 420,
+          "participants": [
+            { "puuid": "{{MyPuuid}}", "championId": 86, "teamId": 100,
+              "timeline": { "lane": "{{lane}}", "role": "{{role}}" } },
+            { "puuid": "enemy-1", "championId": 122, "teamId": 200,
+              "timeline": { "lane": "{{lane}}", "role": "{{role}}" } }
+          ]
+        }
+        """);
+
+        var game = LaneScoreCapture.TryBuild(payload, MyPuuid, Now);
+
+        Assert.NotNull(game);
+        Assert.Equal(expected, game.RoleId);
+    }
+
+    /// <summary>
+    /// A client that spells the lane <c>UTILITY</c> outright never needed the
+    /// role at all, and still does not: it was already 4 and stays 4. This is
+    /// the case that proves the new branch ADDS a route to utility rather than
+    /// replacing the one that worked.
+    /// </summary>
+    [Theory]
+    [InlineData("UTILITY", "DUO_SUPPORT")]
+    [InlineData("UTILITY", "NONE")]
+    [InlineData("SUPPORT", "DUO_SUPPORT")]
+    public void AnExplicitUtilityLaneIsStillUtility(string lane, string role)
+    {
+        var payload = Json($$"""
+        {
+          "gameId": 7351299005, "queueId": 420,
+          "participants": [
+            { "puuid": "{{MyPuuid}}", "championId": 412, "teamId": 100,
+              "timeline": { "lane": "{{lane}}", "role": "{{role}}" } },
+            { "puuid": "enemy-sup", "championId": 555, "teamId": 200,
+              "timeline": { "lane": "{{lane}}", "role": "{{role}}" } }
+          ]
+        }
+        """);
+
+        var game = LaneScoreCapture.TryBuild(payload, MyPuuid, Now);
+
+        Assert.NotNull(game);
+        Assert.Equal(LaneRoles.Utility, game.RoleId);
+    }
+
+    /// <summary>
+    /// The rule stated directly, over every lane x role pair that matters —
+    /// the truth table, executable. <c>ResolveRoleId</c> is fed the canonical
+    /// tokens the capture path itself produces, and the raw client spellings
+    /// alongside them, because <c>NormalizeRole</c> is idempotent over its own
+    /// output and a test that only ever passed raw values could not prove the
+    /// production call site behaves the same way.
+    /// </summary>
+    [Theory]
+    // Bottom + support, in both the raw and the canonical spelling -> utility.
+    [InlineData("bottom", "DUO_SUPPORT", LaneRoles.Utility)]
+    [InlineData("bottom", "support", LaneRoles.Utility)]
+    [InlineData("bottom", "SUPP", LaneRoles.Utility)]
+    // Bottom + carry -> bottom, unchanged.
+    [InlineData("bottom", "DUO_CARRY", LaneRoles.Bottom)]
+    [InlineData("bottom", "carry", LaneRoles.Bottom)]
+    // Bottom + unusable -> bottom, never a guess.
+    [InlineData("bottom", "NONE", LaneRoles.Bottom)]
+    [InlineData("bottom", null, LaneRoles.Bottom)]
+    [InlineData("bottom", "SOLO", LaneRoles.Bottom)]
+    // The solo lanes, whatever the role claims.
+    [InlineData("top", "DUO_SUPPORT", LaneRoles.Top)]
+    [InlineData("jungle", "DUO_SUPPORT", LaneRoles.Jungle)]
+    [InlineData("middle", "DUO_SUPPORT", LaneRoles.Middle)]
+    // Already utility.
+    [InlineData("utility", "DUO_SUPPORT", LaneRoles.Utility)]
+    [InlineData("utility", null, LaneRoles.Utility)]
+    public void TheRoleIdTruthTable(string position, string? role, int expected)
+    {
+        Assert.Equal(expected, LaneScoreCapture.ResolveRoleId(position, role));
+    }
+
+    /// <summary>
+    /// No lane means no role id, still. Role alone must not manufacture one:
+    /// knowing somebody was a support says nothing about whether this game had
+    /// a readable lane phase at all, and the store's null is what the card and
+    /// the log both already handle.
+    /// </summary>
+    [Fact]
+    public void RoleAloneNeverInventsALane()
+    {
+        Assert.Null(LaneScoreCapture.ResolveRoleId(null, "DUO_SUPPORT"));
+        Assert.Null(LaneScoreCapture.ResolveRoleId("", "DUO_SUPPORT"));
+    }
 }

@@ -160,7 +160,7 @@ public static class LaneScoreCapture
             QueueId = queueId!.Value,
             MyChampionId = me.ChampionId,
             MyChampionName = me.ChampionName,
-            RoleId = ComplianceRules.RoleIdFromPosition(me.Position),
+            RoleId = ResolveRoleId(me.Position, me.Role),
             OpponentChampionId = opponent?.ChampionId,
             OpponentChampionName = opponent?.ChampionName,
             EnemyChampionIds = enemyIds,
@@ -391,6 +391,53 @@ public static class LaneScoreCapture
         }
 
         return (null, null);
+    }
+
+    /// <summary>
+    /// The role id to STORE for the local player, which is not always the one
+    /// the lane alone implies.
+    ///
+    /// <para><b>Why this is not just <see cref="ComplianceRules.RoleIdFromPosition"/>.</b>
+    /// Match history reports <c>timeline.lane = BOTTOM</c> for BOTH bot laners,
+    /// so a support's game was being written as role 3 (bottom) while champ
+    /// select — which reads <c>assignedPosition</c> and therefore says
+    /// <c>utility</c> — asks for role 4. The user's support games and ADC games
+    /// piled into one bucket, and the "Your lane history" panel for a support
+    /// showed a mixture of two different roles (or, queried as 4, nothing at
+    /// all). Role is the only field that can tell the two apart, so it is
+    /// consulted here for the same reason <see cref="NarrowByRole"/> consults
+    /// it, and for that reason ONLY.</para>
+    ///
+    /// <para><b>Only bottom, only support, never invented.</b> A lane that is
+    /// not bottom is returned untouched — role has nothing to add to TOP. A
+    /// <c>carry</c> at bottom stays 3, which is what it already was. And a role
+    /// that is missing, <c>NONE</c>, or any spelling we do not recognise keeps
+    /// today's answer of 3 rather than being read as evidence of anything:
+    /// absence is not a support classification, and a wrong role id would
+    /// silently file the game in a bucket the user never plays.</para>
+    ///
+    /// <para>This is about the value STORED. It does not participate in
+    /// opponent matching, which still narrows on the raw role token — a support
+    /// game records role 4 AND still resolves the enemy support as the
+    /// opponent.</para>
+    /// </summary>
+    /// <param name="position">
+    /// A canonical lane from <see cref="Normalize"/> (this is what
+    /// <c>Participant.Position</c> holds).
+    /// </param>
+    /// <param name="role">
+    /// The role token. <see cref="NormalizeRole"/> is applied again here, and it
+    /// is idempotent over its own output ("support" -> "support"), so a raw
+    /// <c>DUO_SUPPORT</c> and an already-canonical <c>support</c> give the same
+    /// answer — the caller cannot get a different result than a test does.
+    /// </param>
+    public static int? ResolveRoleId(string? position, string? role)
+    {
+        var roleId = ComplianceRules.RoleIdFromPosition(position);
+        if (roleId == LaneRoles.Bottom &&
+            string.Equals(NormalizeRole(role), "support", StringComparison.Ordinal))
+            return LaneRoles.Utility;
+        return roleId;
     }
 
     /// <summary>

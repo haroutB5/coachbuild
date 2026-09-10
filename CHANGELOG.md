@@ -1,5 +1,23 @@
 # Changelog
 
+## Desktop 2.3.2 (2026-09-10)
+
+- **Your support games and your ADC games are no longer the same bucket.** Match
+  history reports lane `BOTTOM` for both bot laners, so a support's game was
+  being filed under role 3 (bot) — the same id as an ADC game. Champ select
+  reads `assignedPosition` and therefore asks for role 4 (support), so the "Your
+  lane history" panel was either mixing two different roles together or finding
+  nothing at all. A game whose lane is bottom and whose role says support is now
+  recorded as role 4, the id champ select already queries with.
+- **Only that case.** A carry at bottom is still 3. A role that is missing,
+  blank, `NONE` or an unrecognised spelling keeps the old answer of 3 rather
+  than being read as evidence of a support — an absence is not a
+  classification. Top, mid and jungle never consult role at all. Opponent
+  matching is untouched: a support game records role 4 *and* still resolves the
+  enemy support as the opponent.
+- Scores recorded by earlier builds keep the role id they were saved with;
+  nothing on disk is rewritten.
+
 ## Desktop 2.3.1 (2026-09-10)
 
 - **Bot lane no longer asks who you laned against.** Lane-score capture matched
