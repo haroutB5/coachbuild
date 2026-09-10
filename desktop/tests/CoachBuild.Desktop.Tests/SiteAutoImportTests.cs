@@ -23,11 +23,27 @@ public sealed class SiteAutoImportTests
 
         public Func<CompanionTab, Uri, string?>? Worker { get; set; }
 
-        public List<string> Calls { get; } = [];
+        // The service records these from a background run while the test
+        // thread enumerates them (the cancellation tests poll for a call to
+        // appear). A bare List throws "Collection was modified" on that race
+        // -- it surfaced as a flake in
+        // Cancelling_mid_run_keeps_the_write_but_rolls_back_the_debounce.
+        // Reads hand back a stable snapshot instead.
+        private readonly List<string> _calls = [];
+
+        public IReadOnlyList<string> Calls
+        {
+            get { lock (_calls) return _calls.ToArray(); }
+        }
+
+        private void Record(string call)
+        {
+            lock (_calls) _calls.Add(call);
+        }
 
         public Task<string?> ExtractVisibleAsync(CompanionTab site, CancellationToken cancellationToken = default)
         {
-            Calls.Add($"visible:{site}");
+            Record($"visible:{site}");
             return Task.FromResult(Visible?.Invoke(site));
         }
 
@@ -39,7 +55,7 @@ public sealed class SiteAutoImportTests
             CompanionTab site, Uri url, string? championKey, int? roleId,
             CancellationToken cancellationToken = default)
         {
-            Calls.Add($"worker:{site}:{url}");
+            Record($"worker:{site}:{url}");
             return Task.FromResult(Worker?.Invoke(site, url));
         }
 
@@ -47,7 +63,7 @@ public sealed class SiteAutoImportTests
             Uri url, string? championKey, int? roleId,
             CancellationToken cancellationToken = default)
         {
-            Calls.Add($"runes:{url}");
+            Record($"runes:{url}");
             return Task.FromResult(Runes?.Invoke(url));
         }
 
@@ -58,18 +74,42 @@ public sealed class SiteAutoImportTests
 
     private sealed class FakeSink : ISiteAutoImportSink
     {
-        public List<string> Logs { get; } = [];
+        // Same background-write / test-thread-read race as FakeExecutor.Calls.
+        private readonly List<string> _logs = [];
+        private readonly List<string> _statuses = [];
 
-        public List<string> Statuses { get; } = [];
+        public IReadOnlyList<string> Logs
+        {
+            get { lock (_logs) return _logs.ToArray(); }
+        }
 
-        public void LogInfo(string line) => Logs.Add(line);
+        public IReadOnlyList<string> Statuses
+        {
+            get { lock (_statuses) return _statuses.ToArray(); }
+        }
 
-        public void StatusNote(string message) => Statuses.Add(message);
+        public void LogInfo(string line)
+        {
+            lock (_logs) _logs.Add(line);
+        }
+
+        public void StatusNote(string message)
+        {
+            lock (_statuses) _statuses.Add(message);
+        }
     }
 
     private sealed class StubLcu : ILcuApi
     {
-        public List<(HttpMethod Method, string Path, object? Body)> Calls { get; } = [];
+        // The LCU calls are recorded from the service's background run while
+        // the cancellation tests poll this list from the test thread; snapshot
+        // on read so enumeration can never observe a concurrent Add.
+        private readonly List<(HttpMethod Method, string Path, object? Body)> _calls = [];
+
+        public IReadOnlyList<(HttpMethod Method, string Path, object? Body)> Calls
+        {
+            get { lock (_calls) return _calls.ToArray(); }
+        }
 
         public bool ThrowOnPut { get; set; }
 
@@ -85,7 +125,7 @@ public sealed class SiteAutoImportTests
             HttpMethod method, string path, object? body = null,
             CancellationToken cancellationToken = default)
         {
-            Calls.Add((method, path, body));
+            lock (_calls) _calls.Add((method, path, body));
             if (ThrowOnPut && method == HttpMethod.Put)
                 throw new HttpRequestException("connection reset");
             if (method == HttpMethod.Get && path == "/lol-summoner/v1/current-summoner")
@@ -858,11 +898,14 @@ public sealed class SiteAutoImportTests
 
         await service.OnSnapshotAsync(LockedAhri());
 
-        var verdict = sink.Logs.FindIndex(
+        // One snapshot, so the three indices are comparable against the same
+        // sequence (Logs hands back a fresh snapshot on every read).
+        var logs = sink.Logs.ToList();
+        var verdict = logs.FindIndex(
             line => line.Contains("yielded no item build", StringComparison.Ordinal));
-        var stage = sink.Logs.FindIndex(
+        var stage = logs.FindIndex(
             line => line.Contains("stage json-found", StringComparison.Ordinal));
-        var refusal = sink.Logs.FindIndex(
+        var refusal = logs.FindIndex(
             line => line.Contains("platinum_plus\" has no embedded build", StringComparison.Ordinal));
         Assert.True(verdict >= 0, string.Join(" | ", sink.Logs));
         Assert.True(refusal >= 0, string.Join(" | ", sink.Logs));
