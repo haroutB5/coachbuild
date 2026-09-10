@@ -29,7 +29,7 @@ $packageScript = Join-Path $PSScriptRoot 'package.ps1'
 # uploading, prove the packaged binary actually LOADS on this machine by
 # running its --self-test. A SAC block kills the process during assembly load
 # (0xE0434352 / -532462766); self-test itself exits 0 (pass) or 1 (checks
-# failed — still proves the hash loads). On a load failure, rebuild into a
+# failed — publishing stops). On a load failure, rebuild into a
 # fresh subdirectory (a rebuild produces a new MVID/hash) and probe again.
 $maxAttempts = 3
 $attemptDir = $OutputDirectory
@@ -43,12 +43,11 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
 
     $probeExe = Join-Path $attemptDir "publish-win-x64-$Version\CoachBuild.Desktop.exe"
     $probe = Start-Process -FilePath $probeExe -ArgumentList '--self-test' -PassThru -Wait -WindowStyle Hidden
-    if ($probe.ExitCode -eq 0 -or $probe.ExitCode -eq 1) {
-        if ($probe.ExitCode -eq 1) {
-            Write-Warning 'SAC gate: binary loads but --self-test reported failures; continuing (hash is SAC-viable).'
-        } else {
-            Write-Host "SAC gate: packaged binary loads and self-tests clean (attempt $attempt)."
-        }
+    if ($probe.ExitCode -eq 1) {
+        throw 'Packaged self-test failed; refusing to publish.'
+    }
+    if ($probe.ExitCode -eq 0) {
+        Write-Host "SAC gate: packaged binary loads and self-tests clean (attempt $attempt)."
         break
     }
     Write-Warning "SAC gate: packaged binary failed to load (exit $($probe.ExitCode)) - likely a Smart App Control per-hash block."

@@ -78,6 +78,7 @@ export default function LaneHistoryPanel({ enemyId, enemyName, roleId, champIcon
   refreshKey?: number;
 }) {
   const [state, setState] = useState<PanelState>({ status: "loading" });
+  const [retry, setRetry] = useState(0);
   const reqId = useRef(0);
   useEffect(() => {
     if (enemyId === null) return;
@@ -91,7 +92,7 @@ export default function LaneHistoryPanel({ enemyId, enemyName, roleId, champIcon
       if (!controller.signal.aborted && id === reqId.current) setState({ status: "error" });
     });
     return () => controller.abort();
-  }, [enemyId, roleId, loadRecommendations, refreshKey]);
+  }, [enemyId, roleId, loadRecommendations, refreshKey, retry]);
 
   if (enemyId === null) return null;
   if (state.status === "ok" && state.data.totalGames === 0) return null;
@@ -108,7 +109,11 @@ export default function LaneHistoryPanel({ enemyId, enemyName, roleId, champIcon
       </p>
     </div>
     {state.status === "loading" && <p role="status" className="text-sm text-mut">Loading your scored games…</p>}
-    {state.status === "error" && <p role="status" className="text-sm text-mut">Your lane history is unavailable. Reopen Draft from the desktop tray to reconnect the companion.</p>}
+    {state.status === "error" && <div className="space-y-2">
+      <p role="status" className="text-sm text-mut">Your lane history is unavailable. Check the companion connection and try again.</p>
+      <button type="button" onClick={() => setRetry(value => value + 1)}
+        className="rounded border border-line px-3 py-2 text-sm text-accent-300">Retry lane history</button>
+    </div>}
     {state.status === "ok" && <div className="grid gap-4 md:grid-cols-2">
       <HistoryList title={`Your best scores vs ${enemy}`} subtitle="Your highest average lane scores · sample size shown per champion"
         rows={state.data.best} tone="good" champIcons={champIcons} />

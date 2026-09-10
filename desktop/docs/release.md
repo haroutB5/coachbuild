@@ -10,7 +10,7 @@ repository is:
 https://github.com/haroutB5/coachbuild-desktop-releases
 ```
 
-The default install root is `%LOCALAPPDATA%\CoachBuild\Desktop`; no UAC or
+The default install root is `%LOCALAPPDATA%\CoachBuild.Desktop`; no UAC or
 machine-wide Program Files install is required.
 
 ## Package
@@ -18,7 +18,7 @@ machine-wide Program Files install is required.
 From a Windows machine with the .NET 8 SDK and `vpk` available:
 
 ```powershell
-pwsh desktop/scripts/package.ps1 -Version 1.0.1
+powershell -File desktop/scripts/package.ps1 -Version 2.3.4
 ```
 
 The script publishes the WPF app, packs delta-capable Velopack artifacts, and
@@ -31,7 +31,7 @@ Use a token with permission to publish the dedicated repository:
 
 ```powershell
 $env:GITHUB_TOKEN = '…'
-pwsh desktop/scripts/publish.ps1 -Version 1.0.1
+powershell -File desktop/scripts/publish.ps1 -Version 2.3.4
 ```
 
 Never substitute `coachbuild-overlay-releases`, the old Electron feed.
@@ -45,7 +45,7 @@ by hand for exactly this reason.
 To stage a release without exposing it to the updater, pass `-Draft`:
 
 ```powershell
-pwsh desktop/scripts/publish.ps1 -Version 1.0.1 -Draft
+powershell -File desktop/scripts/publish.ps1 -Version 2.3.4 -Draft
 ```
 
 You must then publish it manually (GitHub UI, or
@@ -74,7 +74,7 @@ process automatically.
 The installer should place the Evergreen per-user bootstrapper under the app's
 `WebView2` folder. Startup detects the runtime before WebView2 window creation.
 If absent, the app-owned fallback stays usable and the tray repair action runs
-the bootstrapper on demand. A retry then opens the hosted `/draft` or Builds
+the bootstrapper on demand. A retry then opens the packaged Draft
 page in the same native window. The default browser is never used as a repair
 or navigation fallback.
 
@@ -84,7 +84,7 @@ or navigation fallback.
 2. Use Velopack's previous transactional release to roll back, or install the
    last known-good native package from the dedicated feed.
 3. Confirm the shared mutex is released and only one bridge writer remains.
-4. If the native app cannot start, temporarily restore the legacy Electron or
-   PowerShell companion. The hosted PWA remains available throughout.
+4. If the native app cannot start, use a verified previous native installer.
+   The hosted PWA and legacy companion feeds are retired.
 5. Re-run bridge parity, write-safety, WebView2 fallback, and one-game overlay
    checks before resuming staged rollout.

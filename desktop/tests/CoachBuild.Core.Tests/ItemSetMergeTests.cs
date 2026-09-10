@@ -7,6 +7,68 @@ namespace CoachBuild.Core.Tests;
 
 public sealed class ItemSetMergeTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Overlapping_imports_preserve_both_sites_and_allow_cancelling_a_waiter(bool cancelSecond)
+    {
+        var api = new OverlappingItemSetsApi();
+        var service = new ItemSetApplyService(api);
+        using var cancellation = new CancellationTokenSource();
+        var first = service.ApplyAsync(new ApplyItemSetsRequest(103,
+            [MockLcuApi.Json("""{"title":"CoachBuild u.gg Ahri","blocks":[]}""")], "CoachBuild u.gg"));
+        await api.FirstRead.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = service.ApplyAsync(new ApplyItemSetsRequest(103,
+            [MockLcuApi.Json("""{"title":"CoachBuild u.gg Ahri","blocks":[]}"""),
+             MockLcuApi.Json("""{"title":"CoachBuild Coachless Ahri","blocks":[]}""")]), cancellation.Token);
+        try
+        {
+            Assert.Equal(1, api.Reads);
+            if (cancelSecond)
+            {
+                cancellation.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second);
+            }
+        }
+        finally { api.ReleaseRead.TrySetResult(); }
+
+        Assert.IsType<ApplyItemSetsSuccess>(await first);
+        if (!cancelSecond) Assert.IsType<ApplyItemSetsSuccess>(await second);
+        var titles = api.Document.GetProperty("itemSets").EnumerateArray()
+            .Select(set => set.GetProperty("title").GetString()).ToArray();
+        Assert.Contains("My own build", titles);
+        Assert.Contains("CoachBuild u.gg Ahri", titles);
+        Assert.Equal(cancelSecond ? 2 : 3, titles.Length);
+        if (!cancelSecond) Assert.Contains("CoachBuild Coachless Ahri", titles);
+    }
+
+    private sealed class OverlappingItemSetsApi : ILcuApi
+    {
+        public TaskCompletionSource FirstRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Reads { get; private set; }
+        public JsonElement Document { get; private set; } = MockLcuApi.Json("""{"itemSets":[{"title":"My own build"}]}""");
+
+        public async Task<LcuResponse> SendAsync(HttpMethod method, string path, object? body = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (path == "/lol-summoner/v1/current-summoner")
+                return new LcuResponse(true, 200, MockLcuApi.Json("""{"summonerId":77}"""));
+            if (method == HttpMethod.Get)
+            {
+                var snapshot = Document.Clone();
+                if (++Reads == 1)
+                {
+                    FirstRead.TrySetResult();
+                    await ReleaseRead.Task.WaitAsync(cancellationToken);
+                }
+                return new LcuResponse(true, 200, snapshot);
+            }
+            Document = JsonSerializer.SerializeToElement(body);
+            return new LcuResponse(true, 200);
+        }
+    }
+
     [Fact]
     public void Merge_preserves_foreign_sets_and_top_level_fields_while_pruning_ours()
     {
@@ -75,4 +137,3 @@ public sealed class ItemSetMergeTests
         Assert.True(api.Calls.IndexOf(put) > api.Calls.FindIndex(call => call.Method == HttpMethod.Get && call.Path.Contains("item-sets", StringComparison.Ordinal)));
     }
 }
-

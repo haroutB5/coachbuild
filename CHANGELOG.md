@@ -1,5 +1,21 @@
 # Changelog
 
+## Desktop 2.3.4 (2026-09-10)
+
+- Downloaded updates survive empty feed responses and failed replacement
+  downloads. Rechecking the same staged version no longer downloads it again.
+- Item-set imports now finish in request order, preventing an older overlapping
+  write from removing a newer batch. Waiting imports can still be cancelled.
+- Lane-score capture uses the end-of-game identity to reject stale match-history
+  results, and stops immediately when that game was not ranked.
+- Cancelling champion search prevents Enter from choosing a hidden result.
+  Multiple champion pickers now have independent accessibility IDs.
+- Lane history can be retried after a temporary connection failure.
+- Updated Next.js and affected build/test dependencies to patched versions.
+  Added a repeatable browser check for the packaged Draft page.
+- Packaging stops on publish errors or version mismatches, and publishing now
+  requires a passing packaged self-test.
+
 ## Desktop 2.3.3 (2026-09-10)
 
 - Fixed lane-score capture from match history by joining player identities to

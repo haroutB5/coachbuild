@@ -1,6 +1,6 @@
 # CoachBuild — technical reference
 
-**Describes desktop 2.3.3, 2026-09-10.** `desktop/src/Directory.Build.props`'s
+**Describes desktop 2.3.4, 2026-09-10.** `desktop/src/Directory.Build.props`'s
 `<Version>` is the single source of truth for the app version (it moved there in
 2.1.0; it is no longer in the csproj). If it has moved on since this date, treat
 everything below with more skepticism the further it has fallen behind, and check
@@ -576,6 +576,12 @@ fails the build for everyone else. Check a path-scoped commit's file list agains
 `git status`, never against memory.
 
 ## Test conventions
+
+`npm run test:ui` runs the exported Draft page in headless Chromium with isolated
+fixtures for the bridge, DDragon and native counter replies. Run `npm run build`
+first. `BROWSER_PATH` selects a Chromium executable; `DRAFT_UI_ROOT` can point at
+the `UI` directory of a published package to verify the actual release assets.
+The browser check never connects to League or writes the user's lane history.
 
 Vitest, **pure functions only** — there is no JSX rendering harness (no
 jsdom/RTL). Component test files import and test exported pure helpers from a

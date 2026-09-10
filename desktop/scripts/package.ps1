@@ -29,6 +29,13 @@ New-Item -ItemType Directory -Force -Path $packageDirectory | Out-Null
 
 $project = Join-Path $desktopRoot 'src\CoachBuild.Desktop\CoachBuild.Desktop.csproj'
 dotnet publish $project --configuration $Configuration --runtime $Runtime --self-contained false --output $publishDirectory
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
+
+$appDll = Join-Path $publishDirectory 'CoachBuild.Desktop.dll'
+$builtVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($appDll).ProductVersion.Split('+')[0]
+if ($builtVersion -ne $Version) {
+    throw "Requested package version $Version does not match the built app version $builtVersion. Update desktop/src/Directory.Build.props first."
+}
 
 $iconPath = Join-Path $publishDirectory 'Assets\tray-icon.ico'
 if (-not (Test-Path $iconPath)) {

@@ -122,6 +122,7 @@ public sealed class LaneScoreService
     private async Task CaptureCoreAsync(CancellationToken cancellationToken)
     {
         var ownPuuid = await ReadOwnPuuidAsync(cancellationToken).ConfigureAwait(false);
+        string? expectedMatchId = null;
 
         for (var attempt = 0; attempt <= _settleAttempts; attempt++)
         {
@@ -132,6 +133,13 @@ public sealed class LaneScoreService
                 var response = await _lcu.SendAsync(HttpMethod.Get, path, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
                 if (!response.Ok || response.Content is not { } content) continue;
+
+                if (path == EogStatsPath)
+                {
+                    var identity = LaneScoreCapture.GameIdentity(content);
+                    if (identity.QueueId is { } queue && !RankedQueues.IsRanked(queue)) return;
+                    expectedMatchId ??= identity.MatchId;
+                }
 
                 var game = LaneScoreCapture.TryBuild(content, ownPuuid, _time.GetUtcNow());
                 if (game is null && path == MatchHistoryPath &&
@@ -156,6 +164,10 @@ public sealed class LaneScoreService
                         $"lane-score: {Source(path)} not recordable; shape={LaneScoreCapture.Describe(content)}"));
                     continue;
                 }
+
+                // History may still show a previous game that this installation
+                // has never scored. Dedupe alone cannot recognise that stale row.
+                if (expectedMatchId is not null && game.MatchId != expectedMatchId) continue;
 
                 if (!_store.Capture(game))
                 {

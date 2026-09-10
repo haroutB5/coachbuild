@@ -570,8 +570,17 @@ public static class LaneScoreCapture
     /// <summary>The ranked summary's id, used only to request its full match.</summary>
     public static string? RankedMatchId(JsonElement payload)
     {
+        var identity = GameIdentity(payload);
+        return RankedQueues.IsRanked(identity.QueueId) ? identity.MatchId : null;
+    }
+
+    /// <summary>Identity is available before the end-of-game participants have settled.</summary>
+    public static (string? MatchId, int? QueueId) GameIdentity(JsonElement payload)
+    {
         var root = UnwrapGame(payload);
-        return RankedQueues.IsRanked(ReadInt(root, QueueIdKeys)) ? ReadGameId(root) : null;
+        return root.ValueKind == JsonValueKind.Object
+            ? (ReadGameId(root), ReadInt(root, QueueIdKeys))
+            : (null, null);
     }
 
     private static string? ReadTimestamp(JsonElement root)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useSyncExternalStore } from "react";
+import { useState, useRef, useEffect, useId, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import type { ChampionRef } from "@/lib/types";
 import { isFavoriteChampion } from "@/lib/favorites";
@@ -48,9 +48,6 @@ interface ChampionPickerProps {
   autoFocus?: boolean;
 }
 
-const LISTBOX_ID = "champ-listbox";
-const optId = (i: number) => `champ-opt-${i}`;
-
 export default function ChampionPicker({
   value,
   onChange,
@@ -58,6 +55,9 @@ export default function ChampionPicker({
   placeholder = "Search champion…",
   autoFocus = false,
 }: ChampionPickerProps) {
+  const pickerId = useId();
+  const listboxId = `${pickerId}-listbox`;
+  const optId = (i: number) => `${pickerId}-option-${i}`;
   // The accessible name tracks the visible placeholder rather than being pinned
   // to the generic wording — otherwise a screen-reader user hears "Search
   // champion" three times on /draft with no way to tell the boxes apart, which
@@ -225,6 +225,7 @@ export default function ChampionPicker({
       e.preventDefault();
       setActiveIndex(Math.max(filtered.length - 1, 0));
     } else if (e.key === "Enter") {
+      if (!open) return;
       e.preventDefault();
       const champ = filtered[activeIndex];
       if (champ) select(champ);
@@ -243,7 +244,7 @@ export default function ChampionPicker({
         )}
         <input
           ref={inputRef}
-          id="champion-search"
+          id={`${pickerId}-search`}
           name="champion-search"
           type="text"
           value={query}
@@ -259,7 +260,7 @@ export default function ChampionPicker({
           aria-label={pickerLabel}
           role="combobox"
           aria-expanded={open}
-          aria-controls={LISTBOX_ID}
+          aria-controls={open ? listboxId : undefined}
           aria-autocomplete="list"
           aria-activedescendant={
             open && filtered[activeIndex] ? optId(activeIndex) : undefined
@@ -287,7 +288,7 @@ export default function ChampionPicker({
           >
           <ul
             ref={listRef}
-            id={LISTBOX_ID}
+            id={listboxId}
             role="listbox"
             className="max-h-[240px] overflow-y-auto divide-y divide-line/40"
           >

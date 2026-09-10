@@ -2,22 +2,19 @@
 
 CoachBuild Desktop is a per-user .NET 8 WPF host for the parts a browser
 cannot own: the Windows tray, fullscreen click-through overlay, League/LCU
-polling, loopback bridge, WebView2 windows, and updates. It is a client of the
-hosted CoachBuild site, not a second web application.
+polling, loopback bridge, WebView2 windows, and updates. It ships its own local
+Draft page. There is no hosted CoachBuild site or backend.
 
-## Hosted web behavior stays unchanged
+## Local UI and bridge
 
-The native WebView2 window loads the deployed CoachBuild origin and passes the
-same persistent session token in the URL that the existing web app expects.
+The native WebView2 window maps its packaged `UI` folder to
+`https://coachbuild.local/index.html` and passes a persistent session token.
 `components/live/companionClient.ts` continues to use the loopback contract,
 including `/status`, `/live`, `/skills`, `/me`, `/apply-runes`, and
 `/apply-itemsets`. The native overlay does not call `/skills`; it consumes the
 in-process Live Client Data skill snapshot. `/skills` remains serialized on the
-bridge solely for the unchanged hosted web app.
-
-The hosted PWA remains first-class for phones. No route, mobile layout, or web
-polling behavior is forked for this app. Browser users can continue using the
-PowerShell companion while the staged native rollout proves parity.
+bridge for local clients. The former hosted PWA and its infrastructure were
+retired in September 2026.
 
 ## Runtime ownership
 
@@ -54,7 +51,7 @@ PowerShell companion while the staged native rollout proves parity.
   fails.
 - **Updates:** Velopack checks/downloads in the background, defers application
   while the companion is busy, then applies and relaunches when the gate clears.
-  The 2-hour loop is the fallback: game end, companion window close, and resume
+  The 5-minute loop is the fallback: game end, companion window close, and resume
   from sleep each request an opportunistic check (no-op if a check ran within
   the last 10 minutes). A release staged behind the open window shows a quiet
   one-line hint in the window's status bar; site messages always win that slot.
@@ -64,7 +61,7 @@ PowerShell companion while the staged native rollout proves parity.
 The installer is per-user under:
 
 ```text
-%LOCALAPPDATA%\CoachBuild\Desktop
+%LOCALAPPDATA%\CoachBuild.Desktop
 ```
 
 Runtime data is kept under `%LOCALAPPDATA%\CoachBuild`: the existing durable
@@ -97,8 +94,8 @@ dotnet run --project desktop/src/CoachBuild.Desktop/CoachBuild.Desktop.csproj --
 Package and publish native artifacts with:
 
 ```powershell
-pwsh desktop/scripts/package.ps1 -Version 1.0.1
-pwsh desktop/scripts/publish.ps1 -Version 1.0.1
+powershell -File desktop/scripts/package.ps1 -Version 2.3.4
+powershell -File desktop/scripts/publish.ps1 -Version 2.3.4
 ```
 
 The Velopack feed is the dedicated public repository

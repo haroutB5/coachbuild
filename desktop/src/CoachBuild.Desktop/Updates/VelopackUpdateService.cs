@@ -189,6 +189,14 @@ public sealed class VelopackUpdateService : IAsyncDisposable
             Log($"update: checking {UpdateBootstrapper.ReleaseMetadataUrl} (installed {current ?? "unknown"})");
             SetModel(UpdateTrayModel.For(UpdateStatus.Checking));
             var update = await _client.CheckForUpdatesAsync(cancellationToken).ConfigureAwait(false);
+            if (_pending is not null && (update is null ||
+                !UpdateVersion.IsNewer(update.Version, _pending.Version)))
+            {
+                // An empty/older feed does not undo a completed download. This
+                // also avoids downloading the same staged release every check.
+                await ApplyPendingCoreAsync(cancellationToken).ConfigureAwait(false);
+                return;
+            }
             if (update is null)
             {
                 _pending = null;
@@ -198,9 +206,10 @@ public sealed class VelopackUpdateService : IAsyncDisposable
                 return;
             }
 
-            _pending = null;
             Log($"update: {update.Version} available; downloading");
             SetModel(UpdateTrayModel.For(UpdateStatus.Downloading, update.Version));
+            // Keep the previous staged release until its replacement is fully
+            // downloaded, so a network failure cannot strand a usable update.
             await _client.DownloadUpdatesAsync(update, cancellationToken).ConfigureAwait(false);
             _pending = update;
             Log($"update: {update.Version} downloaded and staged");

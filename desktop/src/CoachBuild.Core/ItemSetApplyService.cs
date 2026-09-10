@@ -8,6 +8,7 @@ public sealed class ItemSetApplyService
     private readonly ILcuApi _lcu;
     private readonly CompanionState? _state;
     private readonly RedactedLog? _log;
+    private readonly SemaphoreSlim _applyGate = new(1, 1);
 
     public ItemSetApplyService(ILcuApi lcu, CompanionState? state = null, RedactedLog? log = null)
     {
@@ -21,6 +22,19 @@ public sealed class ItemSetApplyService
         CancellationToken cancellationToken = default)
     {
         if (!ApplyPayloadValidation.TryValidateItemSets(request, out var invalid)) return invalid;
+        // The LCU replaces the whole item-set document. Serialise the complete
+        // read/merge/write so concurrent callers cannot erase a successful import.
+        await _applyGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await ApplyCoreAsync(request!, cancellationToken).ConfigureAwait(false);
+        }
+        finally { _applyGate.Release(); }
+    }
+
+    private async Task<ApplyItemSetsResult> ApplyCoreAsync(
+        ApplyItemSetsRequest request, CancellationToken cancellationToken)
+    {
         if (_state is not null && !_state.ClientConnected)
             return new ApplyItemSetsFailure("no-client", "League client not detected -- open the client and try again");
 

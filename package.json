@@ -10,28 +10,29 @@
     "build": "cd desktop/ui && next build",
     "lint": "eslint desktop/ui components lib",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:ui": "node scripts/verify-draft-ui.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
-    "next": "16.3.0",
+    "next": "16.3.4",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@types/node": "20.14.10",
+    "@types/node": "20.19.43",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
-    "@vitest/coverage-v8": "^4.1.8",
+    "@vitest/coverage-v8": "^4.1.11",
     "autoprefixer": "10.4.19",
     "eslint": "9.39.5",
-    "eslint-config-next": "16.3.0",
-    "postcss": "8.4.39",
+    "eslint-config-next": "16.3.4",
+    "postcss": "8.5.28",
     "puppeteer-core": "^25.4.0",
     "tailwindcss": "3.4.6",
     "tsx": "^4.23.0",
     "typescript": "5.5.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "@types/react": "19.2.18",

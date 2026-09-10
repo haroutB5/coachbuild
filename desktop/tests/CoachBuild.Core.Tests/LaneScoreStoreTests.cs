@@ -150,6 +150,27 @@ public sealed class LaneScoreStoreTests : IDisposable
         Assert.False(File.Exists(_path));
     }
 
+    [Theory]
+    [InlineData(420, "just-ended")]
+    [InlineData(450, null)]
+    public async Task EndOfGameIdentityPreventsCapturingAnOlderUnscoredRankedGame(int queue, string? expected)
+    {
+        var lcu = new MockLcuApi();
+        lcu.Enqueue(HttpMethod.Get, LaneScoreService.EogStatsPath, new LcuResponse(true, 200,
+            MockLcuApi.Json($$"""{"gameId":"just-ended","queueId":{{queue}}}""")));
+        foreach (var id in new[] { "previous-unscored", "just-ended" })
+            lcu.Enqueue(HttpMethod.Get, LaneScoreService.MatchHistoryPath, new LcuResponse(true, 200,
+                MockLcuApi.Json($$"""{"gameId":"{{id}}","queueId":420,"participants":[{"isLocalPlayer":true,"championId":106,"teamId":100,"teamPosition":"TOP"},{"championId":887,"teamId":200,"teamPosition":"TOP"}]}""")));
+        var service = new LaneScoreService(lcu, Store(), settleAttempts: 1,
+            delay: (_, _) => Task.CompletedTask);
+
+        await service.CaptureAsync();
+
+        Assert.Equal(expected, Store().Pending()?.MatchId);
+        Assert.DoesNotContain(Store().Read().Pending, game => game.MatchId == "previous-unscored");
+        Assert.Equal(expected is null ? 0 : 2, lcu.Count(HttpMethod.Get, LaneScoreService.MatchHistoryPath));
+    }
+
     private static LaneScoreGame Game(
         string matchId = "7351234567",
         int queueId = RankedQueues.SoloDuo,

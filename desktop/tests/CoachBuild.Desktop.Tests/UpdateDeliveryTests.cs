@@ -200,6 +200,55 @@ public sealed class UpdateDeliveryTests
     // ------------------------------------------------------------ user intent
 
     [Fact]
+    public async Task Rechecking_a_staged_release_does_not_download_it_again()
+    {
+        var client = new FakeUpdateClient("2.3.2", "2.3.3");
+        await using var service = new VelopackUpdateService(client, isRestartDisruptive: () => true);
+
+        await service.CheckNowAsync();
+        await service.CheckNowAsync();
+
+        Assert.Equal(2, client.CheckCount);
+        Assert.Equal(1, client.DownloadCount);
+        Assert.Equal("2.3.3", service.PendingUpdate?.Version);
+        Assert.True(service.Current.CanRestartToUpdate);
+    }
+
+    [Fact]
+    public async Task An_empty_feed_does_not_forget_a_release_already_staged_on_disk()
+    {
+        var client = new FakeUpdateClient("2.3.2", null) { PendingOnDisk = "2.3.3" };
+        await using var service = new VelopackUpdateService(client, isRestartDisruptive: () => true);
+
+        await service.ApplyStagedFromDiskAsync();
+        await service.CheckNowAsync();
+
+        Assert.Equal("2.3.3", service.PendingUpdate?.Version);
+        Assert.True(service.Current.CanRestartToUpdate);
+        await service.ApplyPendingNowAsync();
+        Assert.Equal(1, client.ApplyCount);
+    }
+
+    [Fact]
+    public async Task A_failed_newer_download_keeps_the_previous_staged_release_available()
+    {
+        var client = new FakeUpdateClient("2.3.2", "2.3.4")
+        {
+            PendingOnDisk = "2.3.3", FailOn = "download",
+        };
+        var windowOpen = true;
+        await using var service = new VelopackUpdateService(client, isRestartDisruptive: () => windowOpen);
+
+        await service.ApplyStagedFromDiskAsync();
+        await service.CheckNowAsync();
+
+        Assert.Equal("2.3.3", service.PendingUpdate?.Version);
+        windowOpen = false;
+        await service.RetryPendingApplyAsync();
+        Assert.Equal(1, client.ApplyCount);
+    }
+
+    [Fact]
     public async Task The_tray_restart_overrides_the_window_gate()
     {
         var client = new FakeUpdateClient("1.0.8", "1.0.9");
