@@ -1,15 +1,22 @@
 # CoachBuild — technical reference
 
-**Describes desktop 2.0.0, 2026-09-08.** `desktop/src/CoachBuild.Desktop/CoachBuild.Desktop.csproj`'s
-`<Version>` is the single source of truth for the app version. If it has moved on
-since this date, treat everything below with more skepticism the further it has
-fallen behind, and check `CHANGELOG.md` for what shipped after.
+**Describes desktop 2.3.2, 2026-09-10.** `desktop/src/Directory.Build.props`'s
+`<Version>` is the single source of truth for the app version (it moved there in
+2.1.0; it is no longer in the csproj). If it has moved on since this date, treat
+everything below with more skepticism the further it has fallen behind, and check
+`CHANGELOG.md` for what shipped after.
 
 **v2.0.0 is a product change, not a refactor: the hosted web app is gone.**
 CoachBuild is now one Windows desktop application. There is no website, no
 serverless function, no database, no cron and no scheduled task. The repository
 still contains a `components/` and `lib/` tree, but those are now a **component
 library for the desktop app's embedded UI** rather than a deployed Next.js site.
+
+**As of 2026-09-09 that is also true of the infrastructure, not just the code.**
+The Vercel project, the Neon database and every scheduled task have been deleted
+from the accounts and from this machine. See *Decommission* at the bottom. There
+is nothing left to deploy to, nothing left to pay for, and no credential the app
+needs.
 
 The v1 document — the six web surfaces, the API route table, the Neon schema, the
 ingest fleet, the consensus artifact, and the measurements behind all of it — is
@@ -26,11 +33,13 @@ CoachBuild.Desktop (WPF, net8.0-windows, Velopack-installed, per-user)
 ├── overlay                  in-game skill-order overlay (native, DirectComposition)
 ├── LCU bridge               CompanionHttpServer on 127.0.0.1:{48291,48292,48293}
 │                            reads the League client, writes item sets + rune pages
-└── WebView2 window, four tabs
+└── WebView2 window ("Research window"), four tabs
     ├── Draft      ← LOCAL static page shipped inside the app  (was "Companion")
-    ├── u.gg       ← real site, auto item-set + rune-page import
+    ├── u.gg       ← real site, auto item-set + rune-page import; also the
+    │                source for draft counters and skill order
     ├── Coachless  ← real site, auto item-set + rune-page import
-    └── op.gg      ← real site, own profile via LCU riot-id
+    └── MyStats    ← op.gg, own profile via LCU riot-id (tab renamed in 2.0.1;
+                     the code enum is still CompanionTab.OpGg)
 ```
 
 Everything the app knows comes from one of exactly four places, and it is worth
@@ -39,10 +48,14 @@ v1 only by reading a pipeline:
 
 1. **The League client** (LCU + Live Client Data), through the bridge.
 2. **ddragon** (`ddragon.leagueoflegends.com`), a keyless public CDN.
-3. **lolalytics**, one HTML page per (enemy champion, lane), fetched on demand.
-4. **The three site tabs**, which are the real websites, read by extractor scripts.
+3. **The three site tabs**, which are the real websites, read by extractor scripts
+   and by hidden single-purpose readers (counters, skill order, import workers).
+4. **The user's own `lane-scores.json`**, written by the user, read by nobody else.
 
-There is no fifth. If you find yourself adding one, that is a product decision.
+There is no fifth. **lolalytics used to be a fifth** — it supplied draft counters
+until 2.2.4 moved counters to u.gg. `lib/lolalytics/` is still in the tree and
+still unit-tested, but nothing in the shipping UI imports it (verified by grep,
+2026-09-10). If you find yourself adding a source, that is a product decision.
 
 ## The Draft tab is a local page (the 2.0.0 core change)
 
@@ -139,7 +152,18 @@ broken config passed it. Mutating `content` to `[]` now fails the test.
   `components/live/draftLiveSync.ts` logic the web page used, including the
   **v0.128.0 rule that marking a lane opponent must not latch dirty** (it froze
   live auto-fill mid-draft; `draftLaneOppDirty.test.ts` still pins it).
-- **Counter picks** via `CounterPicksStrip`, fed by `desktop/ui/localCounters.ts`.
+- **Counter picks** via `CounterPicksStrip`, fed by `desktop/ui/localCounters.ts`
+  — **u.gg since 2.2.4, not the bridge and not lolalytics.** `localCounters.ts`
+  posts `{type:"ugg-counters", id, slug, lane, enemy}` to `window.chrome.webview`
+  and waits for a matching `ugg-counters-result`; the host side is
+  `Web/WebView2Counters.cs` + `Web/UggCounters.cs`, which drive a hidden WebView
+  and read u.gg's own SSR bucket (`#reactn-preloaded-state` →
+  `world_emerald_plus_{lane}`), never arbitrary script execution. 35 s timeout,
+  cancellable, 1 h in-process cache bounded at 30 entries. `rankUggCounters`
+  (`lib/ugg/counters.ts`) does the ranking; the patch is read off the page title
+  and the response is rejected outright if patch or source URL is missing.
+- **Lane history / lane scores** via `LaneHistoryPanel` and `LaneScoreCard`
+  (2.3.0, below), both talking to the bridge through `desktop/ui/localBridge.ts`.
 - **Champion pool** from the bridge's new `/draft/pool`.
 - **Live setup** collapsed into a status section at the bottom of the same page —
   the old `/live-setup` route is gone, and the header link is an in-page anchor.
@@ -178,10 +202,16 @@ Three deliberate properties of `/draft/counters-html`:
 This endpoint exists because the parse used to live in a server route
 (`/api/draft/counters`). The parser itself is unchanged and still lives in
 `lib/lolalytics/counters.ts`; only the transport moved.
-`desktop/ui/localCounters.ts` keeps the 24-hour cache that route's runtime cache
-used to provide, in-process, bounded at 30 entries.
 
-## Lane scores (2.3.0) — the user's own matchup history, local only
+**`/draft/counters-html` is now dead weight, and this doc will not pretend
+otherwise.** 2.2.4 moved draft counters to u.gg over the WebView2 host channel
+(see the Draft page section). The route still exists in `CompanionHttpServer` and
+is still covered by `LocalDraftBridgeTests`, but no shipping UI code path calls
+it (grep, 2026-09-10). Treat it as a retained seam, not as live behaviour; delete
+it deliberately or keep it deliberately, but do not read it as documentation of
+where counters come from.
+
+## Lane scores (2.3.0–2.3.2) — the user's own matchup history, local only
 
 After a **ranked** game ends the companion offers a card: "How did your lane go?",
 1-10 against the enemy laner. Those scores aggregate into a champ-select panel,
@@ -191,8 +221,11 @@ the user's *own* champions into that enemy.
 **The data is local and stays local.** One file,
 `%LOCALAPPDATA%\CoachBuild\lane-scores.json`, written atomically (temp file +
 `File.Move` overwrite). Nothing is uploaded, and there is no database behind this
-feature — Neon is decommissioned and this was designed after that, not migrated
-off it. The file is a single JSON document rather than JSONL because atomic
+feature — Neon was deleted on 2026-09-09 and this was designed for a machine with
+no database, not migrated off one. The store is deduped by match id, carries a
+`schemaVersion` and a `skipped` set, and preserves unknown keys
+(`LaneScoreDocument.Extra`) so a document written by a newer build survives a
+write by an older one. The file is a single JSON document rather than JSONL because atomic
 writes rewrite the whole file anyway, so JSONL's cheap-append advantage is not
 available, while a single document gives `schemaVersion` one unambiguous home.
 
@@ -225,6 +258,25 @@ Rules that are product decisions, not implementation details:
   recommendation forever; an unknown one costs one tap. This is the same
   reasoning that removed index-based lane inference from champ select (audit
   P2-1) — `theirTeam` is compacted, so index is not role.
+- **Bot lane is broken apart by role, not by position (2.3.1).** The ADC and the
+  support both report lane `BOTTOM`, so position alone made *every* bot-lane game
+  `ambiguous:2-enemies-at-bottom` and asked the user. `role`
+  (`DUO_CARRY` / `DUO_SUPPORT`) is now a **secondary** discriminator: consulted
+  only when position is ambiguous, and only when it narrows to exactly one enemy.
+  Top, mid and jungle never consult it. A role that is missing, blank, `NONE` or
+  unrecognised is unusable and falls back to asking — never to a coin flip. When
+  role breaks the tie, `PositionSource` names both fields
+  (`timeline.lane+timeline.role`).
+- **A support's own game is role 4, not role 3 (2.3.2).**
+  `ComplianceRules.RoleIdFromPosition` maps `BOTTOM` to 3 for both bot laners,
+  but champ select reads `assignedPosition` and therefore queries the panel with
+  role 4 (utility) for a support. `LaneScoreCapture.ResolveRoleId` overrides
+  bottom→4 when — and only when — role says support; absence is not evidence, so
+  anything unusable keeps 3. Opponent matching is untouched: a support game is
+  filed as role 4 *and* still resolves the enemy support as the opponent.
+  **Scores written by earlier builds keep the role id they were saved with;
+  nothing on disk is rewritten**, so a pre-2.3.2 support history stays under 3
+  and will not appear in the panel.
 - **Never infer the inverse matchup.** Volibear 9/10 into Gwen is a fact about
   picking Volibear when Gwen is locked. It says nothing about Gwen into
   Volibear, and no code path reads a record backwards.
@@ -244,15 +296,24 @@ Rules that are product decisions, not implementation details:
   refreshing the hosted page underneath whatever tab the user is reading. If they
   ignore it, the game is already on disk and the card is waiting next time.
 
-**Unverified against a live client, and honest about it.** `LaneScoreCapture`
-was written with no League client running on the dev machine (companion.log
-records `lcu_discovery_failed` across all four discovery layers), so the exact
-field the platform uses for a participant's position is not confirmed. Rather
-than pick a spelling and hope, the parser probes a candidate list, reports which
-field won in `LaneScoreGame.PositionSource`, and logs a **names-and-kinds-only**
-key inventory (`LaneScoreCapture.Describe` — no values, so no puuids or summoner
-names reach a log users are asked to send us). The first real ranked game turns
-this from a guess into a measurement. Anything unresolved falls into the
+**Partly measured, and honest about the rest.** `LaneScoreCapture` was written
+with no League client running on the dev machine (companion.log records
+`lcu_discovery_failed` across all four discovery layers), so the exact field the
+platform uses for a participant's position was not confirmed at design time.
+Rather than pick a spelling and hope, the parser probes a candidate list
+(`PositionKeys`, then `RoleKeys`), reports which field won in
+`LaneScoreGame.PositionSource`, and logs a **names-and-kinds-only** key inventory
+(`LaneScoreCapture.Describe` — no values, so no puuids or summoner names reach a
+log users are asked to send us).
+
+A real captured participant has since confirmed the shape as
+`participant.timeline.lane` + `participant.timeline.role` (the capture in the
+`RoleKeys` doc comment: `{"championId":202,"teamId":100,"lane":"NONE","role":"SOLO"}`),
+which is why `timeline` is probed and why role leads its own list. **What is
+still unmeasured is a real ranked game end-to-end**: whether lane/role carry
+usable values there, and whether the opponent resolves to the right champion.
+That is the one open item in `HANDOFF.md`, and the evidence is one
+`position-source=` line in companion.log. Anything unresolved falls into the
 opponent-unknown path above, so a wrong spelling costs a tap, never a wrong fact.
 
 ## What the Draft page inherits, unchanged and still load-bearing
@@ -341,7 +402,8 @@ made them non-obvious. Do not re-derive them.
   `SiteImportValidator.RoleLabel` returns **null**, and `PageTitle` /
   `ChampionLabel` omit it — never the literal word "Unknown" (2.0.1 shipped
   `CoachBuild import: Nasus Unknown (u.gg)`).
-- **op.gg** resolves `gameName`/`tagLine` and the platform id from the LCU and
+- **MyStats** (the op.gg tab; renamed from "op.gg" in 2.0.1, with a small italic
+  `op.gg` sub-label) resolves `gameName`/`tagLine` and the platform id from the LCU and
   opens the user's own profile; anything missing opens `op.gg` without guessing.
   2.1.0 retries the resolve on the **rising edge of the LCU connection** (the tab
   can be opened before the client is up, which is why a whole field-test session
@@ -391,7 +453,7 @@ freshness check against a hosted origin; there isn't one.
 | All `scripts/ingest-*`, `generate-consensus-artifact`, `rebuild-controller`, `rebake-consensus`, `register-*-task.ps1` | Nothing to ingest into. |
 | SW / PWA plumbing (`public/sw.js`, `manifest.webmanifest`, icons) | No website to install. |
 | `RankSampleClient`'s live transport, diagnostics upload | No collection endpoint. Replaced by `RetiredHostedSink`, which rejects every post rather than throwing — see below. |
-| `SkillOrderProvider.DefaultEndpoint` | No `/api/skill-order`. The endpoint is now nullable and a null endpoint answers `NoData` without a request. |
+| `SkillOrderProvider.DefaultEndpoint` | No `/api/skill-order`. The endpoint is now nullable and a null endpoint answers `NoData` without a request. **2.2.7 filled the seam**: the provider takes an injectable `fetch` and the data comes from u.gg. |
 
 **Two retirements were done as *inert seams*, not deletions, and that is
 deliberate.** `RetiredHostedSink` still implements `IRankSampleSink` and
@@ -400,12 +462,38 @@ optional endpoint. Both keep their services constructible and their contract tes
 meaningful, so if a local replacement ever arrives there is a seam to fill rather
 than a rewrite. Neither makes a network call in production.
 
-**The overlay was reduced honestly.** It rendered skill-order data from
-`/api/skill-order`. With no endpoint, `SkillOrderProvider` returns `NoData` and the
-overlay draws live ability state from the Live Client Data API only — it does not
-invent an order, and it does not fall back to a stale one. The
+**The overlay was reduced honestly in 2.0.0, then given a new source in 2.2.7.**
+It used to render skill-order data from `/api/skill-order`; 2.0.0 deleted the
+endpoint, `SkillOrderProvider` answered `NoData`, and the overlay drew live
+ability state from the Live Client Data API only. 2.2.7 restored a recommended
+order from **u.gg's published Skill Path** for the selected champion and lane
+(World Emerald+ recommended build) — see the next section. The
 situational-WPA item-number overlay was already removed in desktop 1.0.23 for
 unrelated reasons and did not come back.
+
+## Skill order (restored 2.2.7): u.gg supplies data, the old provider keeps the rules
+
+`Web/UggSkillOrderReader.cs` reads `rec_skill_path` out of u.gg's page for the
+champion+role deep link and returns a `SkillOrderResult`. `SkillOrderProvider`
+is unchanged in every respect that matters — it now takes an injectable
+`Func<int,int,CancellationToken,Task<SkillOrderResult>> fetch` instead of an HTTP
+endpoint, and still owns the cache (successful orders never expire within a game,
+no-data retries after 60 s, errors after 15 s) and the per-game clear. Role
+unset or RoleId 5 still resolves to no-data without a request.
+
+Three properties worth not breaking:
+
+- **A partial path is shown as published, never filled in.** No interpolation, no
+  "probably max Q" completion. `OverlaySkillOrder.Completed` / `CompletionBasis`
+  carry that distinction to the renderer.
+- **The reader owns its own throwaway host.** A 1×1, transparent, non-activating
+  `Window` containing a `WebView2`, created per fetch and disposed after, sharing
+  the same profile root. It therefore survives the Research window closing at
+  game start (which is exactly when the overlay needs it) and can neither
+  navigate nor evict the user's item/rune import browsers. One `SemaphoreSlim`
+  serialises fetches; 30 s timeout.
+- **Every fetch logs one line**: `skill-order: u.gg {Champ} {role} {Status}; N
+  levels, M games`.
 
 ## HARD RULES (do not violate without a new explicit user directive)
 
@@ -433,10 +521,26 @@ unrelated reasons and did not come back.
 ## Gates
 
 ```
-dotnet test desktop/CoachBuild.Desktop.sln -c Release     383 Core + 532 Desktop
-npm run typecheck && npm test                             20 files / 427 tests
+dotnet test desktop/CoachBuild.Desktop.sln -c Release     see the warning below
+dotnet test desktop/tests/CoachBuild.Core.Tests/CoachBuild.Core.Tests.csproj -c Release
+npm run typecheck && npm test                             21 files / 434 tests
 npm run lint                                              eslint desktop/ui components lib
 ```
+
+Counts measured on this machine at 28b68eb / 2.3.2 (2026-09-10): **Core 577,
+Desktop 655, vitest 434 across 21 files**, all green, `tsc --noEmit` clean.
+
+**The solution-level `dotnet test` ran only ONE test assembly.** On 2026-09-10 it
+reported `A total of 1 test files matched` and `CoachBuild.Desktop.Tests.dll` →
+655 passed, and never touched `CoachBuild.Core.Tests.dll` at all — despite
+Core.Tests being one of the four projects in the `.sln`. Running the Core test
+csproj directly passes 577. **Do not read a green solution run as "both suites
+passed"**; run the Core project explicitly, or check that both assemblies appear
+in the output. The known cause of a suite vanishing this way is a compile error
+in that project silently dropping it from the run — but Core.Tests compiles and
+passes when invoked directly at this commit, so that is not the explanation here
+and the real one is undiagnosed. Either way the rule stands: **confirm both
+`Passed!` lines**, never just the exit code.
 
 **The SDK is not the `dotnet` on PATH.** `C:\Program Files\dotnet` is runtimes only
 and answers `No .NET SDKs were found` — that message names the paths *that probe*
@@ -476,6 +580,16 @@ icon **and the packaged draft UI** are present → `vpk pack`.
 `desktop/scripts/publish.ps1` uploads to `haroutB5/coachbuild-desktop-releases`;
 the Velopack updater reads that feed.
 
+`publish.ps1` also carries a **Smart App Control smoke-gate**: it launches the
+packaged binary with `--self-test` and, on a per-hash SAC block, rebuilds to get a
+fresh hash rather than shipping a build that dies on launch. It exists because
+2.1.x shipped an `app.manifest` with invalid XML (a `--` inside a comment) that
+bricked startup with an SxS error on every machine, and no unit test noticed.
+Manifest XML validity is now test-pinned as well.
+
+This is the only release channel there is. There is no web deploy step any more —
+if you find yourself reaching for `vercel`, you are working from a stale doc.
+
 Environment failures that recur and are not your bug: `gh`'s stored token is
 invalid (the valid PAT comes from the git credential helper), and Smart App
 Control blocks `vpk.exe` itself (run the managed `vpk.dll` under the
@@ -491,20 +605,29 @@ end state, not a gap: every credential v1 needed
 (`DATABASE_URL`, `RIOT_API_KEY`, `CRON_SECRET`, `MYSTATS_ACCOUNT_SECRET`) belonged
 to a surface that no longer exists.
 
-## Decommission checklist (infrastructure now unused)
+## Decommission — DONE, 2026-09-09
 
-Nothing in the repo depends on any of these as of 2.0.0. They are listed so the
-teardown is done from evidence rather than memory; see `HANDOFF.md` for status.
+The teardown listed here as a checklist through 2.3.x has been executed. The app
+is fully local: **no database, no hosting, no scheduled task, no cloud bill.**
 
-- **Vercel project `coachbuild`** (personal account) — the deployment, its
-  domain, its four crons and its environment variables.
-- **Neon project `ep-sparkling-block-zayzlal1`** — the whole `coachbuild` schema.
-  It is a *shared instance*: never touch `public` or any other schema.
-- **Windows Scheduled Tasks on this machine:** `CoachBuildOtpPriority`,
-  `CoachBuildOtpIngest`, `CoachBuildMatchIngest`, `CoachBuildProstageIngest`,
-  `CoachBuildConsensusRebake`. Their registration scripts are deleted from the
-  repo; the machine state must be removed separately.
-- **The PowerShell companion** `public/companion.ps1`, installed via
-  `irm https://coachbuild.vercel.app/companion.ps1 | iex`. Its only distribution
-  channel was the Vercel site, so it becomes uninstallable-and-unupdatable the
-  moment that project is deleted. It is superseded by the desktop app.
+| Thing | State |
+|---|---|
+| Vercel project `coachbuild` | **Deleted.** `coachbuild.vercel.app` 404s. Its deployment, domain, crons and environment variables went with it. |
+| Vercel project `.cb-deploy-web0123` | **Deleted.** A junk project from an old deploy experiment. |
+| Neon marketplace store `coachbuild-db` | **Deleted**, and with it the whole Neon project. The org is empty. |
+| 8 Windows Scheduled Tasks | **Disabled** on this machine: `CoachBuildConsensusRebake`, `CoachBuildMatchIngest`, `CoachBuildOtpIngest`, `CoachBuildOtpPriority`, `CoachBuildOtpWalkOneShot`, `CoachBuildProstageIngest`, `CoachBuildRebuildPhase1`, `CoachBuildDraftIngest`. (Disabled, not deleted — nothing runs.) |
+| `public/companion.ps1` | Gone with the site that distributed it (`irm https://coachbuild.vercel.app/companion.ps1 | iex`). Superseded by the desktop app. |
+
+**The database was backed up before deletion, in full.**
+`data-backups/neon-final-20260909/` holds **22 `.jsonl` table dumps, 297,433 rows,
+130 MB**, plus `_schema-columns.json` and the `dump.mjs` that produced them
+(counts verified on disk 2026-09-10). This is the only surviving copy of the v1
+ingest data — the OTP/pro/prostage match corpus, draft matchups, rank samples and
+the consensus inputs. It is a cold archive: nothing reads it, and no code path
+knows it exists.
+
+**Consequences to keep in mind when reading old material:** anything in
+`docs/archive/`, in `CHANGELOG.md` entries below 2.0.0, or in the historical half
+of `HANDOFF.md` that mentions a deploy, a `DATABASE_URL`, an `/api/**` route, a
+cron or an ingest run is describing infrastructure that no longer exists. It is
+kept for reasoning, not for operations.
