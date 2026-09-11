@@ -757,7 +757,11 @@ public static class SiteImportValidator
     /// </summary>
     public static string RunePageTitle(string championName, string? assignedRole, SiteImportSource source)
     {
-        var prefix = Label(source);
+        // Pro pages carry "Pro build" (RuneApplyService.ProOwnedPagePrefix),
+        // not the bare "Pro" label, so ownership never matches a user's page.
+        var prefix = source == SiteImportSource.Pro
+            ? RuneApplyService.ProOwnedPagePrefix.TrimEnd()
+            : Label(source);
         return RoleLabel(assignedRole) is { } label
             ? $"{prefix} {championName} ({label})"
             : $"{prefix} {championName}";

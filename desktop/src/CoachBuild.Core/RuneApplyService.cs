@@ -37,7 +37,12 @@ public sealed class RuneApplyService
     public const string OwnedPagePrefix = "CoachBuild";
     public const string UGgOwnedPagePrefix = "u.gg ";
     public const string CoachlessOwnedPagePrefix = "Coachless ";
-    public const string ProOwnedPagePrefix = "Pro ";
+    /// <summary>
+    /// "Pro build ", not "Pro ": a user page titled "Pro Yasuo" is plausible,
+    /// and anything matching an owned prefix is treated as ours (reused and
+    /// pruned). The longer prefix keeps the user's own pages out of reach.
+    /// </summary>
+    public const string ProOwnedPagePrefix = "Pro build ";
 
     /// <summary>The pre-2.2.0 shared title, still ours for prune and reuse.</summary>
     public const string LegacyImportPrefix = "CoachBuild import: ";

@@ -39,7 +39,7 @@ public sealed class ProBuildsTests
         // u.gg/Coachless builder, pinned by its own round-trip theory) still
         // emits "support" for role 4 and is untouched by this change.
         Assert.Equal(4, ProBuildsClient.RoleIdFromToken("support"));
-        Assert.Equal("Pro Ahri (Support)", SiteImportValidator.RunePageTitle("Ahri", "supp", SiteImportSource.Pro));
+        Assert.Equal("Pro build Ahri (Support)", SiteImportValidator.RunePageTitle("Ahri", "supp", SiteImportSource.Pro));
     }
 
     [Fact]
@@ -443,8 +443,8 @@ public sealed class ProBuildsTests
         Assert.Equal(SiteImportSource.Pro, payload!.Source);
         Assert.Equal("Pro", SiteImportValidator.Label(SiteImportSource.Pro));
         Assert.Equal("CoachBuild import: Ahri Mid (Pro)", SiteImportValidator.PageTitle("Ahri", "mid", SiteImportSource.Pro));
-        Assert.Equal("Pro Jhin (ADC)", SiteImportValidator.RunePageTitle("Jhin", "adc", SiteImportSource.Pro));
-        Assert.Equal("Pro Jhin", SiteImportValidator.RunePageTitle("Jhin", null, SiteImportSource.Pro));
+        Assert.Equal("Pro build Jhin (ADC)", SiteImportValidator.RunePageTitle("Jhin", "adc", SiteImportSource.Pro));
+        Assert.Equal("Pro build Jhin", SiteImportValidator.RunePageTitle("Jhin", null, SiteImportSource.Pro));
     }
 
     // ── Trio rune-page budget ────────────────────────────────────────────
@@ -461,9 +461,22 @@ public sealed class ProBuildsTests
     [Fact]
     public void Pro_pages_are_owned_and_group_by_champion()
     {
-        Assert.True(RuneApplyService.IsOwnedPageName("Pro Ahri (Mid)"));
-        Assert.Equal("Ahri", RuneApplyService.ChampionOfOwnedPage("Pro Ahri (Mid)"));
-        Assert.Equal("Lee Sin", RuneApplyService.ChampionOfOwnedPage("Pro Lee Sin (Jungle)"));
+        Assert.True(RuneApplyService.IsOwnedPageName("Pro build Ahri (Mid)"));
+        Assert.Equal("Ahri", RuneApplyService.ChampionOfOwnedPage("Pro build Ahri (Mid)"));
+        Assert.Equal("Lee Sin", RuneApplyService.ChampionOfOwnedPage("Pro build Lee Sin (Jungle)"));
+    }
+
+    /// <summary>
+    /// A user's own page titled like a pro page ("Pro Yasuo") must never
+    /// count as CoachBuild's: owned pages get reused and pruned.
+    /// </summary>
+    [Theory]
+    [InlineData("Pro Yasuo")]
+    [InlineData("Pro Jungle")]
+    [InlineData("Pro builds")]
+    public void A_users_own_pro_titled_page_is_not_owned(string title)
+    {
+        Assert.False(RuneApplyService.IsOwnedPageName(title));
     }
 
     [Fact]
@@ -473,12 +486,12 @@ public sealed class ProBuildsTests
         {
             Page(10, "u.gg Viktor (Mid)"),
             Page(11, "Coachless Viktor (Mid)"),
-            Page(12, "Pro Viktor (Mid)"),
+            Page(12, "Pro build Viktor (Mid)"),
         };
         Assert.Empty(RuneApplyService.PagesToPrune(pages, keepId: 12));
         Assert.Empty(RuneApplyService.PagesToPruneAfterBatch(
             pages, [10, 11, 12],
-            ["u.gg Viktor (Mid)", "Coachless Viktor (Mid)", "Pro Viktor (Mid)"]));
+            ["u.gg Viktor (Mid)", "Coachless Viktor (Mid)", "Pro build Viktor (Mid)"]));
     }
 
     [Fact]
@@ -488,7 +501,7 @@ public sealed class ProBuildsTests
         {
             Page(2, "u.gg Jhin (ADC)"),
             Page(5, "Coachless Jhin (ADC)"),
-            Page(8, "Pro Jhin (ADC)"),
+            Page(8, "Pro build Jhin (ADC)"),
             Page(11, "u.gg Viktor (Mid)"),
         };
 
@@ -505,13 +518,13 @@ public sealed class ProBuildsTests
             Page(4, "u.gg Jhin (ADC)"),
             Page(10, "u.gg Viktor (Mid)"),
             Page(11, "Coachless Viktor (Mid)"),
-            Page(12, "Pro Viktor (Mid)"),
+            Page(12, "Pro build Viktor (Mid)"),
         };
 
         // The batch wrote only the Pro third this run; the pair it joins
         // still counts as ours to keep, and only Jhin goes.
         var doomed = RuneApplyService.PagesToPruneAfterBatch(
-            pages, [12], ["Pro Viktor (Mid)"]);
+            pages, [12], ["Pro build Viktor (Mid)"]);
 
         Assert.Equal([4], doomed);
     }
@@ -521,15 +534,15 @@ public sealed class ProBuildsTests
     {
         var pages = new[]
         {
-            Page(9, "Pro Viktor"),
+            Page(9, "Pro build Viktor"),
             Page(10, "u.gg Viktor (Mid)"),
             Page(11, "Coachless Viktor (Mid)"),
-            Page(12, "Pro Viktor (Mid)"),
+            Page(12, "Pro build Viktor (Mid)"),
         };
 
         var doomed = RuneApplyService.PagesToPruneAfterBatch(
             pages, [10, 11, 12],
-            ["u.gg Viktor (Mid)", "Coachless Viktor (Mid)", "Pro Viktor (Mid)"]);
+            ["u.gg Viktor (Mid)", "Coachless Viktor (Mid)", "Pro build Viktor (Mid)"]);
 
         Assert.Equal([9], doomed);
     }
@@ -551,7 +564,7 @@ public sealed class ProBuildsTests
         api.Enqueue("{\"id\":12}");
         api.Enqueue("[" + Wire(1, "My ranked page") + "," + Wire(4, "u.gg Jhin (ADC)") + "," +
             Wire(10, "u.gg Viktor (Mid)") + "," + Wire(11, "Coachless Viktor (Mid)") + "," +
-            Wire(12, "Pro Viktor (Mid)") + "]");
+            Wire(12, "Pro build Viktor (Mid)") + "]");
         api.Enqueue("{}");
 
         var result = await new RuneApplyService(api).ApplyOwnedPagesAsync(ThreeRequests());
@@ -563,7 +576,7 @@ public sealed class ProBuildsTests
         Assert.Equal(3, creates.Length);
         Assert.Contains(creates, call => Body(call).Contains("u.gg Viktor (Mid)", StringComparison.Ordinal));
         Assert.Contains(creates, call => Body(call).Contains("Coachless Viktor (Mid)", StringComparison.Ordinal));
-        Assert.Contains(creates, call => Body(call).Contains("Pro Viktor (Mid)", StringComparison.Ordinal));
+        Assert.Contains(creates, call => Body(call).Contains("Pro build Viktor (Mid)", StringComparison.Ordinal));
         var deletes = api.Calls
             .Where(call => call.Method == HttpMethod.Delete)
             .Select(call => call.Path)
@@ -589,7 +602,7 @@ public sealed class ProBuildsTests
         Assert.True(result.Pages[0].Result.Ok);
         Assert.True(result.Pages[1].Result.Ok);
         Assert.Equal("slots-full", Assert.IsType<ApplyRunesFailure>(result.Pages[2].Result).Reason);
-        Assert.Equal("Pro Viktor (Mid)", result.Pages[2].Name);
+        Assert.Equal("Pro build Viktor (Mid)", result.Pages[2].Name);
         var creates = api.Calls.Where(call => call.Method == HttpMethod.Post).ToArray();
         Assert.Equal(2, creates.Length);
         Assert.DoesNotContain(api.Calls, call => call.Method == HttpMethod.Delete);
@@ -601,7 +614,7 @@ public sealed class ProBuildsTests
             [8021, 8009, 9105, 8017, 8473, 8451, 5007, 5010, 5013], false, "auto"),
         new("Coachless Viktor (Mid)", 8000, 8400,
             [8021, 8009, 9105, 8017, 8473, 8451, 5007, 5010, 5013], false, "auto"),
-        new("Pro Viktor (Mid)", 8000, 8400,
+        new("Pro build Viktor (Mid)", 8000, 8400,
             [8021, 8009, 9105, 8017, 8473, 8451, 5007, 5010, 5013], false, "auto"),
     ];
 

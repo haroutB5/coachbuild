@@ -423,7 +423,7 @@ made them non-obvious. Do not re-derive them.
   `PerkTreeCatalog` validation, never mixing rows. Items come from the same
   row: early `itemPath` buys (timestamps are milliseconds) as Starting Items,
   `completedItems` as Core Items, filtered `finalBuild` as Final Build. Role 4
-  maps to `supp` on this builder only. Pages are `Pro {Champ}` (a third owned
+  maps to `supp` on this builder only. Pages are `Pro build {Champ}` (a third owned
   prefix, budget now three, priority u.gg then Coachless then Pro); the item
   set rides the same merged write as `(Pro)`. Role-less lobbies fetch with no
   role and re-pick from the fetched rows for the role u.gg discovers — no

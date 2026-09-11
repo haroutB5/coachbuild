@@ -4,7 +4,7 @@
 
 - Champ-select auto-import has a third source: Pro, from probuildstats.com
   (the pro-builds site run by the same company as u.gg). Each lock or settled
-  hover now also writes a "Pro {Champ}" rune page and its own item set next to
+  hover now also writes a "Pro build {Champ}" rune page and its own item set next to
   the u.gg and Coachless ones. The Pro fetch runs over plain HTTP in parallel
   with the other two, picks the most recent game with the usual rune set on
   the current patch, and never blocks them when it fails.

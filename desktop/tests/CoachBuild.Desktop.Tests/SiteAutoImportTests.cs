@@ -2527,9 +2527,9 @@ public sealed class SiteAutoImportTests
             call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages").ToArray();
         Assert.Equal(3, runeCreates.Length);
         Assert.Contains(runeCreates, call =>
-            JsonSerializer.Serialize(call.Body).Contains("Pro Ahri (Mid)", StringComparison.Ordinal));
+            JsonSerializer.Serialize(call.Body).Contains("Pro build Ahri (Mid)", StringComparison.Ordinal));
         Assert.Contains(sink.Logs, line =>
-            line.Contains("runes: wrote Pro Ahri (Mid)", StringComparison.Ordinal));
+            line.Contains("runes: wrote Pro build Ahri (Mid)", StringComparison.Ordinal));
         // All three item sets coexist in the last merged write.
         var sets = LastPutSets(api);
         Assert.Equal(3, sets.GetArrayLength());
@@ -2606,7 +2606,7 @@ public sealed class SiteAutoImportTests
         // The mid row won (u.gg discovered mid), under role-less titles for
         // the pages and the discovered role for the item set.
         Assert.Contains(sink.Logs, line =>
-            line.Contains("runes: wrote Pro Ahri", StringComparison.Ordinal) &&
+            line.Contains("runes: wrote Pro build Ahri", StringComparison.Ordinal) &&
             !line.Contains("(Mid)", StringComparison.Ordinal));
         var sets = LastPutSets(api);
         Assert.Contains(sets.EnumerateArray(), set =>
@@ -2686,7 +2686,7 @@ public sealed class SiteAutoImportTests
             call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages").ToArray();
         Assert.Equal(2, creates.Length);
         Assert.DoesNotContain(creates, call =>
-            JsonSerializer.Serialize(call.Body).Contains("Pro Ahri", StringComparison.Ordinal));
+            JsonSerializer.Serialize(call.Body).Contains("Pro build Ahri", StringComparison.Ordinal));
         Assert.DoesNotContain(api.Calls, call => call.Method == HttpMethod.Delete);
     }
 
