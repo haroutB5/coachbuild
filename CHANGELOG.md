@@ -1,5 +1,12 @@
 # Changelog
 
+## Desktop 2.3.8 (2026-09-11)
+
+- Automatic updates now restart the app. The updater was started inside the
+  app's own process group, which is set to close everything with the app, so
+  it was killed before it applied anything and CoachBuild stayed closed until
+  opened by hand. The app now releases that grouping just before handing off.
+
 ## Desktop 2.3.7 (2026-09-11)
 
 - A champ select that ends mid-import now waits for the Coachless runes page

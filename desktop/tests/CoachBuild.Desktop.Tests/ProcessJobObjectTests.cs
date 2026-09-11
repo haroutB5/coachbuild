@@ -25,6 +25,24 @@ public sealed class ProcessJobObjectTests
         Assert.True(ProcessJobObject.IsCurrentProcessKillOnClose());
     }
 
+    /// <summary>
+    /// The updater handoff (2.3.8): Update.exe inherits the job, so the flag
+    /// must be off before the app exits or the kernel kills the updater
+    /// mid-apply. Re-arming restores containment (and keeps this test from
+    /// leaving the process uncontained for the others).
+    /// </summary>
+    [Fact]
+    public void Releasing_kill_on_close_clears_the_flag_and_ensure_rearms_it()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        Assert.True(ProcessJobObject.EnsureKillOnClose());
+        Assert.True(ProcessJobObject.ReleaseKillOnClose());
+        Assert.False(ProcessJobObject.IsCurrentProcessKillOnClose());
+        Assert.True(ProcessJobObject.EnsureKillOnClose());
+        Assert.True(ProcessJobObject.IsCurrentProcessKillOnClose());
+    }
+
     [Fact]
     public void The_current_pid_is_in_the_app_job_and_garbage_is_not()
     {

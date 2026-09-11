@@ -130,11 +130,6 @@ public static class ProcessJobObject
             {
                 job = CreateJobObjectW(nint.Zero, null);
                 if (job == nint.Zero) return false;
-                var info = new ExtendedLimitInformation();
-                info.Basic.LimitFlags = KillOnJobCloseFlag;
-                if (!SetInformationJobObject(
-                        job, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf<ExtendedLimitInformation>()))
-                    return false;
                 var previous = Interlocked.CompareExchange(ref _job, job, nint.Zero);
                 if (previous != nint.Zero)
                 {
@@ -145,8 +140,41 @@ public static class ProcessJobObject
                     job = previous;
                 }
             }
-            if (!AssignProcessToJobObject(job, GetCurrentProcess())) return false;
+            // Set (or re-arm after ReleaseKillOnClose) on every call.
+            var info = new ExtendedLimitInformation();
+            info.Basic.LimitFlags = KillOnJobCloseFlag;
+            if (!SetInformationJobObject(
+                    job, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf<ExtendedLimitInformation>()))
+                return false;
+            if (!AssignProcessToJobObject(job, GetCurrentProcess()) && !IsCurrentProcessKillOnClose()) return false;
             return IsCurrentProcessKillOnClose();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Clears KILL_ON_JOB_CLOSE just before the app hands off to Velopack's
+    /// Update.exe. Update.exe is spawned as a child, so it inherits the job;
+    /// with the flag set the kernel kills it the moment this process exits,
+    /// while it is still waiting to apply. Field log 2026-09-11: every in-app
+    /// apply ended at "Waiting 60000ms for process handle to exit" and the app
+    /// stayed closed until relaunched by hand (Program.Main's ordering only
+    /// covers the startup-apply path). True when the flag is now clear.
+    /// Never throws.
+    /// </summary>
+    public static bool ReleaseKillOnClose()
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        try
+        {
+            var job = Volatile.Read(ref _job);
+            if (job == nint.Zero) return true;
+            var info = new ExtendedLimitInformation();
+            return SetInformationJobObject(
+                job, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf<ExtendedLimitInformation>());
         }
         catch
         {

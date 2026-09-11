@@ -598,6 +598,10 @@ public sealed class ReflectionVelopackUpdateClient : IUpdateClient
 
     public Task ApplyUpdatesAndRestartAsync(AvailableUpdate update, CancellationToken cancellationToken)
     {
+        // Update.exe inherits the app's kill-on-close job; without this it
+        // dies with the app before applying anything (see ProcessJobObject).
+        if (!ProcessJobObject.ReleaseKillOnClose())
+            Log("update: could not release the kill-on-close job before the updater handoff");
         return InvokeAsync("ApplyUpdatesAndRestart", update.NativeUpdate, cancellationToken);
     }
 
