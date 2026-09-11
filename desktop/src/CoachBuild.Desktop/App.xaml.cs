@@ -1664,6 +1664,11 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
         }
 
         await _bridge.StartAsync(cancellationToken).ConfigureAwait(false);
+        // Warm the champion roster at startup (2.3.5): the first champ
+        // select after launch used to wait out the first lazy kick before a
+        // hover could even be recognised. Retries itself; the lazy kick in
+        // the champ-select path stays as the fallback.
+        KickChampionDirectory();
         // Spec §5's first moment. Raised here rather than in the gameflow loop
         // because "the app just started" is the one transition the phase poller
         // cannot see: it observes None -> None and has nothing to compare.

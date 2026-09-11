@@ -1,5 +1,15 @@
 # Changelog
 
+## Desktop 2.3.5 (2026-09-11)
+
+- Champ-select rune import is much faster. The Coachless runes fetch now starts
+  with the run instead of waiting for the u.gg fetch, the u.gg rune page is
+  written as soon as it validates, and the champion roster warms at startup so
+  the first hover after launch is recognised without delay. Each run logs one
+  timing line for the next field check.
+- Role-less lobbies reuse the speculative Coachless runes fetch when its role
+  matches the one u.gg discovers, and refetch with the aligned role otherwise.
+
 ## Desktop 2.3.4 (2026-09-10)
 
 - Downloaded updates survive empty feed responses and failed replacement

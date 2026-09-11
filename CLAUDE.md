@@ -1,6 +1,6 @@
 # CoachBuild — technical reference
 
-**Describes desktop 2.3.4, 2026-09-10.** `desktop/src/Directory.Build.props`'s
+**Describes desktop 2.3.5, 2026-09-11.** `desktop/src/Directory.Build.props`'s
 `<Version>` is the single source of truth for the app version (it moved there in
 2.1.0; it is no longer in the csproj). If it has moved on since this date, treat
 everything below with more skepticism the further it has fallen behind, and check

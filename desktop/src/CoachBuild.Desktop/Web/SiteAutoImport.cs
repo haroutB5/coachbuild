@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CoachBuild.Core;
 
 namespace CoachBuild.Desktop.Web;
@@ -793,16 +794,44 @@ public sealed class SiteAutoImportService
     /// ready — the fresh payload plus the other site's cached set — so the
     /// second write carries the first, and the two per-site titles still
     /// coexist in the client exactly as the old single write arranged.
+    ///
+    /// <para>2.3.5: the Coachless runes fetch starts at the top of the run,
+    /// concurrently with the u.gg fetch (different cores), and the u.gg rune
+    /// page is written as soon as it validates — before the u.gg item flush,
+    /// long before Coachless items. The Coachless ITEMS fetch still awaits
+    /// the in-flight runes fetch first: both touch the same Coachless core
+    /// and must never navigate it concurrently.</para>
     /// </summary>
     private async Task RunFetchesAsync(
         List<AutoImportSiteTarget> fetch,
         AutoImportInput input,
         CancellationToken cancellationToken)
     {
+        var runClock = Stopwatch.StartNew();
+        // The speculative Coachless runes flight (2.3.5). Started BEFORE the
+        // first item fetch so it overlaps the u.gg fetch on its own core.
+        // Role known: the URL already carries it. Role-less: the role-less
+        // URL; the resolved payload is accepted only when its role matches
+        // the role u.gg discovers, else refetched aligned (see
+        // ResolveCoachlessRunesAsync). Null when there is no rune service —
+        // the items-only behaviour is then exactly what it was.
+        CoachlessRunesFlight? runesFlight = null;
+        if (_runes is not null &&
+            SiteDeepLink.CoachlessRunesUrl(input.ChampionKey, input.RoleId) is { } speculativeUrl)
+            runesFlight = StartCoachlessRunesFlight(speculativeUrl, input, input.RoleId, cancellationToken);
         var hadWritable = false;
         SiteImportPayload? uggRunesPayload = null;
-        var runesImported = false;
+        ApplyRunesRequest? uggRuneRequest = null;
+        var uggStaged = false;
+        var bothStaged = false;
+        // Names already reported this run, so the second rune batch never
+        // logs a duplicate "u.gg X already matches" for the same page.
+        var runeReported = new HashSet<string>(StringComparer.Ordinal);
+        var runeCapacityLogged = false;
+        long uggMs = -1, coachlessMs = -1, firstRuneMs = -1, bothRuneMs = -1;
+        var runesRefetched = false;
         var effectiveRoleId = input.RoleId;
+        var assignedRole = SiteDeepLink.RoleToken(input.RoleId);
         foreach (var planned in fetch)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -822,7 +851,15 @@ public sealed class SiteAutoImportService
                         SiteNavigationPolicy.IsAlreadyThere(target.Url.ToString(), aligned),
                 };
             }
+            // Same-core serialization (2.3.5): the Coachless ITEMS fetch must
+            // not touch the Coachless core while the runes flight is still
+            // navigating it. The flight captures its own errors, so this
+            // await throws only on cancellation — which propagates.
+            if (target.Site == CompanionTab.Coachless && runesFlight is not null)
+                await runesFlight.Fetch.ConfigureAwait(false);
             var raw = await FetchTargetAsync(target, cancellationToken).ConfigureAwait(false);
+            if (target.Site == CompanionTab.UGg && uggMs < 0)
+                uggMs = runClock.ElapsedMilliseconds;
             // SPA FALLBACK (2.1.1). An in-place read of the user's own visible
             // tab can be correct about the DOM and still see no build, because
             // u.gg embeds its build blob only in a directly-served document.
@@ -869,30 +906,78 @@ public sealed class SiteAutoImportService
                 uggRunesPayload = payload;
             if (effectiveRoleId is null)
                 effectiveRoleId = SiteDeepLink.RoleIdFromToken(payload.Role);
-            // Rune pages are needed during champion select. Once u.gg has
-            // resolved the role, write the validated pair before waiting on
-            // Coachless's item page. Keep the capacity-aware paired write.
-            if (!runesImported && uggRunesPayload?.Runes is not null)
+            // STAGE 1 (2.3.5): the u.gg rune page is written as soon as it
+            // validates, before its own item flush — the old code waited out
+            // the whole Coachless runes fetch first. The Coachless half
+            // follows in stage 2 once the flight resolves.
+            if (!uggStaged && _runes is not null &&
+                target.Site == CompanionTab.UGg && uggRunesPayload?.Runes is not null)
             {
-                await ImportBothRunesAsync(input, uggRunesPayload, effectiveRoleId, cancellationToken)
-                    .ConfigureAwait(false);
-                runesImported = true;
+                uggStaged = true;
+                if (TryBuildRuneRequest(uggRunesPayload, input.ChampionName!, assignedRole, out var uggRequest))
+                {
+                    uggRuneRequest = uggRequest;
+                    runeCapacityLogged = await ApplyRuneBatchAsync(
+                        [uggRequest], runeReported, runeCapacityLogged, cancellationToken)
+                        .ConfigureAwait(false);
+                    firstRuneMs = runClock.ElapsedMilliseconds;
+                }
+                else
+                {
+                    LogDroppedRuneHalf(CompanionTab.UGg, uggRunesPayload);
+                }
             }
             if (payload.ItemBlocks.Count == 0)
             {
                 _sink.LogInfo(
                     $"auto-import: {CompanionTabs.LabelFor(target.Site)} yielded no item build -- ignored");
                 CommitOutcome(input, new AutoImportOutcome(target.Site, target.Url.ToString(), null));
-                continue;
             }
-            // FLUSH NOW (2.1.2): this site's set lands before the next site
-            // even starts, so a teardown that aborts the rest of the run
-            // cannot take an already-extracted set with it. The batch still
-            // carries the cached other site, so contiguity is preserved.
-            cancellationToken.ThrowIfCancellationRequested();
-            hadWritable = true;
-            await FlushSiteAsync(payload, input, cancellationToken).ConfigureAwait(false);
-            CommitOutcome(input, new AutoImportOutcome(target.Site, target.Url.ToString(), payload));
+            else
+            {
+                // FLUSH NOW (2.1.2): this site's set lands before the next site
+                // even starts, so a teardown that aborts the rest of the run
+                // cannot take an already-extracted set with it. The batch still
+                // carries the cached other site, so contiguity is preserved.
+                cancellationToken.ThrowIfCancellationRequested();
+                hadWritable = true;
+                await FlushSiteAsync(payload, input, cancellationToken).ConfigureAwait(false);
+                CommitOutcome(input, new AutoImportOutcome(target.Site, target.Url.ToString(), payload));
+            }
+            // STAGE 2 (2.3.5): once u.gg's page (stage 1) and its items are
+            // flushed, resolve the flight and write the pair. The u.gg half
+            // is Unchanged here — no PUT — and its already-reported line is
+            // suppressed, so the run says it once.
+            if (uggStaged && !bothStaged && _runes is not null &&
+                target.Site == CompanionTab.UGg && runesFlight is not null)
+            {
+                bothStaged = true;
+                var resolved = await ResolveCoachlessRunesAsync(
+                    input, effectiveRoleId, runesFlight, cancellationToken).ConfigureAwait(false);
+                coachlessMs = resolved.ElapsedMs;
+                runesRefetched |= resolved.Refetched;
+                ApplyRunesRequest? coachlessRequest = null;
+                if (resolved.Payload is not null)
+                {
+                    if (TryBuildRuneRequest(
+                        resolved.Payload, input.ChampionName!, assignedRole, out var built))
+                        coachlessRequest = built;
+                    else
+                        LogDroppedRuneHalf(CompanionTab.Coachless, resolved.Payload);
+                }
+                // A Coachless half that yielded nothing leaves the staged
+                // u.gg page standing: no second batch at all.
+                if (coachlessRequest is not null)
+                {
+                    var second = new List<ApplyRunesRequest>(2);
+                    if (uggRuneRequest is not null) second.Add(uggRuneRequest);
+                    second.Add(coachlessRequest);
+                    runeCapacityLogged = await ApplyRuneBatchAsync(
+                        second, runeReported, runeCapacityLogged, cancellationToken)
+                        .ConfigureAwait(false);
+                    bothRuneMs = runClock.ElapsedMilliseconds;
+                }
+            }
         }
 
         if (!hadWritable)
@@ -901,10 +986,58 @@ public sealed class SiteAutoImportService
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        if (!runesImported)
-            await ImportBothRunesAsync(
-                input, uggRunesPayload, effectiveRoleId, cancellationToken).ConfigureAwait(false);
+        if (_runes is not null && !bothStaged)
+        {
+            // The combined path: no u.gg runes were staged in the loop (a
+            // Coachless-only refresh, a failed u.gg extraction, ...). Fetch
+            // the u.gg half for the pair exactly as before, then resolve the
+            // flight and write whatever validated as one batch.
+            bothStaged = true;
+            if (runesFlight is null &&
+                SiteDeepLink.CoachlessRunesUrl(input.ChampionKey, effectiveRoleId) is { } lateUrl)
+                runesFlight = StartCoachlessRunesFlight(lateUrl, input, effectiveRoleId, cancellationToken);
+            if (runesFlight is not null)
+            {
+                var leg = await FetchUggRunesLegAsync(
+                    input, uggRunesPayload, effectiveRoleId, cancellationToken).ConfigureAwait(false);
+                uggRunesPayload = leg.Payload;
+                effectiveRoleId = leg.EffectiveRoleId;
+                if (uggMs < 0) uggMs = leg.ElapsedMs;
+                var resolved = await ResolveCoachlessRunesAsync(
+                    input, effectiveRoleId, runesFlight, cancellationToken).ConfigureAwait(false);
+                coachlessMs = resolved.ElapsedMs;
+                runesRefetched |= resolved.Refetched;
+                var requests = new List<ApplyRunesRequest>(2);
+                AddRuneRequest(CompanionTab.UGg, uggRunesPayload, input, assignedRole, requests);
+                if (resolved.Payload is not null)
+                    AddRuneRequest(CompanionTab.Coachless, resolved.Payload, input, assignedRole, requests);
+                if (requests.Count > 0)
+                {
+                    runeCapacityLogged = await ApplyRuneBatchAsync(
+                        requests, runeReported, runeCapacityLogged, cancellationToken)
+                        .ConfigureAwait(false);
+                    bothRuneMs = runClock.ElapsedMilliseconds;
+                }
+            }
+        }
+
+        // One stage-timing line per rune run (2.3.5): names only, no values
+        // of user data. The next field pass reads the critical path off it.
+        if (runesFlight is not null)
+        {
+            var marker = runesRefetched ? "(parallel+refetch)" : "(parallel)";
+            _sink.LogInfo(
+                $"auto-import: timing ugg={FormatMs(uggMs)} " +
+                $"coachless-runes={FormatMs(coachlessMs)} {marker} " +
+                $"first-rune-page={FormatSec(firstRuneMs)} both-rune-pages={FormatSec(bothRuneMs)}");
+        }
     }
+
+    private static string FormatMs(long milliseconds) =>
+        milliseconds >= 0 ? $"{milliseconds}ms" : "none";
+
+    private static string FormatSec(long milliseconds) =>
+        milliseconds >= 0 ? $"{milliseconds / 1000.0:F1}s" : "none";
 
     /// <summary>
     /// Commits one site's outcome to the debounce state: records the
@@ -959,22 +1092,217 @@ public sealed class SiteAutoImportService
     }
 
     /// <summary>
-    /// Fetches both rune sources on every automatic-import trigger, validates
-    /// both before writing, then hands them to the capacity-aware two-page
-    /// writer in u.gg-first priority order. Runs as soon as u.gg is ready,
-    /// ahead of Coachless items; rune failures remain independent and fail-soft.
+    /// What a speculative Coachless runes answer classified as: usable, the
+    /// wrong champion, or failed outright. Only <see cref="Failed"/> (and a
+    /// role mismatch on <see cref="Ok"/>) may fall through to the aligned
+    /// refetch — a wrong champion would only mismatch again.
     /// </summary>
-    private async Task ImportBothRunesAsync(
+    private enum CoachlessRunesVerdict
+    {
+        Ok,
+        WrongChampion,
+        Failed,
+    }
+
+    /// <summary>
+    /// The in-flight speculative Coachless runes fetch (2.3.5): the URL it
+    /// was started with and its raw answer. Started at the top of the run so
+    /// it overlaps the u.gg fetch on its own core.
+    /// </summary>
+    private sealed record CoachlessRunesFlight(Uri Url, Task<CoachlessRunesRaw> Fetch);
+
+    /// <summary>
+    /// The flight's raw answer: the extractor JSON, or the fetch error when
+    /// the fetch itself threw (fail-soft, logged by the resolver with the
+    /// same wording as a direct fetch), plus how long the fetch took.
+    /// Cancellation is never captured here — it propagates.
+    /// </summary>
+    private sealed record CoachlessRunesRaw(string? Response, string? Error, long ElapsedMs);
+
+    /// <summary>
+    /// Starts the speculative Coachless runes flight. Marks the run as having
+    /// driven a webview (so the worker teardown runs) and observes the fault
+    /// even on paths that never await, so a background failure on a
+    /// cancelled run stays observed.
+    /// </summary>
+    private CoachlessRunesFlight StartCoachlessRunesFlight(
+        Uri url,
+        AutoImportInput input,
+        int? roleId,
+        CancellationToken cancellationToken)
+    {
+        _fetchedThisRun = true;
+        var flight = new CoachlessRunesFlight(
+            url, FetchCoachlessRunesRawAsync(url, input, roleId, cancellationToken));
+        _ = flight.Fetch.ContinueWith(
+            task => _ = task.Exception,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+        return flight;
+    }
+
+    private async Task<CoachlessRunesRaw> FetchCoachlessRunesRawAsync(
+        Uri url,
+        AutoImportInput input,
+        int? roleId,
+        CancellationToken cancellationToken)
+    {
+        var clock = Stopwatch.StartNew();
+        try
+        {
+            var raw = await _executor.FetchCoachlessRunesAsync(
+                url, input.ChampionKey, roleId, cancellationToken).ConfigureAwait(false);
+            return new CoachlessRunesRaw(raw, null, clock.ElapsedMilliseconds);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            return new CoachlessRunesRaw(null, error.Message, clock.ElapsedMilliseconds);
+        }
+    }
+
+    /// <summary>
+    /// Resolves the flight to a usable Coachless runes payload (2.3.5).
+    /// Accepts the speculative answer only when its role IS the resolved
+    /// role (both null in a role-less run accepts); otherwise loads the
+    /// aligned role exactly as the old serial code did. Every failure logs
+    /// with the same wording as a direct fetch.
+    /// </summary>
+    private async Task<(SiteImportPayload? Payload, long ElapsedMs, bool Refetched)> ResolveCoachlessRunesAsync(
+        AutoImportInput input,
+        int? effectiveRoleId,
+        CoachlessRunesFlight flight,
+        CancellationToken cancellationToken)
+    {
+        CoachlessRunesRaw raw;
+        try
+        {
+            raw = await flight.Fetch.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        var elapsed = raw.ElapsedMs;
+        var speculativeOk = ClassifyCoachlessRaw(raw.Response, raw.Error, input, out var speculative);
+        if (speculativeOk == CoachlessRunesVerdict.Ok &&
+            SiteDeepLink.RoleIdFromToken(speculative!.Role) == effectiveRoleId)
+        {
+            LogPayloadNotes(CompanionTab.Coachless, speculative);
+            return (speculative, elapsed, false);
+        }
+        var aligned = SiteDeepLink.CoachlessRunesUrl(input.ChampionKey, effectiveRoleId);
+        if (speculativeOk == CoachlessRunesVerdict.WrongChampion ||
+            aligned is null ||
+            string.Equals(aligned.AbsoluteUri, flight.Url.AbsoluteUri, StringComparison.OrdinalIgnoreCase))
+        {
+            // Wrong champion: another role would not change the champion.
+            // Same URL: the speculative fetch already IS this URL's answer —
+            // retrying it would double every failure, and a role the site
+            // rendered differently than asked is still the best answer there
+            // is. Both already logged their line.
+            if (speculative is not null)
+                LogPayloadNotes(CompanionTab.Coachless, speculative);
+            return (speculative, elapsed, false);
+        }
+        var (payload, alignedMs) = await FetchAlignedCoachlessRunesAsync(
+            aligned, input, effectiveRoleId, cancellationToken).ConfigureAwait(false);
+        return (payload, elapsed + alignedMs, true);
+    }
+
+    /// <summary>
+    /// Classifies the flight's raw answer with the SAME lines a direct fetch
+    /// logs. Notes are NOT logged here — only the accepted (or kept)
+    /// payload's notes reach the log, at the accept site.
+    /// </summary>
+    private CoachlessRunesVerdict ClassifyCoachlessRaw(
+        string? response,
+        string? error,
+        AutoImportInput input,
+        out SiteImportPayload? payload)
+    {
+        payload = null;
+        if (error is not null)
+        {
+            _sink.LogInfo($"runes: Coachless fetch failed ({error})");
+            return CoachlessRunesVerdict.Failed;
+        }
+        if (!SiteImportPayload.TryParse(response, out var fetched, out var failure) || fetched is null)
+        {
+            _sink.LogInfo($"runes: Coachless yielded no rune build ({failure})");
+            return CoachlessRunesVerdict.Failed;
+        }
+        if (!PayloadMatchesContext(fetched, input))
+        {
+            _sink.LogInfo(
+                $"runes: Coachless yielded \"{fetched.ChampionSlug}\", not the selected champion -- ignored");
+            return CoachlessRunesVerdict.WrongChampion;
+        }
+        payload = fetched;
+        return CoachlessRunesVerdict.Ok;
+    }
+
+    /// <summary>
+    /// The aligned-role Coachless runes fetch: the old serial fetch, kept
+    /// verbatim for the role-less mismatch (and late-start) path.
+    /// </summary>
+    private async Task<(SiteImportPayload? Payload, long ElapsedMs)> FetchAlignedCoachlessRunesAsync(
+        Uri url,
+        AutoImportInput input,
+        int? roleId,
+        CancellationToken cancellationToken)
+    {
+        var clock = Stopwatch.StartNew();
+        _fetchedThisRun = true;
+        try
+        {
+            var raw = await _executor.FetchCoachlessRunesAsync(
+                url,
+                input.ChampionKey,
+                roleId,
+                cancellationToken).ConfigureAwait(false);
+            if (SiteImportPayload.TryParse(raw, out var fetched, out var failure) &&
+                fetched is not null && PayloadMatchesContext(fetched, input))
+            {
+                LogPayloadNotes(CompanionTab.Coachless, fetched);
+                return (fetched, clock.ElapsedMilliseconds);
+            }
+            else if (fetched is not null)
+            {
+                _sink.LogInfo(
+                    $"runes: Coachless yielded \"{fetched.ChampionSlug}\", not the selected champion -- ignored");
+            }
+            else
+            {
+                _sink.LogInfo($"runes: Coachless yielded no rune build ({failure})");
+            }
+            return (null, clock.ElapsedMilliseconds);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            _sink.LogInfo($"runes: Coachless fetch failed ({error.Message})");
+            return (null, clock.ElapsedMilliseconds);
+        }
+    }
+
+    /// <summary>
+    /// A Coachless-only run still imports BOTH rune pages. Fetches the u.gg
+    /// build in a worker when the loop did not already read it — the old
+    /// leg, unchanged.
+    /// </summary>
+    private async Task<(SiteImportPayload? Payload, int? EffectiveRoleId, long ElapsedMs)> FetchUggRunesLegAsync(
         AutoImportInput input,
         SiteImportPayload? uggPayload,
         int? effectiveRoleId,
         CancellationToken cancellationToken)
     {
-        if (_runes is null) return;
-        if (input.ChampionId is not > 0 || string.IsNullOrWhiteSpace(input.ChampionName)) return;
-
-        // A visible Coachless-only refresh still imports BOTH pages. Fetch the
-        // u.gg build in a worker when this run did not already read it.
+        var clock = Stopwatch.StartNew();
         if (uggPayload?.Runes is null &&
             SiteDeepLink.Build(CompanionTab.UGg, input.ChampionKey, effectiveRoleId) is { } uggUrl)
         {
@@ -1014,101 +1342,57 @@ public sealed class SiteAutoImportService
                 _sink.LogInfo($"runes: u.gg fetch failed ({error.Message})");
             }
         }
+        return (uggPayload, effectiveRoleId, clock.ElapsedMilliseconds);
+    }
 
-        SiteImportPayload? coachlessPayload = null;
-        if (SiteDeepLink.CoachlessRunesUrl(input.ChampionKey, effectiveRoleId) is { } runesUrl)
+    /// <summary>
+    /// Builds one half's rune request, or logs the dropped half. A DROPPED
+    /// HALF IS A LOG LINE, NOT A SILENCE (2.2.2). Field log 2026-09-09
+    /// 13:11, Viktor: the u.gg fetch succeeded and was never mentioned
+    /// again — no "wrote u.gg Viktor", no "yielded no rune build", nothing.
+    /// A payload that arrives and then fails to become a request left no
+    /// trace at all, so a one-page champ select was indistinguishable from a
+    /// two-page one that got pruned.
+    /// </summary>
+    private void AddRuneRequest(
+        CompanionTab site,
+        SiteImportPayload? payload,
+        AutoImportInput input,
+        string? assignedRole,
+        List<ApplyRunesRequest> requests)
+    {
+        if (payload is null) return;
+        if (TryBuildRuneRequest(payload, input.ChampionName!, assignedRole, out var request))
         {
-            _fetchedThisRun = true;
-            try
-            {
-                var raw = await _executor.FetchCoachlessRunesAsync(
-                    runesUrl,
-                    input.ChampionKey,
-                    effectiveRoleId,
-                    cancellationToken).ConfigureAwait(false);
-                if (SiteImportPayload.TryParse(raw, out var fetched, out var failure) &&
-                    fetched is not null && PayloadMatchesContext(fetched, input))
-                {
-                    coachlessPayload = fetched;
-                    LogPayloadNotes(CompanionTab.Coachless, fetched);
-                }
-                else if (fetched is not null)
-                {
-                    _sink.LogInfo(
-                        $"runes: Coachless yielded \"{fetched.ChampionSlug}\", not the selected champion -- ignored");
-                }
-                else
-                {
-                    _sink.LogInfo($"runes: Coachless yielded no rune build ({failure})");
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception error)
-            {
-                _sink.LogInfo($"runes: Coachless fetch failed ({error.Message})");
-            }
+            requests.Add(request);
+            return;
         }
+        LogDroppedRuneHalf(site, payload);
+    }
 
-        var assignedRole = SiteDeepLink.RoleToken(input.RoleId);
-        var requests = new List<ApplyRunesRequest>(2);
-        // A DROPPED HALF IS A LOG LINE, NOT A SILENCE (2.2.2). Field log
-        // 2026-09-09 13:11, Viktor: the u.gg fetch succeeded and was never
-        // mentioned again -- no "wrote u.gg Viktor", no "yielded no rune
-        // build", nothing. A payload that arrives and then fails to become a
-        // request left no trace at all, so a one-page champ select was
-        // indistinguishable from a two-page one that got pruned.
-        AddRuneRequest(CompanionTab.UGg, uggPayload);
-        AddRuneRequest(CompanionTab.Coachless, coachlessPayload);
-        if (requests.Count == 0) return;
+    private void LogDroppedRuneHalf(CompanionTab site, SiteImportPayload payload) =>
+        _sink.LogInfo(
+            $"runes: {CompanionTabs.LabelFor(site)} yielded a page but no rune build to write " +
+            $"({SiteImportValidator.ValidateRunes(payload.Runes) ?? "the request failed payload validation"})");
 
-        void AddRuneRequest(CompanionTab site, SiteImportPayload? payload)
-        {
-            if (payload is null) return;
-            if (TryBuildRuneRequest(payload, input.ChampionName, assignedRole, out var request))
-            {
-                requests.Add(request);
-                return;
-            }
-            _sink.LogInfo(
-                $"runes: {CompanionTabs.LabelFor(site)} yielded a page but no rune build to write " +
-                $"({SiteImportValidator.ValidateRunes(payload.Runes) ?? "the request failed payload validation"})");
-        }
-
+    /// <summary>
+    /// Applies one rune batch and logs it. Returns whether the capacity line
+    /// has now been logged for this run, so the staged second batch never
+    /// repeats it. Every guarantee of the old paired write holds per batch:
+    /// foreign pages untouched, the sibling pair never pruned, unchanged
+    /// pages cost no PUT.
+    /// </summary>
+    private async Task<bool> ApplyRuneBatchAsync(
+        IReadOnlyList<ApplyRunesRequest> requests,
+        HashSet<string> reported,
+        bool capacityLogged,
+        CancellationToken cancellationToken)
+    {
+        if (_runes is null) return capacityLogged;
         try
         {
             var result = await _runes.ApplyOwnedPagesAsync(requests, cancellationToken).ConfigureAwait(false);
-            foreach (var page in result.Pages)
-            {
-                if (page.Result is ApplyRunesSuccess success)
-                {
-                    var line = success.Unchanged == true
-                        ? $"runes: {page.Name} already matches"
-                        : $"runes: wrote {page.Name}";
-                    _sink.LogInfo(line);
-                    _sink.StatusNote(line);
-                }
-                else if (page.Result is ApplyRunesFailure failure && failure.Reason != "slots-full")
-                {
-                    _sink.LogInfo($"runes: {page.Name} was not written ({failure.Hint ?? failure.Reason})");
-                }
-            }
-            if (result.OnlyOneEditableSlot &&
-                result.Pages.FirstOrDefault()?.Result.Ok == true)
-            {
-                const string limited = "runes: only one editable page slot -- wrote u.gg only";
-                _sink.LogInfo(limited);
-                _sink.StatusNote(limited);
-            }
-            else if (result.Pages.Count > 0 && result.Pages.All(page =>
-                         page.Result is ApplyRunesFailure { Reason: "slots-full" }))
-            {
-                const string full = "runes: no editable page slots -- wrote no rune pages";
-                _sink.LogInfo(full);
-                _sink.StatusNote(full);
-            }
+            LogRuneBatch(result, reported, ref capacityLogged);
         }
         catch (OperationCanceledException)
         {
@@ -1117,6 +1401,52 @@ public sealed class SiteAutoImportService
         catch (Exception error)
         {
             _sink.LogInfo($"runes: automatic page write failed ({error.Message})");
+        }
+        return capacityLogged;
+    }
+
+    private void LogRuneBatch(
+        AutoRunePagesResult result,
+        HashSet<string> reported,
+        ref bool capacityLogged)
+    {
+        foreach (var page in result.Pages)
+        {
+            if (page.Result is ApplyRunesSuccess success)
+            {
+                // Each page is said once per run: the staged second batch
+                // re-reports the u.gg half (Unchanged, no PUT) and stays
+                // silent about it — no second "u.gg X already matches"
+                // after stage 1 already said "wrote u.gg X".
+                if (!reported.Add(page.Name))
+                    continue;
+                var line = success.Unchanged == true
+                    ? $"runes: {page.Name} already matches"
+                    : $"runes: wrote {page.Name}";
+                _sink.LogInfo(line);
+                _sink.StatusNote(line);
+            }
+            else if (page.Result is ApplyRunesFailure failure && failure.Reason != "slots-full")
+            {
+                _sink.LogInfo($"runes: {page.Name} was not written ({failure.Hint ?? failure.Reason})");
+            }
+        }
+        if (capacityLogged) return;
+        if (result.OnlyOneEditableSlot &&
+            result.Pages.FirstOrDefault()?.Result.Ok == true)
+        {
+            const string limited = "runes: only one editable page slot -- wrote u.gg only";
+            _sink.LogInfo(limited);
+            _sink.StatusNote(limited);
+            capacityLogged = true;
+        }
+        else if (result.Pages.Count > 0 && result.Pages.All(page =>
+                     page.Result is ApplyRunesFailure { Reason: "slots-full" }))
+        {
+            const string full = "runes: no editable page slots -- wrote no rune pages";
+            _sink.LogInfo(full);
+            _sink.StatusNote(full);
+            capacityLogged = true;
         }
     }
 

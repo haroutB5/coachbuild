@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http;
 using System.Text.Json;
 using CoachBuild.Core;
@@ -23,6 +24,19 @@ public sealed class SiteAutoImportTests
 
         public Func<CompanionTab, Uri, string?>? Worker { get; set; }
 
+        /// <summary>
+        /// Async overrides for the 2.3.5 overlap tests: when set, the fetch
+        /// awaits real async delays (Task.Delay) instead of answering
+        /// synchronously, so two fetches can provably be in flight at once.
+        /// Recorded in <see cref="Calls"/> at START, like the sync path, so
+        /// "fetch started" is observable while the other fetch is parked.
+        /// </summary>
+        public Func<CompanionTab, Task<string?>>? AsyncVisible { get; set; }
+
+        public Func<CompanionTab, Uri, Task<string?>>? AsyncWorker { get; set; }
+
+        public Func<Uri, Task<string?>>? AsyncRunes { get; set; }
+
         // The service records these from a background run while the test
         // thread enumerates them (the cancellation tests poll for a call to
         // appear). A bare List throws "Collection was modified" on that race
@@ -44,7 +58,9 @@ public sealed class SiteAutoImportTests
         public Task<string?> ExtractVisibleAsync(CompanionTab site, CancellationToken cancellationToken = default)
         {
             Record($"visible:{site}");
-            return Task.FromResult(Visible?.Invoke(site));
+            return AsyncVisible is not null
+                ? AsyncVisible(site)
+                : Task.FromResult(Visible?.Invoke(site));
         }
 
         public Func<Uri, string?>? Runes { get; set; }
@@ -56,7 +72,9 @@ public sealed class SiteAutoImportTests
             CancellationToken cancellationToken = default)
         {
             Record($"worker:{site}:{url}");
-            return Task.FromResult(Worker?.Invoke(site, url));
+            return AsyncWorker is not null
+                ? AsyncWorker(site, url)
+                : Task.FromResult(Worker?.Invoke(site, url));
         }
 
         public Task<string?> FetchCoachlessRunesAsync(
@@ -64,7 +82,9 @@ public sealed class SiteAutoImportTests
             CancellationToken cancellationToken = default)
         {
             Record($"runes:{url}");
-            return Task.FromResult(Runes?.Invoke(url));
+            return AsyncRunes is not null
+                ? AsyncRunes(url)
+                : Task.FromResult(Runes?.Invoke(url));
         }
 
         // Counted, NOT appended to Calls: Calls is the fetch sequence every
@@ -121,6 +141,17 @@ public sealed class SiteAutoImportTests
         /// </summary>
         public string PagesJson { get; set; } = "[]";
 
+        /// <summary>
+        /// Pages created by POSTs this run (2.3.5): the staged rune writes
+        /// re-read the page list between batches, and the real client returns
+        /// the just-written page — so the stub must too, or the second batch
+        /// would recreate the first batch's page. Ids start at 9001, the
+        /// pre-2.3.5 constant.
+        /// </summary>
+        private readonly List<string> _createdRunePages = [];
+
+        private int _nextRuneId = 9001;
+
         public Task<LcuResponse> SendAsync(
             HttpMethod method, string path, object? body = null,
             CancellationToken cancellationToken = default)
@@ -136,15 +167,164 @@ public sealed class SiteAutoImportTests
                 return Task.FromResult(Ok("{}"));
             // Rune endpoints, for the 2.1.0 Coachless runes leg. An empty
             // page list plus room in the inventory is the create path.
+            // 2.3.5: created pages persist for later reads in the same run.
             if (method == HttpMethod.Get && path == "/lol-perks/v1/pages")
-                return Task.FromResult(Ok(PagesJson));
+                return Task.FromResult(Ok(CombinedPagesJson()));
             if (method == HttpMethod.Get && path == "/lol-perks/v1/inventory")
                 return Task.FromResult(Ok("{\"ownedPageCount\":5,\"canAddCustomPage\":true}"));
             if (method == HttpMethod.Post && path == "/lol-perks/v1/pages")
-                return Task.FromResult(Ok("{\"id\":9001,\"isDeletable\":true}"));
+                return Task.FromResult(Ok(CreateRunePage(body)));
+            if (method == HttpMethod.Put && path.StartsWith("/lol-perks/v1/pages/", StringComparison.Ordinal))
+            {
+                UpdateRunePage(path, body);
+                return Task.FromResult(Ok("{}"));
+            }
+            if (method == HttpMethod.Delete && path.StartsWith("/lol-perks/v1/pages/", StringComparison.Ordinal))
+            {
+                DeleteRunePage(path);
+                return Task.FromResult(Ok("{}"));
+            }
             if (path.StartsWith("/lol-perks/v1/currentpage", StringComparison.Ordinal))
                 return Task.FromResult(Ok("{\"id\":9001}"));
             return Task.FromResult(new LcuResponse(false, 404));
+        }
+
+        private string CombinedPagesJson()
+        {
+            lock (_calls)
+            {
+                using var document = JsonDocument.Parse(PagesJson);
+                var parts = document.RootElement.EnumerateArray()
+                    .Select(element => element.GetRawText())
+                    .Concat(_createdRunePages)
+                    .ToArray();
+                return "[" + string.Join(",", parts) + "]";
+            }
+        }
+
+        private string CreateRunePage(object? body)
+        {
+            var name = string.Empty;
+            var primary = 0;
+            var sub = 0;
+            var perks = "[]";
+            try
+            {
+                using var document = JsonDocument.Parse(JsonSerializer.Serialize(body, JsonOptions.Wire));
+                var root = document.RootElement;
+                if (root.TryGetProperty("name", out var nameElement) &&
+                    nameElement.ValueKind == JsonValueKind.String)
+                    name = nameElement.GetString() ?? string.Empty;
+                if (root.TryGetProperty("primaryStyleId", out var primaryElement) &&
+                    primaryElement.TryGetInt32(out var primaryId))
+                    primary = primaryId;
+                if (root.TryGetProperty("subStyleId", out var subElement) &&
+                    subElement.TryGetInt32(out var subId))
+                    sub = subId;
+                if (root.TryGetProperty("selectedPerkIds", out var perksElement) &&
+                    perksElement.ValueKind == JsonValueKind.Array)
+                    perks = perksElement.GetRawText();
+            }
+            catch (JsonException)
+            {
+            }
+            int id;
+            lock (_calls) id = _nextRuneId++;
+            var stored = "{\"id\":" + id +
+                ",\"name\":" + JsonSerializer.Serialize(name) +
+                ",\"isDeletable\":true" +
+                ",\"primaryStyleId\":" + primary +
+                ",\"subStyleId\":" + sub +
+                ",\"selectedPerkIds\":" + perks +
+                ",\"current\":false}";
+            lock (_calls) _createdRunePages.Add(stored);
+            return "{\"id\":" + id + ",\"isDeletable\":true}";
+        }
+
+        private void UpdateRunePage(string path, object? body)
+        {
+            var prefix = "/lol-perks/v1/pages/";
+            if (!int.TryParse(path[prefix.Length..], out var id)) return;
+            var name = (string?)null;
+            var perks = (string?)null;
+            try
+            {
+                using var document = JsonDocument.Parse(JsonSerializer.Serialize(body, JsonOptions.Wire));
+                var root = document.RootElement;
+                if (root.TryGetProperty("name", out var nameElement) &&
+                    nameElement.ValueKind == JsonValueKind.String)
+                    name = nameElement.GetString();
+                if (root.TryGetProperty("selectedPerkIds", out var perksElement) &&
+                    perksElement.ValueKind == JsonValueKind.Array)
+                    perks = perksElement.GetRawText();
+            }
+            catch (JsonException)
+            {
+                return;
+            }
+            lock (_calls)
+            {
+                for (var index = 0; index < _createdRunePages.Count; index++)
+                {
+                    try
+                    {
+                        using var document = JsonDocument.Parse(_createdRunePages[index]);
+                        var root = document.RootElement;
+                        if (!root.TryGetProperty("id", out var idElement) ||
+                            !idElement.TryGetInt32(out var storedId) || storedId != id)
+                            continue;
+                    }
+                    catch (JsonException)
+                    {
+                        continue;
+                    }
+                    var rebuilt = _createdRunePages[index];
+                    if (name is not null)
+                        rebuilt = RebuildStoredField(rebuilt, "name", JsonSerializer.Serialize(name));
+                    if (perks is not null)
+                        rebuilt = RebuildStoredField(rebuilt, "selectedPerkIds", perks);
+                    _createdRunePages[index] = rebuilt;
+                }
+            }
+        }
+
+        private static string RebuildStoredField(string stored, string field, string rawValue)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(stored);
+                var parts = new List<string>();
+                foreach (var property in document.RootElement.EnumerateObject())
+                    parts.Add(JsonSerializer.Serialize(property.Name) + ":" +
+                        (property.NameEquals(field) ? rawValue : property.Value.GetRawText()));
+                return "{" + string.Join(",", parts) + "}";
+            }
+            catch (JsonException)
+            {
+                return stored;
+            }
+        }
+
+        private void DeleteRunePage(string path)
+        {
+            var prefix = "/lol-perks/v1/pages/";
+            if (!int.TryParse(path[prefix.Length..], out var id)) return;
+            lock (_calls)
+            {
+                _createdRunePages.RemoveAll(stored =>
+                {
+                    try
+                    {
+                        using var document = JsonDocument.Parse(stored);
+                        return document.RootElement.TryGetProperty("id", out var idElement) &&
+                            idElement.TryGetInt32(out var storedId) && storedId == id;
+                    }
+                    catch (JsonException)
+                    {
+                        return false;
+                    }
+                });
+            }
         }
 
         private static LcuResponse Ok(string raw)
@@ -952,9 +1132,11 @@ public sealed class SiteAutoImportTests
         // The tick past the settle imports.
         await service.OnSnapshotAsync(HoveredAhri(AutoImportCoordinator.HoverSettle.TotalSeconds + 0.75));
 
+        // 2.3.5: the Coachless runes flight starts BEFORE the u.gg fetch so
+        // the two overlap on their own cores.
         Assert.Equal(
-            [$"worker:{CompanionTab.UGg}:{AhriUggDeepLink}",
-             $"runes:{AhriCoachlessRunesLink}",
+            [$"runes:{AhriCoachlessRunesLink}",
+             $"worker:{CompanionTab.UGg}:{AhriUggDeepLink}",
              $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}"],
             executor.Calls);
         var runeCreates = api.Calls.Where(call =>
@@ -1018,9 +1200,10 @@ public sealed class SiteAutoImportTests
         await service.OnSnapshotAsync(LockedAhri());
 
         // The rune pair lands before the Coachless item fetch, exactly once.
+        // 2.3.5: the runes flight starts first so it overlaps the u.gg fetch.
         Assert.Equal(
-            [$"worker:{CompanionTab.UGg}:{AhriUggDeepLink}",
-             $"runes:{AhriCoachlessRunesLink}",
+            [$"runes:{AhriCoachlessRunesLink}",
+             $"worker:{CompanionTab.UGg}:{AhriUggDeepLink}",
              $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}"],
             executor.Calls);
         // ...and both source-named rune pages were actually written.
@@ -1080,6 +1263,217 @@ public sealed class SiteAutoImportTests
             call.Path.Contains("perks", StringComparison.Ordinal));
     }
 
+    // -- Service: the parallel Coachless runes flight (2.3.5) -----------------
+    //
+    // The critical path used to be u.gg time + Coachless runes time (~11s in
+    // the 2026-09-11 field log) because the runes fetch started only after
+    // the u.gg payload arrived. The flight now starts at the top of the run
+    // on its own core, and the u.gg page is written as soon as it validates.
+
+    /// <summary>
+    /// The runes fetch overlaps the u.gg fetch instead of following it.
+    /// Proven by gates, not by the clock: the runes side waits for the u.gg
+    /// side's START signal (with a timeout, so a regression fails instead of
+    /// hanging), while the u.gg side observes the runes side already
+    /// started — either serial order fails one of the two. The wall-clock
+    /// assert is the generous backstop (400 + 500 serial is ~900ms).
+    /// </summary>
+    [Fact]
+    public async Task Coachless_runes_fetch_overlaps_the_ugg_fetch()
+    {
+        var api = new StubLcu();
+        var uggStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runesStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sawRunesStartedAtUggStart = false;
+        var runesWaitedForUggStart = false;
+        var executor = new FakeExecutor
+        {
+            AsyncWorker = async (site, _) =>
+            {
+                if (site != CompanionTab.UGg)
+                {
+                    await Task.Delay(50);
+                    return AhriCoachlessJson;
+                }
+                uggStarted.TrySetResult();
+                sawRunesStartedAtUggStart = runesStarted.Task.IsCompleted;
+                await Task.Delay(400);
+                return AhriUggRunesJson;
+            },
+            AsyncRunes = async _ =>
+            {
+                runesStarted.TrySetResult();
+                var first = await Task.WhenAny(
+                    uggStarted.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+                runesWaitedForUggStart = first == uggStarted.Task;
+                await Task.Delay(500);
+                return AhriCoachlessRunesJson;
+            },
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        var clock = Stopwatch.StartNew();
+        await service.OnSnapshotAsync(LockedAhri());
+        clock.Stop();
+
+        Assert.True(
+            sawRunesStartedAtUggStart,
+            "the u.gg fetch must start after the runes flight already started");
+        Assert.True(
+            runesWaitedForUggStart,
+            "the runes fetch must still be in flight when the u.gg fetch starts");
+        Assert.True(
+            clock.Elapsed < TimeSpan.FromMilliseconds(850),
+            $"a parallel run costs the max, not the sum (took {clock.Elapsed})");
+        // Both pages still written, each said exactly once, plus the timing line.
+        Assert.Single(sink.Logs, line =>
+            line.Contains("runes: wrote u.gg Ahri (Mid)", StringComparison.Ordinal));
+        Assert.Single(sink.Logs, line =>
+            line.Contains("runes: wrote Coachless Ahri (Mid)", StringComparison.Ordinal));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("auto-import: timing", StringComparison.Ordinal) &&
+            line.Contains("(parallel)", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The u.gg page POST lands while the Coachless runes fetch is still
+    /// parked: the staged write does not wait for the flight. If the service
+    /// regressed to awaiting the flight first, the parked fetch would time
+    /// out waiting for a POST that never comes.
+    /// </summary>
+    [Fact]
+    public async Task Ugg_rune_page_is_written_before_coachless_runes_finish()
+    {
+        var api = new StubLcu();
+        var sawPostFirst = false;
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            AsyncRunes = async _ =>
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                while (!api.Calls.Any(call =>
+                        call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages") &&
+                    DateTime.UtcNow < deadline)
+                    await Task.Delay(10);
+                sawPostFirst = api.Calls.Any(call =>
+                    call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages");
+                return AhriCoachlessRunesJson;
+            },
+        };
+        var service = NewService(executor, api, new FakeSink(), withRunes: true);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.True(
+            sawPostFirst,
+            "the u.gg rune page must be written while Coachless runes are still fetching");
+    }
+
+    /// <summary>
+    /// Role-less speculation, mismatch: the flight starts role-less and says
+    /// top, u.gg discovers mid, so the run refetches with the aligned role
+    /// exactly as the old serial code did — and the aligned page still lands.
+    /// </summary>
+    [Fact]
+    public async Task Roleless_runes_speculation_refetches_when_the_role_mismatches()
+    {
+        var api = new StubLcu();
+        const string topJson = "\"role\":\"top\"";
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Runes = url => url.Query.Contains("role=", StringComparison.Ordinal)
+                ? AhriCoachlessRunesJson
+                : AhriCoachlessRunesJson.Replace(
+                    "\"role\":\"mid\"", topJson, StringComparison.Ordinal),
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(LockedAhri() with { RoleId = null });
+
+        var runesCalls = executor.Calls
+            .Where(call => call.StartsWith("runes:", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, runesCalls.Count);
+        Assert.Equal($"runes:{SiteDeepLink.CoachlessRunesUrl("Ahri", null)}", runesCalls[0]);
+        Assert.Equal($"runes:{SiteDeepLink.CoachlessRunesUrl("Ahri", 2)}", runesCalls[1]);
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("(parallel+refetch)", StringComparison.Ordinal));
+        // Role-less titles carry no role word; the aligned page still lands.
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("runes: wrote Coachless Ahri", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Role-less speculation, match: the flight starts role-less and says
+    /// mid, u.gg discovers mid, so the single speculative fetch stands and
+    /// no aligned refetch happens.
+    /// </summary>
+    [Fact]
+    public async Task Roleless_runes_speculation_is_kept_when_the_role_matches()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(LockedAhri() with { RoleId = null });
+
+        var runesCalls = executor.Calls
+            .Where(call => call.StartsWith("runes:", StringComparison.Ordinal)).ToList();
+        Assert.Equal($"runes:{SiteDeepLink.CoachlessRunesUrl("Ahri", null)}", Assert.Single(runesCalls));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("(parallel)", StringComparison.Ordinal) &&
+            !line.Contains("refetch", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Coachless runes and Coachless items share one core, so the items
+    /// fetch must start only after the runes fetch completes — while u.gg
+    /// still overlaps both. Timestamps, not wall-clock budgets.
+    /// </summary>
+    [Fact]
+    public async Task Coachless_items_fetch_waits_for_the_in_flight_runes_fetch()
+    {
+        var api = new StubLcu();
+        var runesStart = 0L;
+        var runesEnd = 0L;
+        var itemsStart = 0L;
+        var executor = new FakeExecutor
+        {
+            AsyncWorker = (site, _) =>
+            {
+                if (site == CompanionTab.Coachless)
+                {
+                    itemsStart = Stopwatch.GetTimestamp();
+                    return Task.FromResult<string?>(AhriCoachlessJson);
+                }
+                return Task.FromResult<string?>(AhriUggRunesJson);
+            },
+            AsyncRunes = async _ =>
+            {
+                runesStart = Stopwatch.GetTimestamp();
+                await Task.Delay(300);
+                runesEnd = Stopwatch.GetTimestamp();
+                return AhriCoachlessRunesJson;
+            },
+        };
+        var service = NewService(executor, api, new FakeSink(), withRunes: true);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.True(runesEnd > runesStart, "the runes fetch must have run");
+        Assert.True(
+            itemsStart >= runesEnd,
+            "Coachless items must start after the runes fetch completes (same core)");
+    }
+
     /// <summary>
     /// A u.gg-only visible trigger still imports both source pages; the u.gg
     /// payload is reused and only Coachless needs another navigation.
@@ -1096,6 +1490,8 @@ public sealed class SiteAutoImportTests
         var service = NewService(executor, api, new FakeSink(), withRunes: true);
 
         // Visible u.gg build page for the hovered champion: trigger 2 only.
+        // 2.3.5: the runes flight still starts first (it overlaps the
+        // in-place read on its own core).
         await service.OnSnapshotAsync(LockedAhri() with
         {
             Locked = false,
@@ -1104,7 +1500,7 @@ public sealed class SiteAutoImportTests
         });
 
         Assert.Equal(
-            [$"visible:{CompanionTab.UGg}", $"runes:{AhriCoachlessRunesLink}"],
+            [$"runes:{AhriCoachlessRunesLink}", $"visible:{CompanionTab.UGg}"],
             executor.Calls);
     }
 
