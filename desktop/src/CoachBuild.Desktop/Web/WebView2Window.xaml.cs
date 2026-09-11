@@ -2128,11 +2128,24 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         CancellationToken cancellationToken)
     {
         var loaded = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // THIS navigation's id (2.4.1). A core can still be finishing a load a
+        // cancelled fetch started (hover moved Nasus -> Zaahen); that load's
+        // NavigationCompleted used to answer this wait, and the extractor then
+        // read a page that was not ours. Field log 2026-09-11 22:27: u.gg and
+        // Coachless both "site page not recognized" 8 ms after lock-in, only
+        // Pro (no browser) imported. The first non-redirect NavigationStarting
+        // after Navigate() is ours; redirects keep the same id.
+        ulong? navigationId = null;
+        void Starting(object? sender, CoreWebView2NavigationStartingEventArgs args)
+        {
+            if (navigationId is null && !args.IsRedirected) navigationId = args.NavigationId;
+        }
         void Handler(object? sender, CoreWebView2NavigationCompletedEventArgs args)
         {
-            core.NavigationCompleted -= Handler;
+            if (navigationId is not { } id || args.NavigationId != id) return;
             loaded.TrySetResult(args.IsSuccess);
         }
+        core.NavigationStarting += Starting;
         core.NavigationCompleted += Handler;
         try
         {
@@ -2140,7 +2153,19 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             var completed = await Task.WhenAny(
                 loaded.Task,
                 Task.Delay(AutoImportNavigationTimeout, cancellationToken)).ConfigureAwait(true);
-            if (!ReferenceEquals(completed, loaded.Task)) return false;
+            if (!ReferenceEquals(completed, loaded.Task))
+            {
+                // Timed out or cancelled: stop the load so it can never be
+                // mistaken for the next fetch's page on this core.
+                try
+                {
+                    core.Stop();
+                }
+                catch
+                {
+                }
+                return false;
+            }
             return await loaded.Task.ConfigureAwait(true);
         }
         catch
@@ -2149,6 +2174,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         }
         finally
         {
+            core.NavigationStarting -= Starting;
             core.NavigationCompleted -= Handler;
         }
     }

@@ -1,5 +1,14 @@
 # Changelog
 
+## Desktop 2.4.1 (2026-09-12)
+
+- Fixed u.gg and Coachless imports failing when you hover one champion and
+  then switch to another. The page load for the first champion could finish
+  just as the second one started, and CoachBuild read it as the second
+  champion's page ("site page not recognized"), so only the Pro build was
+  imported. Each load now waits for its own page, and a cancelled load is
+  stopped.
+
 ## Desktop 2.4.0 (2026-09-11)
 
 - Champ-select auto-import has a third source: Pro, from probuildstats.com
