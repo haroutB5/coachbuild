@@ -1,6 +1,6 @@
 # CoachBuild — technical reference
 
-**Describes desktop 2.3.8, 2026-09-11.** `desktop/src/Directory.Build.props`'s
+**Describes desktop 2.4.0, 2026-09-11.** `desktop/src/Directory.Build.props`'s
 `<Version>` is the single source of truth for the app version (it moved there in
 2.1.0; it is no longer in the csproj). If it has moved on since this date, treat
 everything below with more skepticism the further it has fallen behind, and check
@@ -410,7 +410,26 @@ made them non-obvious. Do not re-derive them.
   Existing pages with either source prefix or legacy `CoachBuild import:` are
   reusable/owned; foreign pages are never touched. u.gg has priority if only one
   slot exists. Neither page is selected unless an owned page was current before
-  the write, in which case u.gg becomes current.
+  the   write, in which case u.gg becomes current.
+- **Pro source (2.4.0).** A third automatic source alongside u.gg and
+  Coachless: `https://probuildstats.com/champion/{slug}?role={token}` (u.gg's
+  sister pro-builds site), fetched in C# over plain `HttpClient`
+  (`ProBuildsClient`) — never through a worker, so it runs fully in parallel
+  and contends for no browser core. The SSR page's `#apollo-state` blob holds
+  one numeric row per pro game; the pick rule takes the rows for the requested
+  role (all rows when role-less), keeps the current patch's rows when there
+  are at least 3, takes the modal (keystone, sub-style) pair, and writes the
+  most recent game with it — falling back row by row through
+  `PerkTreeCatalog` validation, never mixing rows. Items come from the same
+  row: early `itemPath` buys (timestamps are milliseconds) as Starting Items,
+  `completedItems` as Core Items, filtered `finalBuild` as Final Build. Role 4
+  maps to `supp` on this builder only. Pages are `Pro {Champ}` (a third owned
+  prefix, budget now three, priority u.gg then Coachless then Pro); the item
+  set rides the same merged write as `(Pro)`. Role-less lobbies fetch with no
+  role and re-pick from the fetched rows for the role u.gg discovers — no
+  second request. Pro failing is always one fail-soft
+  `runes: Pro yielded no build (...)` line and never delays the other two.
+  No Pro browser tab exists; import only.
 - **Roles may be absent.** Practice tool and custom lobbies assign no position.
   `SiteImportValidator.RoleLabel` returns **null**, and `PageTitle` /
   `ChampionLabel` omit it — never the literal word "Unknown" (2.0.1 shipped

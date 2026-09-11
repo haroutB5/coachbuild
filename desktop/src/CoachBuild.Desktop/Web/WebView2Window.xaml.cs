@@ -1213,7 +1213,8 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         ItemSetApplyService items,
         IChampionDirectory champions,
         Action<string> logInfo,
-        RuneApplyService? runes = null)
+        RuneApplyService? runes = null,
+        IProBuildsClient? proBuilds = null)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(champions);
@@ -1221,7 +1222,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (_disposed) return;
         _autoImportLog = logInfo;
         _autoImport = new SiteAutoImportService(
-            this, items, champions, new WindowAutoImportSink(this, logInfo), runes);
+            this, items, champions, new WindowAutoImportSink(this, logInfo), runes, proBuilds);
     }
 
     /// <summary>Quiet log hop for the window's own lifecycle lines. Never throws.</summary>

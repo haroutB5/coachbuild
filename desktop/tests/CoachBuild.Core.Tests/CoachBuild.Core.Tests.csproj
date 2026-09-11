@@ -12,6 +12,15 @@
          data: it was not written to suit the resolver, so a normalisation rule
          that only works on hand-picked champions fails against it. -->
     <None Include="Fixtures\champions.live.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- probuildstats SSR captures (2026-09-11, patch 16.18 live): the Pro
+         import parses these byte-identical, through the same script-tag read
+         the client performs. pbs-ahri-top.html is the transient 718-byte
+         "technical issues" shell (no apollo JSON: retryable); pbs-badslug is
+         the unknown-champion shape (empty apollo state). -->
+    <None Include="Fixtures\pbs-ahri.html" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\pbs-jhin.html" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\pbs-badslug.html" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\pbs-ahri-top.html" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\CoachBuild.Core\CoachBuild.Core.csproj" />

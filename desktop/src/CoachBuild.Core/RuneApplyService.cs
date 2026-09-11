@@ -37,6 +37,7 @@ public sealed class RuneApplyService
     public const string OwnedPagePrefix = "CoachBuild";
     public const string UGgOwnedPagePrefix = "u.gg ";
     public const string CoachlessOwnedPagePrefix = "Coachless ";
+    public const string ProOwnedPagePrefix = "Pro ";
 
     /// <summary>The pre-2.2.0 shared title, still ours for prune and reuse.</summary>
     public const string LegacyImportPrefix = "CoachBuild import: ";
@@ -61,21 +62,23 @@ public sealed class RuneApplyService
     /// <c>replacePrefix</c> and that is the only thing that ever deleted a
     /// stale page. So the client kept a page per champion+role+source forever:
     /// <c>CoachBuild Mordekaiser Top</c> was still sitting there after its item
-    /// set had been pruned. Two, not one: the page just written plus the
-    /// previous champion's, so re-picking the last champion is still instant
-    /// and a dodge does not cost the page you came from.</para>
+    /// set had been pruned. Three, not one, since 2.4.0 (two before): the page
+    /// just written plus one per other source for the previous champion, so
+    /// re-picking the last champion is still instant and a dodge does not
+    /// cost the pages you came from.</para>
     /// </summary>
-    public const int MaxOwnedPages = 2;
+    public const int MaxOwnedPages = 3;
 
     /// <summary>
-    /// True only for rune pages the app owns: the two 2.2.0 source prefixes
-    /// and the legacy CoachBuild prefix retained for migration/reuse.
+    /// True only for rune pages the app owns: the three 2.2.0/2.4.0 source
+    /// prefixes and the legacy CoachBuild prefix retained for migration/reuse.
     /// </summary>
     public static bool IsOwnedPageName(string? name) =>
         !string.IsNullOrEmpty(name) &&
         (name.StartsWith(UGgOwnedPagePrefix, StringComparison.Ordinal) ||
-         name.StartsWith(CoachlessOwnedPagePrefix, StringComparison.Ordinal) ||
-         name.StartsWith(OwnedPagePrefix, StringComparison.Ordinal));
+          name.StartsWith(CoachlessOwnedPagePrefix, StringComparison.Ordinal) ||
+          name.StartsWith(ProOwnedPagePrefix, StringComparison.Ordinal) ||
+          name.StartsWith(OwnedPagePrefix, StringComparison.Ordinal));
 
     /// <summary>
     /// Which CHAMPION an owned rune page is for, or null when the title is not
@@ -106,6 +109,8 @@ public sealed class RuneApplyService
             rest = rest[UGgOwnedPagePrefix.Length..];
         else if (rest.StartsWith(CoachlessOwnedPagePrefix, StringComparison.Ordinal))
             rest = rest[CoachlessOwnedPagePrefix.Length..];
+        else if (rest.StartsWith(ProOwnedPagePrefix, StringComparison.Ordinal))
+            rest = rest[ProOwnedPagePrefix.Length..];
         else if (rest.StartsWith(LegacyImportPrefix, StringComparison.Ordinal))
             rest = rest[LegacyImportPrefix.Length..];
         else if (rest.StartsWith(OwnedPagePrefix, StringComparison.Ordinal))
@@ -285,8 +290,9 @@ public sealed class RuneApplyService
     }
 
     /// <summary>
-    /// Writes the automatic u.gg and Coachless pages as one capacity-aware
-    /// operation. Requests are priority ordered (u.gg first). Exact names are
+    /// Writes the automatic u.gg, Coachless and Pro pages as one
+    /// capacity-aware operation. Requests are priority ordered (u.gg first,
+    /// then Coachless, then Pro). Exact names are
     /// reused first, then any owned page, then a free editable slot. A foreign
     /// page is never edited or deleted. Neither page becomes current unless an
     /// owned page was current before the operation; in that case the first
@@ -746,6 +752,7 @@ public sealed class RuneApplyService
     {
         if (name?.StartsWith(UGgOwnedPagePrefix, StringComparison.Ordinal) == true) return UGgOwnedPagePrefix;
         if (name?.StartsWith(CoachlessOwnedPagePrefix, StringComparison.Ordinal) == true) return CoachlessOwnedPagePrefix;
+        if (name?.StartsWith(ProOwnedPagePrefix, StringComparison.Ordinal) == true) return ProOwnedPagePrefix;
         return OwnedPagePrefix;
     }
 

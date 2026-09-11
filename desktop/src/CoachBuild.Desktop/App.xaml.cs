@@ -1098,7 +1098,8 @@ public partial class App : WpfApplication
                         coreServices.AutoImportItemSets,
                         coreServices.ChampionDirectory,
                         line => _log?.Info(line),
-                        coreServices.AutoImportRunes);
+                        coreServices.AutoImportRunes,
+                        coreServices.AutoImportProBuilds);
                 }
                 _webView = createdWindow;
                 createdWindow.Closed += OnWebViewClosed;
@@ -1590,6 +1591,16 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     /// pages. Both use the same validated, capacity-aware owned-page writer.
     /// </summary>
     public RuneApplyService AutoImportRunes => _bridge.RuneApplyService;
+
+    /// <summary>
+    /// The probuildstats client for the automatic third ("Pro") rune page
+    /// and item set (2.4.0). One app-lifetime <see cref="HttpClient"/>: the
+    /// fetch is a plain GET of an SSR page, fully parallel with the worker
+    /// fetches and sharing no browser core with them.
+    /// </summary>
+    public IProBuildsClient AutoImportProBuilds => _proBuilds;
+
+    private readonly ProBuildsClient _proBuilds = new(ProBuildsClient.CreateHttpClient());
 
     /// <summary>
     /// The roster the auto-import resolves payload slugs through (by id, so

@@ -392,12 +392,67 @@ public sealed class SiteAutoImportTests
     private static SiteAutoImportService NewService(
         FakeExecutor executor, StubLcu api, FakeSink sink,
         IChampionDirectory? champions = null,
-        bool withRunes = false) =>
+        bool withRunes = false,
+        IProBuildsClient? pro = null) =>
         new(executor,
             new ItemSetApplyService(api),
             champions ?? new FakeChampionDirectory(),
             sink,
-            withRunes ? new RuneApplyService(api) : null);
+            withRunes ? new RuneApplyService(api) : null,
+            pro);
+
+    /// <summary>The fake third source (2.4.0): canned probuildstats answers.</summary>
+    private sealed class FakeProClient : IProBuildsClient
+    {
+        public Func<string, int?, CancellationToken, Task<ProBuildsFetch>>? Fetch { get; set; }
+
+        private readonly List<(string Slug, int? RoleId)> _calls = [];
+
+        public IReadOnlyList<(string Slug, int? RoleId)> Calls
+        {
+            get { lock (_calls) return _calls.ToArray(); }
+        }
+
+        public Task<ProBuildsFetch> FetchAsync(
+            string championSlug, int? roleId, CancellationToken cancellationToken = default)
+        {
+            lock (_calls) _calls.Add((championSlug, roleId));
+            return Fetch is not null
+                ? Fetch(championSlug, roleId, cancellationToken)
+                : Task.FromResult(new ProBuildsFetch(null, null, "no pro build", false, 0));
+        }
+    }
+
+    /// <summary>One valid probuildstats row for Ahri, as the client models it.</summary>
+    private static ProMatchRow AhriProRow(string role = "mid", long timestamp = 1789127015074) =>
+        new(role, "16_18", timestamp, true, 245, "Faker", "T1",
+            8200, 8100,
+            [8214, 8226, 8210, 8237, 8139, 8137],
+            [5008, 5008, 5001],
+            [3157, 3089],
+            [3157, 3089, 1001],
+            0,
+            [new ProItemEvent(1056, 2565, 1), new ProItemEvent(2003, 2565, 1)]);
+
+    /// <summary>A successful Pro fetch for the Ahri row above.</summary>
+    private static ProBuildsFetch AhriProFetch(long elapsedMs = 0)
+    {
+        var row = AhriProRow();
+        var (payload, failure) = ProBuildsClient.BuildPayload([row], "ahri", 2);
+        Assert.Null(failure);
+        return new ProBuildsFetch(payload, [row], null, false, elapsedMs);
+    }
+
+    /// <summary>Waits for background Pro prefetch fetches to record their calls.</summary>
+    private static async Task WaitForProCallsAsync(FakeProClient pro, int count, int timeoutMs = 5000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (pro.Calls.Count < count && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        Assert.True(
+            pro.Calls.Count >= count,
+            $"timed out waiting for {count} pro calls (saw {pro.Calls.Count})");
+    }
 
     /// <summary>The Coachless runes page for Ahri mid, as the extractor emits it.</summary>
     private const string AhriCoachlessRunesJson = """
@@ -2375,4 +2430,342 @@ public sealed class SiteAutoImportTests
             UggTarget(inPlace: true), UggPayload(SiteImportPayload.StageUrlRecognized, blocks: 1)));
     }
 
+    // -- Service: the Pro third source (2.4.0) --------------------------------
+    //
+    // probuildstats.com over plain HttpClient — no worker core, no tab — so
+    // the Pro fetch starts at the top of the run alongside the Coachless
+    // runes flight, joins the staged rune batch by priority (u.gg,
+    // Coachless, Pro), and rides the same batched item-set write. Pro
+    // failing is always one fail-soft line and never touches the other two.
+
+    /// <summary>
+    /// The Pro fetch overlaps the u.gg fetch instead of following it. Proven
+    /// by gates like the Coachless overlap test: each side observes the
+    /// other already started.
+    /// </summary>
+    [Fact]
+    public async Task Pro_fetch_overlaps_the_worker_fetches()
+    {
+        var api = new StubLcu();
+        var uggStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var proStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sawProStartedAtUggStart = false;
+        var proWaitedForUggStart = false;
+        var executor = new FakeExecutor
+        {
+            AsyncWorker = async (site, _) =>
+            {
+                if (site != CompanionTab.UGg)
+                {
+                    await Task.Delay(50);
+                    return AhriCoachlessJson;
+                }
+                uggStarted.TrySetResult();
+                sawProStartedAtUggStart = proStarted.Task.IsCompleted;
+                await Task.Delay(400);
+                return AhriUggRunesJson;
+            },
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var pro = new FakeProClient
+        {
+            Fetch = async (_, _, _) =>
+            {
+                proStarted.TrySetResult();
+                var first = await Task.WhenAny(
+                    uggStarted.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+                proWaitedForUggStart = first == uggStarted.Task;
+                await Task.Delay(100);
+                return AhriProFetch();
+            },
+        };
+        var service = NewService(executor, api, new FakeSink(), withRunes: true, pro: pro);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.True(
+            sawProStartedAtUggStart,
+            "the u.gg fetch must start after the Pro flight already started");
+        Assert.True(
+            proWaitedForUggStart,
+            "the Pro fetch must still be in flight when the u.gg fetch starts");
+        Assert.Single(pro.Calls);
+    }
+
+    /// <summary>
+    /// The lock run writes all three rune pages (u.gg first, then the full
+    /// batch) and all three item sets, and the timing line carries the Pro
+    /// leg.
+    /// </summary>
+    [Fact]
+    public async Task A_lock_run_writes_all_three_rune_pages_and_item_sets()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var pro = new FakeProClient
+        {
+            Fetch = (_, _, _) => Task.FromResult(AhriProFetch(elapsedMs: 123)),
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true, pro: pro);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        // One Pro fetch, at the lobby role — alongside the worker fetches,
+        // never through a worker.
+        var call = Assert.Single(pro.Calls);
+        Assert.Equal("ahri", call.Slug);
+        Assert.Equal(2, call.RoleId);
+        Assert.DoesNotContain(executor.Calls, call =>
+            call.Contains("probuildstats", StringComparison.OrdinalIgnoreCase));
+        // All three rune pages, in priority order.
+        var runeCreates = api.Calls.Where(call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages").ToArray();
+        Assert.Equal(3, runeCreates.Length);
+        Assert.Contains(runeCreates, call =>
+            JsonSerializer.Serialize(call.Body).Contains("Pro Ahri (Mid)", StringComparison.Ordinal));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("runes: wrote Pro Ahri (Mid)", StringComparison.Ordinal));
+        // All three item sets coexist in the last merged write.
+        var sets = LastPutSets(api);
+        Assert.Equal(3, sets.GetArrayLength());
+        Assert.Contains(sets.EnumerateArray(), set =>
+            set.GetProperty("title").GetString() == "CoachBuild import: Ahri Mid (Pro)");
+        // The timing line names the Pro leg and the cold (no-prefetch) run.
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("auto-import: timing", StringComparison.Ordinal) &&
+            line.Contains("pro=123ms", StringComparison.Ordinal) &&
+            line.Contains("prefetch-hit=false", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A Pro that yields nothing costs exactly one line. The worker pages
+    /// and sets land exactly as they would with no Pro client at all.
+    /// </summary>
+    [Fact]
+    public async Task Pro_failure_leaves_ugg_and_coachless_writes_untouched()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var pro = new FakeProClient
+        {
+            Fetch = (_, _, _) => Task.FromResult(
+                new ProBuildsFetch(null, null, "unknown champion \"xyz\"", false, 7)),
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true, pro: pro);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.Single(sink.Logs, line => line.Contains("Pro", StringComparison.Ordinal));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("runes: Pro yielded no build (unknown champion", StringComparison.Ordinal));
+        var runeCreates = api.Calls.Where(call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages").ToArray();
+        Assert.Equal(2, runeCreates.Length);
+        Assert.Equal(2, LastPutSets(api).GetArrayLength());
+        Assert.DoesNotContain(sink.Logs, line =>
+            line.Contains("unexpected failure", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Role-less lobbies fetch Pro with no role, then pick rows for the role
+    /// u.gg resolves — client-side, with no second request.
+    /// </summary>
+    [Fact]
+    public async Task Roleless_run_picks_pro_rows_for_the_role_ugg_discovers()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var rows = new[] { AhriProRow("mid", 10), AhriProRow("top", 50) };
+        var pro = new FakeProClient
+        {
+            Fetch = (_, _, _) => Task.FromResult(new ProBuildsFetch(null, rows, null, false, 5)),
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true, pro: pro);
+
+        await service.OnSnapshotAsync(LockedAhri() with { RoleId = null });
+
+        // Fetched once, with no role — and never again.
+        Assert.Single(pro.Calls);
+        Assert.Equal("ahri", pro.Calls[0].Slug);
+        Assert.Null(pro.Calls[0].RoleId);
+        // The mid row won (u.gg discovered mid), under role-less titles for
+        // the pages and the discovered role for the item set.
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("runes: wrote Pro Ahri", StringComparison.Ordinal) &&
+            !line.Contains("(Mid)", StringComparison.Ordinal));
+        var sets = LastPutSets(api);
+        Assert.Contains(sets.EnumerateArray(), set =>
+            set.GetProperty("title").GetString() == "CoachBuild import: Ahri Mid (Pro)");
+    }
+
+    /// <summary>
+    /// The hover prefetch starts the Pro fetch on the first tick and the
+    /// settled run consumes it instead of fetching again.
+    /// </summary>
+    [Fact]
+    public async Task Hover_prefetch_starts_pro_and_the_settled_run_consumes_it()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var gate = new TaskCompletionSource<ProBuildsFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pro = new FakeProClient { Fetch = (_, _, _) => gate.Task };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true, pro: pro);
+
+        await service.OnSnapshotAsync(HoveredAhri(0));
+        await WaitForProCallsAsync(pro, 1);
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Method == HttpMethod.Post || call.Method == HttpMethod.Put);
+
+        gate.SetResult(AhriProFetch(elapsedMs: 11));
+        await service.OnSnapshotAsync(HoveredAhri(AutoImportCoordinator.HoverSettle.TotalSeconds + 0.75));
+
+        // Consumed, not refetched — and written.
+        Assert.Single(pro.Calls);
+        var runeCreates = api.Calls.Where(call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages").ToArray();
+        Assert.Equal(3, runeCreates.Length);
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("auto-import: timing", StringComparison.Ordinal) &&
+            line.Contains("prefetch-hit=true", StringComparison.Ordinal) &&
+            line.Contains("pro=11ms", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Two free slots with three sources: u.gg and Coachless are written,
+    /// Pro is the one left out, and the line says exactly that.
+    /// </summary>
+    [Fact]
+    public async Task Two_available_rune_slots_write_ugg_and_coachless_and_skip_pro_with_the_line()
+    {
+        var api = new StubLcu
+        {
+            PagesJson = """
+                [{"id":1,"name":"Mine 1","isDeletable":true},
+                 {"id":2,"name":"Mine 2","isDeletable":true},
+                 {"id":3,"name":"Mine 3","isDeletable":true}]
+                """,
+        };
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var pro = new FakeProClient
+        {
+            Fetch = (_, _, _) => Task.FromResult(AhriProFetch()),
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true, pro: pro);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.Contains(
+            "runes: 2 editable page slots -- wrote u.gg and Coachless, skipped Pro",
+            sink.Logs);
+        var creates = api.Calls.Where(call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages").ToArray();
+        Assert.Equal(2, creates.Length);
+        Assert.DoesNotContain(creates, call =>
+            JsonSerializer.Serialize(call.Body).Contains("Pro Ahri", StringComparison.Ordinal));
+        Assert.DoesNotContain(api.Calls, call => call.Method == HttpMethod.Delete);
+    }
+
+    /// <summary>
+    /// One free slot with three sources: u.gg alone is written, and the
+    /// general line names both skipped halves.
+    /// </summary>
+    [Fact]
+    public async Task One_available_rune_slot_with_three_sources_writes_ugg_only()
+    {
+        var api = new StubLcu
+        {
+            PagesJson = """
+                [{"id":1,"name":"Mine 1","isDeletable":true},
+                 {"id":2,"name":"Mine 2","isDeletable":true},
+                 {"id":3,"name":"Mine 3","isDeletable":true},
+                 {"id":4,"name":"Mine 4","isDeletable":true}]
+                """,
+        };
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var pro = new FakeProClient
+        {
+            Fetch = (_, _, _) => Task.FromResult(AhriProFetch()),
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true, pro: pro);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.Contains(
+            "runes: 1 editable page slot -- wrote u.gg, skipped Coachless and Pro",
+            sink.Logs);
+        var create = Assert.Single(api.Calls, call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages");
+        Assert.Contains("u.gg Ahri (Mid)", JsonSerializer.Serialize(create.Body), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The cached Pro set rides later single-site refreshes: even a refresh
+    /// run whose own Pro fetch fails still carries the Pro set instead of
+    /// evicting it from the client.
+    /// </summary>
+    [Fact]
+    public async Task Pro_set_rides_later_single_site_refreshes()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson,
+            Visible = _ => AhriUggRefreshedJson,
+        };
+        var calls = 0;
+        var pro = new FakeProClient
+        {
+            Fetch = (_, _, _) =>
+            {
+                calls++;
+                return Task.FromResult(calls == 1
+                    ? AhriProFetch()
+                    : new ProBuildsFetch(null, null, "pro page unavailable (transient)", true, 1));
+            },
+        };
+        var service = NewService(executor, api, new FakeSink(), pro: pro);
+
+        await service.OnSnapshotAsync(LockedAhri());
+        Assert.Equal(3, LastPutSets(api).GetArrayLength());
+
+        const string filtered = "https://u.gg/lol/champions/ahri/build/mid?rank=emerald_plus";
+        await service.OnSnapshotAsync(LockedAhri(CompanionTab.UGg, filtered));
+
+        // The refresh's own Pro fetch failed, but the merged write still
+        // carries all three sets: the cached Pro set rode along.
+        var sets = LastPutSets(api);
+        Assert.Equal(3, sets.GetArrayLength());
+        Assert.Contains(sets.EnumerateArray(), set =>
+            set.GetProperty("title").GetString() == "CoachBuild import: Ahri Mid (Pro)");
+    }
 }

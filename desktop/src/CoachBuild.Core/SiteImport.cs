@@ -7,6 +7,7 @@ public enum SiteImportSource
 {
     UGg,
     Coachless,
+    Pro,
 }
 
 /// <summary>
@@ -285,6 +286,11 @@ public sealed record SiteImportPayload(
         if (normalized is "coachless" or "coachless.gg")
         {
             source = SiteImportSource.Coachless;
+            return true;
+        }
+        if (normalized is "pro" or "probuildstats" or "probuildstats.com")
+        {
+            source = SiteImportSource.Pro;
             return true;
         }
         return false;
@@ -694,6 +700,7 @@ public static class SiteImportValidator
     {
         SiteImportSource.UGg => "u.gg",
         SiteImportSource.Coachless => "Coachless",
+        SiteImportSource.Pro => "Pro",
         _ => "the site",
     };
 
@@ -715,7 +722,7 @@ public static class SiteImportValidator
         "jungle" or "jg" or "jun" => "Jungle",
         "mid" or "middle" or "midlane" => "Mid",
         "adc" or "bottom" or "bot" or "carry" => "ADC",
-        "support" or "sup" or "utility" => "Support",
+        "support" or "sup" or "supp" or "utility" => "Support",
         { Length: > 0 } raw => char.ToUpperInvariant(raw[0]) + raw[1..],
         _ => null,
     };

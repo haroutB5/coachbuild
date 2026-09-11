@@ -1,6 +1,15 @@
 # Changelog
 
-## Desktop 2.3.8 (2026-09-11)
+## Desktop 2.4.0 (2026-09-11)
+
+- Champ-select auto-import has a third source: Pro, from probuildstats.com
+  (the pro-builds site run by the same company as u.gg). Each lock or settled
+  hover now also writes a "Pro {Champ}" rune page and its own item set next to
+  the u.gg and Coachless ones. The Pro fetch runs over plain HTTP in parallel
+  with the other two, picks the most recent game with the usual rune set on
+  the current patch, and never blocks them when it fails.
+- The rune-page budget grows from two to three so the trio survives cleanup,
+  and the capacity line names which sources wrote when slots run short.
 
 - Automatic updates now restart the app. The updater was started inside the
   app's own process group, which is set to close everything with the app, so

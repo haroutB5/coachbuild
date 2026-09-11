@@ -54,12 +54,13 @@ public sealed class RunePagePruneTests
 
         var doomed = RuneApplyService.PagesToPrune(pages, keepId: 11);
 
-        // MaxOwnedPages = 2 counts the written page, so exactly one other
-        // survives: the newest of the rest.
+        // MaxOwnedPages = 3 counts the written page, so two others survive:
+        // the newest of the rest.
         Assert.Equal(RuneApplyService.MaxOwnedPages - 1, 4 - 1 - doomed.Count);
-        Assert.Equal([5, 2], doomed);
+        Assert.Equal([2], doomed);
         Assert.DoesNotContain(11, doomed);
         Assert.DoesNotContain(8, doomed);
+        Assert.DoesNotContain(5, doomed);
     }
 
     [Fact]
@@ -74,11 +75,13 @@ public sealed class RunePagePruneTests
             Page(5, "CoachBuild import: A"),
             Page(6, "CoachBuild import: B"),
             Page(7, "CoachBuild import: C"),
+            Page(8, "CoachBuild import: D"),
         };
 
-        var doomed = RuneApplyService.PagesToPrune(pages, keepId: 7);
+        var doomed = RuneApplyService.PagesToPrune(pages, keepId: 8);
 
-        // Only ours, only over the cap: 6 survives as the one other slot, 5 goes.
+        // Only ours, only over the cap: 6 and 7 survive as the two other
+        // slots, 5 goes.
         Assert.Equal([5], doomed);
         foreach (var id in new[] { 1, 2, 3, 4 })
             Assert.DoesNotContain(id, doomed);
@@ -114,15 +117,15 @@ public sealed class RunePagePruneTests
         var api = new StubLcu();
         const string title = "CoachBuild import: Nasus Top (Coachless)";
         // 1. read pages (no page by this title yet)
-        api.Enqueue("[" + Wire(1, "Mine, not yours") + "," + Wire(4, "CoachBuild import: A") + "," +
-            Wire(6, "CoachBuild import: B") + "]");
+        api.Enqueue("[" + Wire(1, "Mine, not yours") + "," + Wire(3, "CoachBuild import: A") + "," +
+            Wire(4, "CoachBuild import: B") + "," + Wire(6, "CoachBuild import: C") + "]");
         // 2. inventory  3. create -> id 9  4. select 9
         api.Enqueue("{\"ownedPageCount\":9}");
         api.Enqueue("{\"id\":9}");
         api.Enqueue("9");
         // 5. the prune's re-read, now including the page just written
-        api.Enqueue("[" + Wire(1, "Mine, not yours") + "," + Wire(4, "CoachBuild import: A") + "," +
-            Wire(6, "CoachBuild import: B") + "," + Wire(9, title) + "]");
+        api.Enqueue("[" + Wire(1, "Mine, not yours") + "," + Wire(3, "CoachBuild import: A") + "," +
+            Wire(4, "CoachBuild import: B") + "," + Wire(6, "CoachBuild import: C") + "," + Wire(9, title) + "]");
         // 6. the delete  7. the verification read
         api.Enqueue("{}");
         api.Enqueue(Wire(9, title));
@@ -136,7 +139,7 @@ public sealed class RunePagePruneTests
             .Where(call => call.Method == HttpMethod.Delete)
             .Select(call => call.Path)
             .ToArray();
-        Assert.Equal(["/lol-perks/v1/pages/4"], deletes);
+        Assert.Equal(["/lol-perks/v1/pages/3"], deletes);
     }
 
     /// <summary>
@@ -305,13 +308,16 @@ public sealed class RunePagePruneTests
     [Fact]
     public void The_pair_takes_the_survivor_slot_ahead_of_a_newer_stranger()
     {
-        // The single-write path. Id order says 12 is the newest, but 10 is the
-        // other half of the champion in hand, so 10 survives and 12 goes.
+        // The single-write path. Id order says 12 and 13 are the newest, but
+        // 10 is the other half of the champion in hand, so 10 survives its
+        // newer stranger and 12 goes. (Four pages now: the trio cap keeps the
+        // written page, its sibling, and one stranger.)
         var pages = new[]
         {
             Page(10, "u.gg Viktor"),
             Page(11, "Coachless Viktor"),
             Page(12, "u.gg Jhin (ADC)"),
+            Page(13, "u.gg Lux (Mid)"),
         };
 
         var doomed = RuneApplyService.PagesToPrune(pages, keepId: 11);
@@ -322,11 +328,13 @@ public sealed class RunePagePruneTests
     [Fact]
     public void A_batch_never_keeps_more_than_the_cap_even_with_stale_siblings()
     {
-        // Three pages for the same champion (a roleless title left over from an
-        // earlier run). Both halves just written fill the cap, so the stale one
-        // is still pruned -- sparing siblings is not a licence to accumulate.
+        // Four pages for the same champion (roleless titles left over from
+        // earlier runs). Both halves just written fill two of the three
+        // slots, so one stale sibling survives and the other is still pruned
+        // -- sparing siblings is not a licence to accumulate.
         var pages = new[]
         {
+            Page(8, "Coachless Viktor"),
             Page(9, "u.gg Viktor"),
             Page(10, "u.gg Viktor (Mid)"),
             Page(11, "Coachless Viktor (Mid)"),
@@ -335,7 +343,7 @@ public sealed class RunePagePruneTests
         var doomed = RuneApplyService.PagesToPruneAfterBatch(
             pages, [10, 11], ["u.gg Viktor (Mid)", "Coachless Viktor (Mid)"]);
 
-        Assert.Equal([9], doomed);
+        Assert.Equal([8], doomed);
     }
 
     [Fact]

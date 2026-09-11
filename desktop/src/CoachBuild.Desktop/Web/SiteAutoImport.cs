@@ -100,8 +100,9 @@ public sealed record CachedAutoImportSet(
 
 /// <summary>
 /// The coordinator's committed memory: the champion+role last acted on, the
-/// per-site URL last attempted for it, and the per-site item set last
-/// written. Advanced only by <see cref="AutoImportCoordinator.RecordCompleted"/>
+/// per-site URL last attempted for it, the per-site item set last
+/// written, and the Pro item set last written (2.4.0). Advanced only by <see
+/// cref="AutoImportCoordinator.RecordCompleted"/>
 /// after a run finishes — evaluation itself is side-effect-free, so a tick
 /// dropped to single-flight loses no trigger.
 /// </summary>
@@ -109,7 +110,8 @@ public sealed record AutoImportState(
     int? ChampionId,
     int? RoleId,
     IReadOnlyDictionary<CompanionTab, string> DoneUrls,
-    IReadOnlyDictionary<CompanionTab, CachedAutoImportSet> CachedSets)
+    IReadOnlyDictionary<CompanionTab, CachedAutoImportSet> CachedSets,
+    CachedAutoImportSet? ProSet = null)
 {
     public static AutoImportState Initial { get; } = new(
         null, null,
@@ -296,15 +298,18 @@ public static class AutoImportCoordinator
 
     /// <summary>
     /// Commits a finished run: advances the key, records each attempted URL
-    /// (success or quiet failure — both re-arm only on change), and caches
-    /// each written item set for later single-site batches.
+    /// (success or quiet failure — both re-arm only on change), caches
+    /// each written item set for later single-site batches, and (2.4.0)
+    /// caches the Pro set the same way so a later single-site refresh still
+    /// carries it instead of evicting it from the client.
     /// </summary>
     public static AutoImportState RecordCompleted(
         AutoImportState state,
         int championId,
         int? roleId,
         string championName,
-        IReadOnlyList<AutoImportOutcome> outcomes)
+        IReadOnlyList<AutoImportOutcome> outcomes,
+        SiteImportPayload? proPayload = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(outcomes);
@@ -325,7 +330,12 @@ public static class AutoImportCoordinator
                     payload.Source, payload.ChampionSlug, payload.Role,
                     payload.ItemBlocks, championId, championName);
         }
-        return new AutoImportState(championId, roleId, done, cached);
+        CachedAutoImportSet? pro = keyChanged ? null : state.ProSet;
+        if (proPayload is not null && proPayload.ItemBlocks.Count > 0)
+            pro = new CachedAutoImportSet(
+                proPayload.Source, proPayload.ChampionSlug, proPayload.Role,
+                proPayload.ItemBlocks, championId, championName);
+        return new AutoImportState(championId, roleId, done, cached, pro);
     }
 
     /// <summary>
@@ -333,23 +343,28 @@ public static class AutoImportCoordinator
     /// cached sets of the same champion for sites with no fresh payload, so
     /// a single-site refresh (rank filter) does not evict the other site's
     /// set from the client. Fresh wins per site; entries for other champions
-    /// never ride along.
+    /// never ride along. (2.4.0: the cached Pro set rides the same way —
+    /// Pro has no refresh trigger of its own, so without this a later
+    /// single-site refresh would drop its set.)
     /// </summary>
     public static IReadOnlyList<SiteImportItemsContribution> BuildWriteBatch(
         IReadOnlyList<SiteImportPayload> fresh,
         IReadOnlyDictionary<CompanionTab, CachedAutoImportSet> cached,
         int championId,
-        string championName)
+        string championName,
+        CachedAutoImportSet? proCached = null)
     {
         var contributions = new List<SiteImportItemsContribution>();
         var freshSites = new HashSet<CompanionTab>();
+        var hasFreshPro = false;
         if (fresh is not null)
         {
             foreach (var payload in fresh)
             {
                 if (payload is null || payload.ItemBlocks.Count == 0) continue;
                 contributions.Add(new SiteImportItemsContribution(payload, championName, championId));
-                freshSites.Add(TabForSource(payload.Source));
+                if (payload.Source == SiteImportSource.Pro) hasFreshPro = true;
+                else if (TabForSource(payload.Source) is { } tab) freshSites.Add(tab);
             }
         }
         if (cached is not null)
@@ -363,6 +378,13 @@ public static class AutoImportCoordinator
                     entry.Source, entry.ChampionSlug, entry.Role, null!, entry.ItemBlocks);
                 contributions.Add(new SiteImportItemsContribution(payload, entry.ChampionName, entry.ChampionId));
             }
+        }
+        if (!hasFreshPro && proCached is not null &&
+            proCached.ChampionId == championId && proCached.ItemBlocks.Count > 0)
+        {
+            var payload = new SiteImportPayload(
+                proCached.Source, proCached.ChampionSlug, proCached.Role, null!, proCached.ItemBlocks);
+            contributions.Add(new SiteImportItemsContribution(payload, proCached.ChampionName, proCached.ChampionId));
         }
         return contributions;
     }
@@ -454,10 +476,16 @@ public static class AutoImportCoordinator
         return !string.IsNullOrEmpty(left) && string.Equals(left, right, StringComparison.Ordinal);
     }
 
-    public static CompanionTab TabForSource(SiteImportSource source) => source switch
+    /// <summary>
+    /// The tab a source's worker fetch runs on. Pro has none — it fetches
+    /// over plain HttpClient, never through a WebView — so it answers null
+    /// and is carried outside the tab-keyed structures.
+    /// </summary>
+    public static CompanionTab? TabForSource(SiteImportSource source) => source switch
     {
         SiteImportSource.Coachless => CompanionTab.Coachless,
-        _ => CompanionTab.UGg,
+        SiteImportSource.UGg => CompanionTab.UGg,
+        _ => null,
     };
 
     /// <summary>
@@ -619,6 +647,7 @@ public sealed class SiteAutoImportService
     private readonly ISiteAutoImportExecutor _executor;
     private readonly ItemSetApplyService _items;
     private readonly RuneApplyService? _runes;
+    private readonly IProBuildsClient? _pro;
     private readonly IChampionDirectory _champions;
     private readonly ISiteAutoImportSink _sink;
     private AutoImportState _state = AutoImportState.Initial;
@@ -697,18 +726,29 @@ public sealed class SiteAutoImportService
     /// keeps the pre-2.1.0 items-only behaviour: the runes leg is skipped
     /// entirely rather than half-run.
     /// </param>
+    /// <param name="pro">
+    /// The probuildstats client for the third "Pro" source (2.4.0). Null
+    /// keeps the two-source behaviour exactly: no Pro fetch, no Pro page, no
+    /// Pro set. When present the Pro fetch starts at the top of the run (and
+    /// in the hover prefetch) over plain HttpClient — never through a worker
+    /// — and its page joins the staged rune batch by priority (u.gg,
+    /// Coachless, Pro) while its item set rides the same batched item-set
+    /// write as the other two.
+    /// </param>
     public SiteAutoImportService(
         ISiteAutoImportExecutor executor,
         ItemSetApplyService items,
         IChampionDirectory champions,
         ISiteAutoImportSink sink,
-        RuneApplyService? runes = null)
+        RuneApplyService? runes = null,
+        IProBuildsClient? pro = null)
     {
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _items = items ?? throw new ArgumentNullException(nameof(items));
         _champions = champions ?? throw new ArgumentNullException(nameof(champions));
         _sink = sink ?? throw new ArgumentNullException(nameof(sink));
         _runes = runes;
+        _pro = pro;
     }
 
     /// <summary>The committed debounce state, for tests.</summary>
@@ -938,7 +978,15 @@ public sealed class SiteAutoImportService
             !(input.VisibleTab == CompanionTab.Coachless &&
                 SiteNavigationPolicy.IsAlreadyThere(input.VisibleUrl, coachlessCandidate)))
             coachlessItemsUrl = coachlessCandidate;
-        if (uggUrl is null && runesUrl is null && coachlessItemsUrl is null)
+        // The Pro prefetch (2.4.0): same key rules as the worker prefetches
+        // (champion+role+url, first hover tick only), but over HttpClient, so
+        // it never touches a worker core and needs no drain before it.
+        string? proSlug = null;
+        if (_pro is not null &&
+            ChampionNameKey.Normalize(input.ChampionKey) is { Length: > 0 } slug &&
+            ProBuildsClient.IsValidSlug(slug))
+            proSlug = slug;
+        if (uggUrl is null && runesUrl is null && coachlessItemsUrl is null && proSlug is null)
         {
             AbandonPrefetchForIdle();
             return;
@@ -985,6 +1033,7 @@ public sealed class SiteAutoImportService
             UggUrl = uggUrl,
             RunesUrl = runesUrl,
             CoachlessItemsUrl = coachlessItemsUrl,
+            ProSlug = proSlug,
             Cts = cts,
         };
         var prefetchCt = cts.Token;
@@ -999,6 +1048,8 @@ public sealed class SiteAutoImportService
         if (coachlessItemsUrl is not null)
             group.CoachlessItemsTask = FetchCoachlessItemsPrefetchAsync(
                 coachlessItemsUrl, snapshot, input.RoleId, prefetchCt, predecessor);
+        if (proSlug is not null)
+            group.ProTask = FetchProPrefetchAsync(proSlug, input.RoleId, prefetchCt);
         lock (_prefetchLock)
         {
             // Single-flight ticks cannot race each other here; the explicit
@@ -1045,10 +1096,11 @@ public sealed class SiteAutoImportService
     {
         return Task.Run(async () =>
         {
-            var pending = new List<Task>(3);
+            var pending = new List<Task>(4);
             if (old.UggTask is not null) pending.Add(old.UggTask);
             if (old.RunesTask is not null) pending.Add(old.RunesTask);
             if (old.CoachlessItemsTask is not null) pending.Add(old.CoachlessItemsTask);
+            if (old.ProTask is not null) pending.Add(old.ProTask);
             if (pending.Count > 0)
             {
                 try
@@ -1146,6 +1198,33 @@ public sealed class SiteAutoImportService
         }
     }
 
+    /// <summary>
+    /// The prefetched Pro fetch (2.4.0). No predecessor drain: HttpClient
+    /// shares no worker core, so there is nothing to wait out — the whole
+    /// point is that this overlaps the worker fetches. Cancellation still
+    /// propagates (a hover move, champ-select end); any other failure is
+    /// captured for the resolver's single fail-soft line.
+    /// </summary>
+    private async Task<ProBuildsFetch> FetchProPrefetchAsync(
+        string slug,
+        int? roleId,
+        CancellationToken prefetchCt)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            return await _pro!.FetchAsync(slug, roleId, prefetchCt).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            return new ProBuildsFetch(null, null, error.Message, false, clock.ElapsedMilliseconds);
+        }
+    }
+
     private async Task<CoachlessRunesRaw> FetchRunesPrefetchAsync(
         Uri url,
         AutoImportInput snapshot,
@@ -1186,10 +1265,18 @@ public sealed class SiteAutoImportService
         public Uri? UggUrl;
         public Uri? RunesUrl;
         public Uri? CoachlessItemsUrl;
+        /// <summary>The probuildstats slug the Pro prefetch fetches (2.4.0).</summary>
+        public string? ProSlug;
         public required CancellationTokenSource Cts;
         public Task<PrefetchFetchResult>? UggTask;
         public Task<CoachlessRunesRaw>? RunesTask;
         public Task<PrefetchFetchResult>? CoachlessItemsTask;
+        /// <summary>
+        /// The prefetched Pro fetch (2.4.0): plain HttpClient, so it shares no
+        /// worker core and needs no predecessor drain — but it is keyed,
+        /// cancelled and discarded exactly like the worker prefetches.
+        /// </summary>
+        public Task<ProBuildsFetch>? ProTask;
 
         public string DisplayName
         {
@@ -1225,6 +1312,14 @@ public sealed class SiteAutoImportService
     /// <paramref name="predecessor"/> is the drain of an abandoned prefetch
     /// for ANOTHER champion: awaited before any navigation so the run never
     /// navigates a worker core the stale prefetch is still on.</para>
+    ///
+    /// <para>2.4.0: the Pro flight. The probuildstats fetch starts at the top
+    /// of the run alongside the Coachless runes flight, over HttpClient on no
+    /// worker core, and is awaited where the pair is written — joining the
+    /// same staged batch by priority (u.gg, Coachless, Pro) while its item
+    /// set rides the same batched item-set write. A held Pro prefetch is
+    /// consumed the same way. Pro failing never blocks the worker writes
+    /// beyond its own await and always lands as one fail-soft line.</para>
     /// </summary>
     private async Task RunFetchesAsync(
         List<AutoImportSiteTarget> fetch,
@@ -1260,6 +1355,7 @@ public sealed class SiteAutoImportService
             await QuietlyAsync(consumed.UggTask).ConfigureAwait(false);
             await QuietlyAsync(consumed.RunesTask).ConfigureAwait(false);
             await QuietlyAsync(consumed.CoachlessItemsTask).ConfigureAwait(false);
+            await QuietlyAsync(consumed.ProTask).ConfigureAwait(false);
         }
     }
 
@@ -1327,6 +1423,28 @@ public sealed class SiteAutoImportService
         else if (_runes is not null &&
             SiteDeepLink.CoachlessRunesUrl(input.ChampionKey, input.RoleId) is { } speculativeUrl)
             runesFlight = StartCoachlessRunesFlight(speculativeUrl, input, input.RoleId, cancellationToken);
+        // The Pro flight (2.4.0). Started at the top of the run ALONGSIDE the
+        // Coachless runes flight, over HttpClient on no worker core, so it
+        // overlaps the worker fetches instead of following them. A held
+        // prefetch for this champion+role IS the flight. The request carries
+        // the lobby role when known; a role-less lobby fetches with no role
+        // and the resolver re-picks from the returned rows for the role u.gg
+        // discovers — no second request either way.
+        ProFlight? proFlight = null;
+        if (_pro is not null &&
+            ChampionNameKey.Normalize(input.ChampionKey) is { Length: > 0 } proSlug &&
+            ProBuildsClient.IsValidSlug(proSlug))
+        {
+            if (consumed?.ProTask is not null)
+            {
+                proFlight = new ProFlight(proSlug, consumed.ProTask);
+                prefetchHit = true;
+            }
+            else
+            {
+                proFlight = StartProFlight(proSlug, input.RoleId, cancellationToken);
+            }
+        }
         var hadWritable = false;
         SiteImportPayload? uggRunesPayload = null;
         ApplyRunesRequest? uggRuneRequest = null;
@@ -1336,7 +1454,7 @@ public sealed class SiteAutoImportService
         // logs a duplicate "u.gg X already matches" for the same page.
         var runeReported = new HashSet<string>(StringComparer.Ordinal);
         var runeCapacityLogged = false;
-        long uggMs = -1, coachlessMs = -1, firstRuneMs = -1, bothRuneMs = -1;
+        long uggMs = -1, coachlessMs = -1, proMs = -1, firstRuneMs = -1, bothRuneMs = -1;
         var runesRefetched = false;
         var effectiveRoleId = input.RoleId;
         var assignedRole = SiteDeepLink.RoleToken(input.RoleId);
@@ -1452,7 +1570,7 @@ public sealed class SiteAutoImportService
             // The extractor's own stage/slot notes, BEFORE the verdict line, so
             // "yielded no item build" is never again a bare absence with no
             // account of where the read stopped (field log 2026-09-08).
-            LogPayloadNotes(target.Site, payload);
+            LogPayloadNotes(CompanionTabs.LabelFor(target.Site), payload);
             if (payload.Source == SiteImportSource.UGg && payload.Runes is not null)
                 uggRunesPayload = payload;
             if (effectiveRoleId is null)
@@ -1475,7 +1593,7 @@ public sealed class SiteAutoImportService
                 }
                 else
                 {
-                    LogDroppedRuneHalf(CompanionTab.UGg, uggRunesPayload);
+                    LogDroppedRuneHalf(CompanionTabs.LabelFor(CompanionTab.UGg), uggRunesPayload);
                 }
             }
             if (payload.ItemBlocks.Count == 0)
@@ -1499,6 +1617,10 @@ public sealed class SiteAutoImportService
             // flushed, resolve the flight and write the pair. The u.gg half
             // is Unchanged here — no PUT — and its already-reported line is
             // suppressed, so the run says it once.
+            // 2.4.0: the Pro flight resolves here too and joins the same
+            // batch by priority (u.gg, Coachless, Pro). A Pro that yields
+            // nothing leaves the staged pages standing: no batch at all for
+            // it, just the one fail-soft line, and its items never flush.
             if (uggStaged && !bothStaged && _runes is not null &&
                 target.Site == CompanionTab.UGg && runesFlight is not null)
             {
@@ -1507,26 +1629,35 @@ public sealed class SiteAutoImportService
                     input, effectiveRoleId, runesFlight, cancellationToken).ConfigureAwait(false);
                 coachlessMs = resolved.ElapsedMs;
                 runesRefetched |= resolved.Refetched;
-                ApplyRunesRequest? coachlessRequest = null;
-                if (resolved.Payload is not null)
+                SiteImportPayload? proPayload = null;
+                if (proFlight is not null)
                 {
-                    if (TryBuildRuneRequest(
-                        resolved.Payload, input.ChampionName!, assignedRole, out var built))
-                        coachlessRequest = built;
-                    else
-                        LogDroppedRuneHalf(CompanionTab.Coachless, resolved.Payload);
+                    var proResolved = await ResolveProAsync(
+                        input, effectiveRoleId, proFlight, cancellationToken).ConfigureAwait(false);
+                    proMs = proResolved.ElapsedMs;
+                    proPayload = proResolved.Payload;
                 }
-                // A Coachless half that yielded nothing leaves the staged
-                // u.gg page standing: no second batch at all.
-                if (coachlessRequest is not null)
+                var second = new List<ApplyRunesRequest>(3);
+                if (uggRuneRequest is not null) second.Add(uggRuneRequest);
+                AddRuneRequest(
+                    CompanionTabs.LabelFor(CompanionTab.Coachless), resolved.Payload,
+                    input, assignedRole, second);
+                AddRuneRequest(
+                    SiteImportValidator.Label(SiteImportSource.Pro), proPayload,
+                    input, assignedRole, second);
+                // A run whose halves all yielded nothing writes no batch at
+                // all: the staged u.gg page (if any) already stands alone.
+                if (second.Count > (uggRuneRequest is not null ? 1 : 0))
                 {
-                    var second = new List<ApplyRunesRequest>(2);
-                    if (uggRuneRequest is not null) second.Add(uggRuneRequest);
-                    second.Add(coachlessRequest);
                     runeCapacityLogged = await ApplyRuneBatchAsync(
                         second, runeReported, runeCapacityLogged, cancellationToken)
                         .ConfigureAwait(false);
                     bothRuneMs = runClock.ElapsedMilliseconds;
+                }
+                if (proPayload is { ItemBlocks.Count: > 0 })
+                {
+                    hadWritable = true;
+                    await FlushProAsync(proPayload, input, cancellationToken).ConfigureAwait(false);
                 }
             }
         }
@@ -1559,10 +1690,18 @@ public sealed class SiteAutoImportService
                     input, effectiveRoleId, runesFlight, cancellationToken).ConfigureAwait(false);
                 coachlessMs = resolved.ElapsedMs;
                 runesRefetched |= resolved.Refetched;
-                var requests = new List<ApplyRunesRequest>(2);
-                AddRuneRequest(CompanionTab.UGg, uggRunesPayload, input, assignedRole, requests);
-                if (resolved.Payload is not null)
-                    AddRuneRequest(CompanionTab.Coachless, resolved.Payload, input, assignedRole, requests);
+                SiteImportPayload? proPayload = null;
+                if (proFlight is not null)
+                {
+                    var proResolved = await ResolveProAsync(
+                        input, effectiveRoleId, proFlight, cancellationToken).ConfigureAwait(false);
+                    proMs = proResolved.ElapsedMs;
+                    proPayload = proResolved.Payload;
+                }
+                var requests = new List<ApplyRunesRequest>(3);
+                AddRuneRequest(CompanionTabs.LabelFor(CompanionTab.UGg), uggRunesPayload, input, assignedRole, requests);
+                AddRuneRequest(CompanionTabs.LabelFor(CompanionTab.Coachless), resolved.Payload, input, assignedRole, requests);
+                AddRuneRequest(SiteImportValidator.Label(SiteImportSource.Pro), proPayload, input, assignedRole, requests);
                 if (requests.Count > 0)
                 {
                     runeCapacityLogged = await ApplyRuneBatchAsync(
@@ -1570,6 +1709,27 @@ public sealed class SiteAutoImportService
                         .ConfigureAwait(false);
                     bothRuneMs = runClock.ElapsedMilliseconds;
                 }
+                if (proPayload is { ItemBlocks.Count: > 0 })
+                {
+                    hadWritable = true;
+                    await FlushProAsync(proPayload, input, cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        if (_runes is null && proFlight is not null)
+        {
+            // The items-only service: neither staged batch above runs, so the
+            // Pro items flush here (batched with the cached worker sets, like
+            // every other flush). The Pro runes half is dropped exactly as
+            // the worker rune halves are without a rune service.
+            var proResolved = await ResolveProAsync(
+                input, effectiveRoleId, proFlight, cancellationToken).ConfigureAwait(false);
+            proMs = proResolved.ElapsedMs;
+            if (proResolved.Payload is { ItemBlocks.Count: > 0 })
+            {
+                hadWritable = true;
+                await FlushProAsync(proResolved.Payload, input, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -1584,7 +1744,8 @@ public sealed class SiteAutoImportService
                 $"auto-import: timing ugg={FormatMs(uggMs)} " +
                 $"coachless-runes={FormatMs(coachlessMs)} {marker} " +
                 $"first-rune-page={FormatSec(firstRuneMs)} both-rune-pages={FormatSec(bothRuneMs)} " +
-                $"prefetch-hit={(prefetchHit ? "true" : "false")}");
+                $"prefetch-hit={(prefetchHit ? "true" : "false")}" +
+                (proFlight is null ? string.Empty : $" pro={FormatMs(proMs)}"));
         }
     }
 
@@ -1622,7 +1783,48 @@ public sealed class SiteAutoImportService
         if (input.ChampionId is not > 0 || string.IsNullOrWhiteSpace(input.ChampionName))
             return;
         var batch = AutoImportCoordinator.BuildWriteBatch(
-            [payload], _state.CachedSets, input.ChampionId.Value, input.ChampionName);
+            [payload], _state.CachedSets, input.ChampionId.Value, input.ChampionName, _state.ProSet);
+        await WriteItemBatchAsync(batch, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The Pro item-set flush (2.4.0): the Pro payload batched with the
+    /// cached worker sets, through the same write path and the same status
+    /// lines — which is what keeps the three per-site titles coexisting in
+    /// the client. Commits the Pro outcome so later single-site refreshes
+    /// carry it instead of evicting it.
+    /// </summary>
+    private async Task FlushProAsync(
+        SiteImportPayload payload,
+        AutoImportInput input,
+        CancellationToken cancellationToken)
+    {
+        if (input.ChampionId is not > 0 || string.IsNullOrWhiteSpace(input.ChampionName))
+            return;
+        var batch = AutoImportCoordinator.BuildWriteBatch(
+            [payload], _state.CachedSets, input.ChampionId.Value, input.ChampionName, _state.ProSet);
+        if (batch.Count == 0) return;
+        await WriteItemBatchAsync(batch, cancellationToken).ConfigureAwait(false);
+        CommitProOutcome(input, payload);
+    }
+
+    /// <summary>
+    /// Commits the Pro outcome to the debounce state: caches the written Pro
+    /// set for later single-site batches. The worker outcomes commit at their
+    /// own call sites; this is the Pro equivalent.
+    /// </summary>
+    private void CommitProOutcome(AutoImportInput input, SiteImportPayload payload)
+    {
+        if (input.ChampionId is not > 0) return;
+        _state = AutoImportCoordinator.RecordCompleted(
+            _state, input.ChampionId.Value, input.RoleId, input.ChampionName ?? string.Empty, [], payload);
+    }
+
+    /// <summary>The shared item-set write: one merged PUT, one line per contribution.</summary>
+    private async Task WriteItemBatchAsync(
+        IReadOnlyList<SiteImportItemsContribution> batch,
+        CancellationToken cancellationToken)
+    {
         if (batch.Count == 0) return;
         IReadOnlyList<SiteImportResult> results = [];
         try
@@ -1667,12 +1869,87 @@ public sealed class SiteAutoImportService
     private sealed record CoachlessRunesFlight(Uri Url, Task<CoachlessRunesRaw> Fetch);
 
     /// <summary>
+    /// The in-flight Pro fetch (2.4.0): the slug it was started with and its
+    /// answer. Started at the top of the run so it overlaps the worker
+    /// fetches on no core at all.
+    /// </summary>
+    private sealed record ProFlight(string Slug, Task<ProBuildsFetch> Fetch);
+
+    /// <summary>
     /// The flight's raw answer: the extractor JSON, or the fetch error when
     /// the fetch itself threw (fail-soft, logged by the resolver with the
     /// same wording as a direct fetch), plus how long the fetch took.
     /// Cancellation is never captured here — it propagates.
     /// </summary>
     private sealed record CoachlessRunesRaw(string? Response, string? Error, long ElapsedMs);
+
+    /// <summary>
+    /// Starts the Pro flight. Marks nothing for the worker teardown and
+    /// drains nothing: HttpClient touches no worker core, so there is no
+    /// Chromium tree to hand back and no navigation to wait out. The fault
+    /// is observed even on paths that never await, so a background failure
+    /// on a cancelled run stays observed.
+    /// </summary>
+    private ProFlight StartProFlight(
+        string slug,
+        int? roleId,
+        CancellationToken cancellationToken)
+    {
+        var flight = new ProFlight(
+            slug, _pro!.FetchAsync(slug, roleId, cancellationToken));
+        _ = flight.Fetch.ContinueWith(
+            task => _ = task.Exception,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+        return flight;
+    }
+
+    /// <summary>
+    /// Resolves the Pro flight to a usable payload (2.4.0). Re-picks from
+    /// the fetched rows for the EFFECTIVE role — the lobby role when known,
+    /// the role u.gg discovered when the lobby was role-less — so a
+    /// role-less fetch never needs a second request. Every failure, whatever
+    /// its kind, lands as the one fail-soft line and never touches the
+    /// worker writes.
+    /// </summary>
+    private async Task<(SiteImportPayload? Payload, long ElapsedMs)> ResolveProAsync(
+        AutoImportInput input,
+        int? effectiveRoleId,
+        ProFlight flight,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ProBuildsFetch fetched;
+        try
+        {
+            fetched = await flight.Fetch.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            _sink.LogInfo($"runes: Pro yielded no build (fetch failed: {error.Message})");
+            return (null, 0);
+        }
+        SiteImportPayload? payload = fetched.Payload;
+        var failure = fetched.Failure;
+        if (fetched.Rows is { Count: > 0 })
+            (payload, failure) = ProBuildsClient.BuildPayload(fetched.Rows, flight.Slug, effectiveRoleId);
+        if (payload is not null && !PayloadMatchesContext(payload, input))
+        {
+            _sink.LogInfo(
+                $"runes: Pro yielded \"{payload.ChampionSlug}\", not the selected champion -- ignored");
+            return (null, fetched.ElapsedMs);
+        }
+        if (payload is null)
+        {
+            _sink.LogInfo($"runes: Pro yielded no build ({failure ?? "no pro game matched"})");
+            return (null, fetched.ElapsedMs);
+        }
+        LogProPayloadNotes(payload);
+        return (payload, fetched.ElapsedMs);
+    }
 
     /// <summary>
     /// Starts the speculative Coachless runes flight. Marks the run as having
@@ -1746,7 +2023,7 @@ public sealed class SiteAutoImportService
         if (speculativeOk == CoachlessRunesVerdict.Ok &&
             SiteDeepLink.RoleIdFromToken(speculative!.Role) == effectiveRoleId)
         {
-            LogPayloadNotes(CompanionTab.Coachless, speculative);
+            LogPayloadNotes(CompanionTabs.LabelFor(CompanionTab.Coachless), speculative);
             return (speculative, elapsed, false);
         }
         var aligned = SiteDeepLink.CoachlessRunesUrl(input.ChampionKey, effectiveRoleId);
@@ -1760,7 +2037,7 @@ public sealed class SiteAutoImportService
             // rendered differently than asked is still the best answer there
             // is. Both already logged their line.
             if (speculative is not null)
-                LogPayloadNotes(CompanionTab.Coachless, speculative);
+                LogPayloadNotes(CompanionTabs.LabelFor(CompanionTab.Coachless), speculative);
             return (speculative, elapsed, false);
         }
         var (payload, alignedMs) = await FetchAlignedCoachlessRunesAsync(
@@ -1822,7 +2099,7 @@ public sealed class SiteAutoImportService
             if (SiteImportPayload.TryParse(raw, out var fetched, out var failure) &&
                 fetched is not null && PayloadMatchesContext(fetched, input))
             {
-                LogPayloadNotes(CompanionTab.Coachless, fetched);
+                LogPayloadNotes(CompanionTabs.LabelFor(CompanionTab.Coachless), fetched);
                 return (fetched, clock.ElapsedMilliseconds);
             }
             else if (fetched is not null)
@@ -1877,7 +2154,7 @@ public sealed class SiteAutoImportService
                     uggPayload = fetched;
                     if (effectiveRoleId is null)
                         effectiveRoleId = SiteDeepLink.RoleIdFromToken(fetched.Role);
-                    LogPayloadNotes(CompanionTab.UGg, fetched);
+                    LogPayloadNotes(CompanionTabs.LabelFor(CompanionTab.UGg), fetched);
                 }
                 else if (fetched is not null)
                 {
@@ -1911,7 +2188,7 @@ public sealed class SiteAutoImportService
     /// two-page one that got pruned.
     /// </summary>
     private void AddRuneRequest(
-        CompanionTab site,
+        string label,
         SiteImportPayload? payload,
         AutoImportInput input,
         string? assignedRole,
@@ -1923,12 +2200,12 @@ public sealed class SiteAutoImportService
             requests.Add(request);
             return;
         }
-        LogDroppedRuneHalf(site, payload);
+        LogDroppedRuneHalf(label, payload);
     }
 
-    private void LogDroppedRuneHalf(CompanionTab site, SiteImportPayload payload) =>
+    private void LogDroppedRuneHalf(string label, SiteImportPayload payload) =>
         _sink.LogInfo(
-            $"runes: {CompanionTabs.LabelFor(site)} yielded a page but no rune build to write " +
+            $"runes: {label} yielded a page but no rune build to write " +
             $"({SiteImportValidator.ValidateRunes(payload.Runes) ?? "the request failed payload validation"})");
 
     /// <summary>
@@ -1988,7 +2265,12 @@ public sealed class SiteAutoImportService
             }
         }
         if (capacityLogged) return;
+        var written = result.Pages.Where(page => page.Result.Ok).ToArray();
+        var skipped = result.Pages
+            .Where(page => page.Result is ApplyRunesFailure { Reason: "slots-full" })
+            .ToArray();
         if (result.OnlyOneEditableSlot &&
+            result.Pages.Count == 2 &&
             result.Pages.FirstOrDefault()?.Result.Ok == true)
         {
             const string limited = "runes: only one editable page slot -- wrote u.gg only";
@@ -1996,8 +2278,22 @@ public sealed class SiteAutoImportService
             _sink.StatusNote(limited);
             capacityLogged = true;
         }
-        else if (result.Pages.Count > 0 && result.Pages.All(page =>
-                     page.Result is ApplyRunesFailure { Reason: "slots-full" }))
+        else if (written.Length > 0 && skipped.Length > 0)
+        {
+            // The trio version of the line above (2.4.0): with three sources
+            // requested and fewer slots, the lower-priority pages are the
+            // ones left out, and the line names which wrote and which did
+            // not — e.g. "wrote u.gg and Coachless, skipped Pro". Kept exact
+            // for the legacy 1-slot/2-requested case above so its wording
+            // (and its test) stands.
+            var slotWord = written.Length == 1 ? "slot" : "slots";
+            var partial = $"runes: {written.Length} editable page {slotWord} -- " +
+                $"wrote {JoinRuneSources(written)}, skipped {JoinRuneSources(skipped)}";
+            _sink.LogInfo(partial);
+            _sink.StatusNote(partial);
+            capacityLogged = true;
+        }
+        else if (result.Pages.Count > 0 && skipped.Length == result.Pages.Count)
         {
             const string full = "runes: no editable page slots -- wrote no rune pages";
             _sink.LogInfo(full);
@@ -2005,6 +2301,28 @@ public sealed class SiteAutoImportService
             capacityLogged = true;
         }
     }
+
+    /// <summary>
+    /// Short source names for the capacity line ("u.gg and Coachless", not
+    /// full page titles). Falls back to the full name for a page no source
+    /// prefix explains.
+    /// </summary>
+    private static string JoinRuneSources(IReadOnlyList<AutoRunePageWrite> pages)
+    {
+        var names = pages.Select(page => ShortRuneSource(page.Name)).ToArray();
+        return names.Length switch
+        {
+            1 => names[0],
+            2 => $"{names[0]} and {names[1]}",
+            _ => string.Join(", ", names[..^1]) + $" and {names[^1]}",
+        };
+    }
+
+    private static string ShortRuneSource(string? name) =>
+        name is not null && name.StartsWith(RuneApplyService.UGgOwnedPagePrefix, StringComparison.Ordinal) ? "u.gg" :
+        name is not null && name.StartsWith(RuneApplyService.CoachlessOwnedPagePrefix, StringComparison.Ordinal) ? "Coachless" :
+        name is not null && name.StartsWith(RuneApplyService.ProOwnedPagePrefix, StringComparison.Ordinal) ? "Pro" :
+        name ?? "a rune page";
 
     private static bool TryBuildRuneRequest(
         SiteImportPayload? payload,
@@ -2026,15 +2344,18 @@ public sealed class SiteAutoImportService
     /// next field pass, and a slot the page could not fill is not something to
     /// interrupt the user about.
     /// </summary>
-    private void LogPayloadNotes(CompanionTab site, SiteImportPayload payload)
+    private void LogPayloadNotes(string label, SiteImportPayload payload)
     {
         if (payload.Notes.Count == 0) return;
-        var label = CompanionTabs.LabelFor(site);
         foreach (var note in payload.Notes)
         {
             _sink.LogInfo($"auto-import: {label} {note}");
         }
     }
+
+    /// <summary>The Pro payload's own pick note, under the Pro label (2.4.0).</summary>
+    private void LogProPayloadNotes(SiteImportPayload payload) =>
+        LogPayloadNotes(SiteImportValidator.Label(SiteImportSource.Pro), payload);
 
     private async Task<string?> FetchTargetAsync(AutoImportSiteTarget target, CancellationToken cancellationToken)
     {
