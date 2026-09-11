@@ -1225,6 +1225,55 @@ public sealed class SiteAutoImportService
         PrefetchGroup? consumed = null,
         Task? predecessor = null)
     {
+        if (consumed is null)
+        {
+            await RunFetchesCoreAsync(fetch, input, cancellationToken, null, predecessor).ConfigureAwait(false);
+            return;
+        }
+        // The consumed prefetch runs on its own token: cancel it with the run,
+        // and never return (which releases the workers) while one of its
+        // fetches is still navigating a worker core.
+        using var link = cancellationToken.Register(static state =>
+        {
+            try
+            {
+                ((CancellationTokenSource)state!).Cancel();
+            }
+            catch
+            {
+            }
+        }, consumed.Cts);
+        try
+        {
+            await RunFetchesCoreAsync(fetch, input, cancellationToken, consumed, predecessor).ConfigureAwait(false);
+        }
+        finally
+        {
+            await QuietlyAsync(consumed.UggTask).ConfigureAwait(false);
+            await QuietlyAsync(consumed.RunesTask).ConfigureAwait(false);
+            await QuietlyAsync(consumed.CoachlessItemsTask).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task QuietlyAsync(Task? task)
+    {
+        if (task is null) return;
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task RunFetchesCoreAsync(
+        List<AutoImportSiteTarget> fetch,
+        AutoImportInput input,
+        CancellationToken cancellationToken,
+        PrefetchGroup? consumed,
+        Task? predecessor)
+    {
         var runClock = Stopwatch.StartNew();
         // A run for another champion never navigates a core the abandoned
         // prefetch is still on. The drain never throws (cleanup swallows), so
@@ -1344,6 +1393,12 @@ public sealed class SiteAutoImportService
             }
             else
             {
+                // A prefetch this run did not consume (an in-place read, a
+                // different url) may still be on this site's worker core.
+                if (target.Site == CompanionTab.UGg)
+                    await QuietlyAsync(consumed?.UggTask).ConfigureAwait(false);
+                else if (target.Site == CompanionTab.Coachless)
+                    await QuietlyAsync(consumed?.CoachlessItemsTask).ConfigureAwait(false);
                 raw = await FetchTargetAsync(target, cancellationToken).ConfigureAwait(false);
             }
             if (target.Site == CompanionTab.UGg && uggMs < 0)
@@ -1486,6 +1541,7 @@ public sealed class SiteAutoImportService
                 runesFlight = StartCoachlessRunesFlight(lateUrl, input, effectiveRoleId, cancellationToken);
             if (runesFlight is not null)
             {
+                await QuietlyAsync(consumed?.UggTask).ConfigureAwait(false);
                 var leg = await FetchUggRunesLegAsync(
                     input, uggRunesPayload, effectiveRoleId, cancellationToken).ConfigureAwait(false);
                 uggRunesPayload = leg.Payload;

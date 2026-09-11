@@ -1285,6 +1285,44 @@ public sealed class SiteAutoImportTests
     }
 
     /// <summary>
+    /// A prefetch the settled run does NOT consume (the user opened the same
+    /// u.gg page, so the run reads it in place) is still on the u.gg worker
+    /// core. The run must not return, and so release the workers, until that
+    /// fetch has finished.
+    /// </summary>
+    [Fact]
+    public async Task Unconsumed_prefetch_is_waited_out_before_workers_are_released()
+    {
+        var api = new StubLcu();
+        var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var executor = new FakeExecutor
+        {
+            AsyncWorker = (site, _) => site == CompanionTab.UGg
+                ? gate.Task
+                : Task.FromResult<string?>(AhriCoachlessJson),
+            Visible = _ => AhriUggRunesJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(HoveredAhri(0));
+        await WaitForCallsAsync(executor, 2);
+
+        var settle = service.OnSnapshotAsync(HoveredAhri(
+            AutoImportCoordinator.HoverSettle.TotalSeconds + 0.75,
+            CompanionTab.UGg,
+            AhriUggDeepLink.ToString()));
+        await Task.Delay(200);
+        Assert.False(settle.IsCompleted, "the run returned while the prefetch was still on the u.gg core");
+        Assert.Equal(0, executor.ReleaseCount);
+
+        gate.SetResult(AhriUggRunesJson);
+        await settle.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(executor.ReleaseCount >= 1);
+    }
+
+    /// <summary>
     /// (b) Hover Ahri, then hover Jhin before the settle: the Ahri prefetch is
     /// cancelled (its slow fetch is waited out before Jhin navigates the same
     /// core), nothing is written for Ahri, and Jhin is fetched and written
