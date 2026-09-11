@@ -9,6 +9,12 @@
   timing line for the next field check.
 - Role-less lobbies reuse the speculative Coachless runes fetch when its role
   matches the one u.gg discovers, and refetch with the aligned role otherwise.
+- Hovering a champion now starts its u.gg and Coachless runes fetches at once
+  instead of waiting out the 2.5 s hover settle: the settle still guards every
+  write, but the settled or locked-in run consumes the in-flight prefetch
+  instead of fetching again. Moving to another champion cancels the stale
+  prefetch (workers released, payloads never reused across champ selects),
+  and each run's timing line reports whether the prefetch was hit.
 
 ## Desktop 2.3.4 (2026-09-10)
 

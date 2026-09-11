@@ -638,6 +638,26 @@ public sealed class SiteAutoImportService
     /// the start of each flight; only ever touched inside the single flight.
     /// </summary>
     private bool _fetchedThisRun;
+    /// <summary>
+    /// The hover prefetch (2.3.5 part 2): worker fetches started on the FIRST
+    /// hover tick, held in memory keyed by champion+role+site+url, consumed by
+    /// the settled/locked run instead of fetching again. Guarded by
+    /// <see cref="_prefetchLock"/> (the champ-select-end cancel races the
+    /// snapshot tick); only ever STARTED, CONSUMED or ABANDONED inside the
+    /// single flight, while the fetch tasks themselves never hold
+    /// <see cref="_active"/> so the 750 ms tick is never blocked. A prefetch
+    /// never writes to the LCU. Abandoned prefetches release workers, and the
+    /// whole group is discarded at champ-select end, never reused across selects.
+    /// </summary>
+    private readonly object _prefetchLock = new();
+    private PrefetchGroup? _prefetch;
+    /// <summary>
+    /// The drain of the last abandoned prefetch (fetch tasks + worker
+    /// release). New prefetches and fresh runs await it before navigating the
+    /// same worker core: u.gg and Coachless each have ONE core, so concurrent
+    /// navigations on one core are not allowed. Completed in the common case.
+    /// </summary>
+    private Task _prefetchDrain = Task.CompletedTask;
 
     /// <summary>
     /// How many consecutive disconnected evaluations must pass before the
@@ -690,6 +710,12 @@ public sealed class SiteAutoImportService
     /// <summary>The running hover observation, for tests.</summary>
     internal AutoImportHover? Hover => _hover;
 
+    /// <summary>Whether a hover prefetch is currently held, for tests.</summary>
+    internal bool HasPrefetch
+    {
+        get { lock (_prefetchLock) return _prefetch is not null; }
+    }
+
     /// <summary>True while a run holds the single flight, for tests and for the window's linger.</summary>
     internal bool IsRunning => Volatile.Read(ref _active) != 0;
 
@@ -736,11 +762,45 @@ public sealed class SiteAutoImportService
         }
     }
 
+    /// <summary>
+    /// Discards the held hover prefetch because champ select ended WITHOUT a
+    /// game (a dodge back to None/Lobby). Called alongside the window's
+    /// <c>CancelAutoImportForChampSelectEnd</c>: the in-flight run (if any) is
+    /// cancelled through its own token, and whatever the prefetch already
+    /// fetched is dropped — never written, never reused across champ selects.
+    /// Abandoned prefetches release workers once their fetches land, the same
+    /// way a finished run does. Thread-safe; a no-prefetch call is a no-op.
+    /// </summary>
+    public void CancelPrefetchForChampSelectEnd()
+    {
+        PrefetchGroup? old = null;
+        lock (_prefetchLock)
+        {
+            old = _prefetch;
+            _prefetch = null;
+            if (old is not null)
+            {
+                try
+                {
+                    old.Cts.Cancel();
+                }
+                catch
+                {
+                }
+                _prefetchDrain = CleanupAbandonedPrefetchAsync(old);
+            }
+        }
+        if (old is not null)
+            _sink.LogInfo($"auto-import: prefetch for {old.DisplayName} discarded (hover moved)");
+    }
+
     private async Task RunAsync(AutoImportInput input, CancellationToken cancellationToken)
     {
         if (input.LcuConnected) _disconnectedEvaluations = 0;
         else if (_disconnectedEvaluations < int.MaxValue) _disconnectedEvaluations++;
+        var previousHover = _hover;
         _hover = AutoImportCoordinator.TrackHover(_hover, input);
+        var isNewHover = _hover is not null && !ReferenceEquals(previousHover, _hover);
         var evaluation = AutoImportCoordinator.Evaluate(_state, input, _hover);
         var fetch = evaluation.Fetch.ToList();
         if (fetch.Count == 0)
@@ -753,7 +813,10 @@ public sealed class SiteAutoImportService
             if (await AliasVisibleCandidateAsync(input, cancellationToken).ConfigureAwait(false) is { } alias)
                 fetch.Add(alias);
             else
+            {
+                HandlePrefetchForIdleTick(input, _hover, isNewHover, cancellationToken);
                 return;
+            }
         }
         _lastSkipNote = null;
 
@@ -777,9 +840,44 @@ public sealed class SiteAutoImportService
         // The debounce state before this run: restored verbatim if the run
         // is cancelled, so a half-run never counts as attempted.
         var preRun = _state;
+        // The hover prefetch, if any: same champion+role is CONSUMED (its
+        // completed or in-flight tasks are awaited instead of fetching again);
+        // a different champion+role is ABANDONED (cancelled, and this run
+        // waits for its drain before navigating the same worker core).
+        PrefetchGroup? consumed = null;
+        Task? predecessor;
+        string? discardedDisplay = null;
+        lock (_prefetchLock)
+        {
+            if (_prefetch is not null && input.ChampionId is > 0)
+            {
+                if (_prefetch.ChampionId == input.ChampionId && _prefetch.RoleId == input.RoleId)
+                {
+                    consumed = _prefetch;
+                    _prefetch = null;
+                }
+                else
+                {
+                    var old = _prefetch;
+                    _prefetch = null;
+                    discardedDisplay = old.DisplayName;
+                    try
+                    {
+                        old.Cts.Cancel();
+                    }
+                    catch
+                    {
+                    }
+                    _prefetchDrain = CleanupAbandonedPrefetchAsync(old);
+                }
+            }
+            predecessor = _prefetchDrain;
+        }
+        if (discardedDisplay is not null)
+            _sink.LogInfo($"auto-import: prefetch for {discardedDisplay} discarded (hover moved)");
         try
         {
-            await RunFetchesAsync(fetch, input, cancellationToken).ConfigureAwait(false);
+            await RunFetchesAsync(fetch, input, cancellationToken, consumed, predecessor).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -787,6 +885,316 @@ public sealed class SiteAutoImportService
             throw;
         }
     }
+
+    /// <summary>
+    /// The idle-tick half of the hover prefetch: called only when NO run is
+    /// due (not settled, not locked, no visible refresh). Starts one prefetch
+    /// per site for a newly hovered champion+role (deep-link worker targets
+    /// only — never a visible-tab in-place read), holds an identical hover's
+    /// prefetch, and cancels a stale one when the hover moves. Quick and
+    /// non-blocking: the fetches run in the background and never hold
+    /// <see cref="_active"/>. A prefetch never writes to the LCU.
+    /// </summary>
+    private void HandlePrefetchForIdleTick(
+        AutoImportInput input,
+        AutoImportHover? hover,
+        bool isNewHover,
+        CancellationToken windowCt)
+    {
+        if (!input.LcuConnected || input.ChampionId is not > 0 ||
+            string.IsNullOrWhiteSpace(input.ChampionKey) ||
+            string.IsNullOrWhiteSpace(input.ChampionName) ||
+            input.Locked || hover is null)
+        {
+            AbandonPrefetchForIdle();
+            return;
+        }
+        if (AutoImportCoordinator.IsHoverSettled(hover, input))
+            return;
+        if (_state.ChampionId == input.ChampionId && _state.RoleId == input.RoleId)
+            return;
+        if (!isNewHover)
+            return;
+        Uri? uggUrl = null;
+        Uri? runesUrl = null;
+        Uri? coachlessItemsUrl = null;
+        if (SiteDeepLink.Build(CompanionTab.UGg, input.ChampionKey, input.RoleId) is { } uggCandidate &&
+            !(input.VisibleTab == CompanionTab.UGg &&
+                SiteNavigationPolicy.IsAlreadyThere(input.VisibleUrl, uggCandidate)))
+            uggUrl = uggCandidate;
+        if (_runes is not null)
+        {
+            runesUrl = SiteDeepLink.CoachlessRunesUrl(input.ChampionKey, input.RoleId);
+        }
+        else if (SiteDeepLink.Build(CompanionTab.Coachless, input.ChampionKey, input.RoleId) is { } coachlessCandidate &&
+            !(input.VisibleTab == CompanionTab.Coachless &&
+                SiteNavigationPolicy.IsAlreadyThere(input.VisibleUrl, coachlessCandidate)))
+            coachlessItemsUrl = coachlessCandidate;
+        if (uggUrl is null && runesUrl is null && coachlessItemsUrl is null)
+        {
+            AbandonPrefetchForIdle();
+            return;
+        }
+        Task predecessor;
+        string? discardedDisplay = null;
+        lock (_prefetchLock)
+        {
+            if (_prefetch is not null)
+            {
+                if (_prefetch.ChampionId == input.ChampionId && _prefetch.RoleId == input.RoleId)
+                    return;
+                var old = _prefetch;
+                _prefetch = null;
+                discardedDisplay = old.DisplayName;
+                try
+                {
+                    old.Cts.Cancel();
+                }
+                catch
+                {
+                }
+                _prefetchDrain = CleanupAbandonedPrefetchAsync(old);
+            }
+            predecessor = _prefetchDrain;
+        }
+        if (discardedDisplay is not null)
+            _sink.LogInfo($"auto-import: prefetch for {discardedDisplay} discarded (hover moved)");
+        CancellationTokenSource cts;
+        try
+        {
+            cts = CancellationTokenSource.CreateLinkedTokenSource(windowCt);
+        }
+        catch
+        {
+            cts = new CancellationTokenSource();
+        }
+        var group = new PrefetchGroup
+        {
+            ChampionId = input.ChampionId.Value,
+            RoleId = input.RoleId,
+            ChampionKey = input.ChampionKey!,
+            ChampionName = input.ChampionName!,
+            UggUrl = uggUrl,
+            RunesUrl = runesUrl,
+            CoachlessItemsUrl = coachlessItemsUrl,
+            Cts = cts,
+        };
+        var prefetchCt = cts.Token;
+        var snapshot = input;
+        // Runes first, then u.gg: the same start order as the settled run, so
+        // the fetch sequence reads identically with or without a prefetch.
+        if (runesUrl is not null)
+            group.RunesTask = FetchRunesPrefetchAsync(runesUrl, snapshot, input.RoleId, prefetchCt, predecessor);
+        if (uggUrl is not null)
+            group.UggTask = FetchUggPrefetchAsync(
+                uggUrl, snapshot, input.RoleId, prefetchCt, predecessor);
+        if (coachlessItemsUrl is not null)
+            group.CoachlessItemsTask = FetchCoachlessItemsPrefetchAsync(
+                coachlessItemsUrl, snapshot, input.RoleId, prefetchCt, predecessor);
+        lock (_prefetchLock)
+        {
+            // Single-flight ticks cannot race each other here; the explicit
+            // champ-select-end cancel can, but it only clears — a group
+            // created after its clear is for a tick that already passed the
+            // idle gate, and the next null tick discards it again.
+            _prefetch = group;
+        }
+        _sink.LogInfo($"auto-import: prefetching {group.DisplayName} on hover");
+    }
+
+    /// <summary>Abandons the held prefetch, if any, for an idle tick that needs none.</summary>
+    private void AbandonPrefetchForIdle()
+    {
+        PrefetchGroup? old = null;
+        lock (_prefetchLock)
+        {
+            old = _prefetch;
+            _prefetch = null;
+            if (old is not null)
+            {
+                try
+                {
+                    old.Cts.Cancel();
+                }
+                catch
+                {
+                }
+                _prefetchDrain = CleanupAbandonedPrefetchAsync(old);
+            }
+        }
+        if (old is not null)
+            _sink.LogInfo($"auto-import: prefetch for {old.DisplayName} discarded (hover moved)");
+    }
+
+    /// <summary>
+    /// Waits out an abandoned prefetch's fetches, then hands its Chromium
+    /// trees back — the same teardown a finished run gets, so an abandoned
+    /// hover cannot be the one that leaks. Never throws. The returned task is
+    /// the drain the next prefetch (or run) awaits before navigating the same
+    /// worker core.
+    /// </summary>
+    private Task CleanupAbandonedPrefetchAsync(PrefetchGroup old)
+    {
+        return Task.Run(async () =>
+        {
+            var pending = new List<Task>(3);
+            if (old.UggTask is not null) pending.Add(old.UggTask);
+            if (old.RunesTask is not null) pending.Add(old.RunesTask);
+            if (old.CoachlessItemsTask is not null) pending.Add(old.CoachlessItemsTask);
+            if (pending.Count > 0)
+            {
+                try
+                {
+                    await Task.WhenAll(pending).ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+            }
+            try
+            {
+                _executor.ReleaseImportWorkers();
+            }
+            catch (Exception error)
+            {
+                _sink.LogInfo($"auto-import: worker release failed ({error.Message})");
+            }
+        });
+    }
+
+    private static bool PrefetchUrlsEqual(Uri? first, Uri? second) =>
+        first is not null && second is not null &&
+        string.Equals(first.AbsoluteUri, second.AbsoluteUri, StringComparison.OrdinalIgnoreCase);
+
+    private async Task<PrefetchFetchResult> FetchUggPrefetchAsync(
+        Uri url,
+        AutoImportInput snapshot,
+        int? roleId,
+        CancellationToken prefetchCt,
+        Task predecessor)
+    {
+        try
+        {
+            await predecessor.WaitAsync(prefetchCt).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+        }
+        prefetchCt.ThrowIfCancellationRequested();
+        var clock = Stopwatch.StartNew();
+        try
+        {
+            var raw = await _executor.FetchViaWorkerAsync(
+                CompanionTab.UGg, url, snapshot.ChampionKey, roleId, prefetchCt).ConfigureAwait(false);
+            return new PrefetchFetchResult(raw, null, clock.ElapsedMilliseconds);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            return new PrefetchFetchResult(null, error.Message, clock.ElapsedMilliseconds);
+        }
+    }
+
+    private async Task<PrefetchFetchResult> FetchCoachlessItemsPrefetchAsync(
+        Uri url,
+        AutoImportInput snapshot,
+        int? roleId,
+        CancellationToken prefetchCt,
+        Task predecessor)
+    {
+        try
+        {
+            await predecessor.WaitAsync(prefetchCt).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+        }
+        prefetchCt.ThrowIfCancellationRequested();
+        var clock = Stopwatch.StartNew();
+        try
+        {
+            var raw = await _executor.FetchViaWorkerAsync(
+                CompanionTab.Coachless, url, snapshot.ChampionKey, roleId, prefetchCt).ConfigureAwait(false);
+            return new PrefetchFetchResult(raw, null, clock.ElapsedMilliseconds);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            return new PrefetchFetchResult(null, error.Message, clock.ElapsedMilliseconds);
+        }
+    }
+
+    private async Task<CoachlessRunesRaw> FetchRunesPrefetchAsync(
+        Uri url,
+        AutoImportInput snapshot,
+        int? roleId,
+        CancellationToken prefetchCt,
+        Task predecessor)
+    {
+        try
+        {
+            await predecessor.WaitAsync(prefetchCt).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+        }
+        prefetchCt.ThrowIfCancellationRequested();
+        return await FetchCoachlessRunesRawAsync(url, snapshot, roleId, prefetchCt).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The held hover prefetch (2.3.5 part 2): the deep-link worker fetches
+    /// for one hovered champion+role, started on its first tick and consumed
+    /// by the settled/locked run. Keyed by champion+role+site+url: the settled
+    /// run reuses a task only when its site AND url match. At most one group
+    /// exists at a time (one prefetch per site in flight); a hover move
+    /// cancels the stale group and the next group awaits its drain before
+    /// navigating the same worker core.
+    /// </summary>
+    private sealed class PrefetchGroup
+    {
+        public required int ChampionId;
+        public required int? RoleId;
+        public required string ChampionKey;
+        public required string ChampionName;
+        public Uri? UggUrl;
+        public Uri? RunesUrl;
+        public Uri? CoachlessItemsUrl;
+        public required CancellationTokenSource Cts;
+        public Task<PrefetchFetchResult>? UggTask;
+        public Task<CoachlessRunesRaw>? RunesTask;
+        public Task<PrefetchFetchResult>? CoachlessItemsTask;
+
+        public string DisplayName
+        {
+            get
+            {
+                var role = SiteDeepLink.RoleLabel(RoleId);
+                return role is null ? ChampionName : $"{ChampionName} {role}";
+            }
+        }
+    }
+
+    /// <summary>A prefetched worker answer: the extractor JSON, or the fetch error.</summary>
+    private sealed record PrefetchFetchResult(string? Raw, string? Error, long ElapsedMs);
 
     /// <summary>
     /// The fetch loop: each site extracts, then ITS set is flushed before
@@ -801,13 +1209,48 @@ public sealed class SiteAutoImportService
     /// long before Coachless items. The Coachless ITEMS fetch still awaits
     /// the in-flight runes fetch first: both touch the same Coachless core
     /// and must never navigate it concurrently.</para>
+    ///
+    /// <para>2.3.5 part 2: the hover prefetch. <paramref name="consumed"/> is
+    /// the held prefetch for THIS champion+role, if any: its completed or
+    /// in-flight tasks are awaited instead of fetching again (same
+    /// validate/write path after — every rune-page guarantee unchanged).
+    /// <paramref name="predecessor"/> is the drain of an abandoned prefetch
+    /// for ANOTHER champion: awaited before any navigation so the run never
+    /// navigates a worker core the stale prefetch is still on.</para>
     /// </summary>
     private async Task RunFetchesAsync(
         List<AutoImportSiteTarget> fetch,
         AutoImportInput input,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PrefetchGroup? consumed = null,
+        Task? predecessor = null)
     {
         var runClock = Stopwatch.StartNew();
+        // A run for another champion never navigates a core the abandoned
+        // prefetch is still on. The drain never throws (cleanup swallows), so
+        // this awaits only on cancellation of THIS run.
+        if (predecessor is not null)
+        {
+            try
+            {
+                await predecessor.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        // A consumed prefetch already drove a webview, so the worker teardown
+        // must run even if this run's own fetches turn out to be in-place
+        // reads that touch nothing.
+        if (consumed?.UggTask is not null || consumed?.RunesTask is not null ||
+            consumed?.CoachlessItemsTask is not null)
+            _fetchedThisRun = true;
+        var prefetchHit = false;
         // The speculative Coachless runes flight (2.3.5). Started BEFORE the
         // first item fetch so it overlaps the u.gg fetch on its own core.
         // Role known: the URL already carries it. Role-less: the role-less
@@ -815,8 +1258,16 @@ public sealed class SiteAutoImportService
         // the role u.gg discovers, else refetched aligned (see
         // ResolveCoachlessRunesAsync). Null when there is no rune service —
         // the items-only behaviour is then exactly what it was.
+        // Part 2: a held prefetch for this champion+role IS the flight — the
+        // same task, awaited by the same resolver, never fetched twice.
         CoachlessRunesFlight? runesFlight = null;
-        if (_runes is not null &&
+        if (consumed?.RunesTask is not null && _runes is not null &&
+            consumed.RunesUrl is not null)
+        {
+            runesFlight = new CoachlessRunesFlight(consumed.RunesUrl, consumed.RunesTask);
+            prefetchHit = true;
+        }
+        else if (_runes is not null &&
             SiteDeepLink.CoachlessRunesUrl(input.ChampionKey, input.RoleId) is { } speculativeUrl)
             runesFlight = StartCoachlessRunesFlight(speculativeUrl, input, input.RoleId, cancellationToken);
         var hadWritable = false;
@@ -857,7 +1308,44 @@ public sealed class SiteAutoImportService
             // await throws only on cancellation — which propagates.
             if (target.Site == CompanionTab.Coachless && runesFlight is not null)
                 await runesFlight.Fetch.ConfigureAwait(false);
-            var raw = await FetchTargetAsync(target, cancellationToken).ConfigureAwait(false);
+            string? raw;
+            if (!target.ExtractInPlace && consumed is not null &&
+                ((target.Site == CompanionTab.UGg && consumed.UggTask is not null &&
+                    PrefetchUrlsEqual(target.Url, consumed.UggUrl)) ||
+                (target.Site == CompanionTab.Coachless && _runes is null &&
+                    consumed.CoachlessItemsTask is not null &&
+                    PrefetchUrlsEqual(target.Url, consumed.CoachlessItemsUrl))))
+            {
+                // The hover prefetch, consumed: the same task the first hover
+                // tick started, completed or still in flight — never fetched
+                // twice. Validated and written exactly as a fresh fetch.
+                PrefetchFetchResult pre;
+                try
+                {
+                    pre = target.Site == CompanionTab.UGg
+                        ? await consumed.UggTask!.ConfigureAwait(false)
+                        : await consumed.CoachlessItemsTask!.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                prefetchHit = true;
+                _fetchedThisRun = true;
+                if (pre.Error is not null)
+                {
+                    _sink.LogInfo($"auto-import: {CompanionTabs.LabelFor(target.Site)} fetch failed ({pre.Error})");
+                    raw = null;
+                }
+                else
+                {
+                    raw = pre.Raw;
+                }
+            }
+            else
+            {
+                raw = await FetchTargetAsync(target, cancellationToken).ConfigureAwait(false);
+            }
             if (target.Site == CompanionTab.UGg && uggMs < 0)
                 uggMs = runClock.ElapsedMilliseconds;
             // SPA FALLBACK (2.1.1). An in-place read of the user's own visible
@@ -1023,13 +1511,16 @@ public sealed class SiteAutoImportService
 
         // One stage-timing line per rune run (2.3.5): names only, no values
         // of user data. The next field pass reads the critical path off it.
+        // Part 2 gains prefetch-hit: whether this run consumed the hover
+        // prefetch instead of fetching again.
         if (runesFlight is not null)
         {
             var marker = runesRefetched ? "(parallel+refetch)" : "(parallel)";
             _sink.LogInfo(
                 $"auto-import: timing ugg={FormatMs(uggMs)} " +
                 $"coachless-runes={FormatMs(coachlessMs)} {marker} " +
-                $"first-rune-page={FormatSec(firstRuneMs)} both-rune-pages={FormatSec(bothRuneMs)}");
+                $"first-rune-page={FormatSec(firstRuneMs)} both-rune-pages={FormatSec(bothRuneMs)} " +
+                $"prefetch-hit={(prefetchHit ? "true" : "false")}");
         }
     }
 

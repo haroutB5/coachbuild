@@ -1310,6 +1310,17 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             // Cancellation never fails a caller: a run that already finished
             // simply has nothing to observe.
         }
+        // 2.3.5 part 2: a hover prefetch for a draft that no longer exists is
+        // dropped the same way — never written, never reused across champ
+        // selects, workers released once its fetches land. Never throws, like
+        // the cancel above: reporting must not take down the phase pump.
+        try
+        {
+            _autoImport?.CancelPrefetchForChampSelectEnd();
+        }
+        catch
+        {
+        }
     }
 
     /// <summary>

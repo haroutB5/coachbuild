@@ -419,6 +419,39 @@ public sealed class SiteAutoImportTests
     private static readonly Uri AhriCoachlessRunesLink =
         new("https://coachless.gg/runes/tree/ahri/precision/domination?role=mid");
 
+    /// <summary>Jhin ADC hovered, for the prefetch hover-move tests (id 222).</summary>
+    private static AutoImportInput HoveredJhin(
+        double atSeconds = 0,
+        CompanionTab visible = CompanionTab.Companion,
+        string? url = null) =>
+        new(222, "Jhin", "Jhin", 3, false, visible, url, true, T0.AddSeconds(atSeconds));
+
+    private const string JhinCoachlessJson = """
+        {"source":"coachless","championSlug":"jhin","role":"adc","runes":null,
+         "itemBlocks":[{"title":"Starter","itemIds":[1055]}]}
+        """;
+
+    /// <summary>Waits for background prefetch fetches to record their calls.</summary>
+    private static async Task WaitForCallsAsync(FakeExecutor executor, int count, int timeoutMs = 5000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (executor.Calls.Count < count && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        Assert.True(
+            executor.Calls.Count >= count,
+            $"timed out waiting for {count} fetch calls (saw {executor.Calls.Count}: {string.Join(" | ", executor.Calls)})");
+    }
+
+    private static async Task WaitForReleasesAsync(FakeExecutor executor, int count, int timeoutMs = 5000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (executor.ReleaseCount < count && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        Assert.True(
+            executor.ReleaseCount >= count,
+            $"timed out waiting for {count} worker releases (saw {executor.ReleaseCount})");
+    }
+
     private static JsonElement PutSets(StubLcu api)
     {
         var put = Assert.Single(api.Calls, call =>
@@ -1122,14 +1155,26 @@ public sealed class SiteAutoImportTests
         var sink = new FakeSink();
         var service = NewService(executor, api, sink, withRunes: true);
 
-        // Two 750 ms ticks inside the settle: still nothing, and no lock has
-        // happened in this test at all.
+        // Two 750 ms ticks inside the settle: no WRITES yet — the settle still
+        // guards every LCU write — but the prefetch starts on the FIRST tick
+        // (2.3.5 part 2): the u.gg worker fetch and the Coachless runes fetch
+        // the settled run would do, held for it. No lock in this test at all.
         await service.OnSnapshotAsync(HoveredAhri(0));
-        await service.OnSnapshotAsync(HoveredAhri(0.75));
-        Assert.Empty(executor.Calls);
+        await WaitForCallsAsync(executor, 2);
         Assert.Equal(T0, service.Hover!.FirstSeenAt);
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Method == HttpMethod.Post || call.Method == HttpMethod.Put);
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("prefetching Ahri Mid on hover", StringComparison.Ordinal));
 
-        // The tick past the settle imports.
+        await service.OnSnapshotAsync(HoveredAhri(0.75));
+        Assert.Equal(2, executor.Calls.Count);
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Method == HttpMethod.Post || call.Method == HttpMethod.Put);
+
+        // The tick past the settle imports, consuming the prefetch: no second
+        // fetch for either prefetched site, only the Coachless items fetch the
+        // prefetch could not cover on its core.
         await service.OnSnapshotAsync(HoveredAhri(AutoImportCoordinator.HoverSettle.TotalSeconds + 0.75));
 
         // 2.3.5: the Coachless runes flight starts BEFORE the u.gg fetch so
@@ -1142,6 +1187,10 @@ public sealed class SiteAutoImportTests
         var runeCreates = api.Calls.Where(call =>
             call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages").ToArray();
         Assert.Equal(2, runeCreates.Length);
+        // The settled run consumed the prefetch instead of fetching again.
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("auto-import: timing", StringComparison.Ordinal) &&
+            line.Contains("prefetch-hit=true", StringComparison.Ordinal));
         // Requirement 5: the log says WHICH trigger fired.
         Assert.Contains(sink.Logs, line =>
             line.Contains("Ahri Mid hovered and held", StringComparison.Ordinal) &&
@@ -1181,6 +1230,210 @@ public sealed class SiteAutoImportTests
         Assert.Contains(sink.Logs, line =>
             line.Contains("Ahri Mid locked in", StringComparison.Ordinal) &&
             line.Contains("(trigger: lock)", StringComparison.Ordinal));
+    }
+
+    // -- Service: the hover prefetch (2.3.5 part 2) ---------------------------
+    //
+    // The 2.5 s hover settle exists so scrolling past champions does not WRITE
+    // pages. Nothing requires it to delay the FETCH: the first hover tick
+    // starts the same deep-link worker fetch and Coachless runes fetch the
+    // settled run would do, holds them keyed by champion+role+site+url, and the
+    // settled/locked run consumes the completed or in-flight tasks instead of
+    // fetching again. A prefetch never writes to the LCU.
+
+    /// <summary>
+    /// (a) The first hover tick starts the worker + Coachless runes fetch; the
+    /// settled tick performs NO second fetch for either and still writes
+    /// pages+items — one fetch per site total.
+    /// </summary>
+    [Fact]
+    public async Task Prefetch_starts_on_first_hover_and_settle_performs_no_second_fetch()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(HoveredAhri(0));
+        await WaitForCallsAsync(executor, 2);
+        Assert.Contains(executor.Calls, call => call.StartsWith("worker:UGg", StringComparison.Ordinal));
+        Assert.Contains(executor.Calls, call => call.StartsWith("runes:", StringComparison.Ordinal));
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Method == HttpMethod.Post || call.Method == HttpMethod.Put);
+
+        await service.OnSnapshotAsync(HoveredAhri(AutoImportCoordinator.HoverSettle.TotalSeconds + 0.75));
+
+        // One fetch per site across prefetch+settle: the settled run consumed
+        // instead of refetching, then added only the Coachless items fetch its
+        // core could not have prefetched alongside the runes fetch.
+        Assert.Equal(1, executor.Calls.Count(call => call.StartsWith("worker:UGg", StringComparison.Ordinal)));
+        Assert.Equal(1, executor.Calls.Count(call => call.StartsWith("runes:", StringComparison.Ordinal)));
+        Assert.Equal(1, executor.Calls.Count(call =>
+            call.StartsWith($"worker:{CompanionTab.Coachless}", StringComparison.Ordinal)));
+        // Pages and items both landed.
+        Assert.Contains(api.Calls, call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages");
+        Assert.Contains(api.Calls, call =>
+            call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("auto-import: timing", StringComparison.Ordinal) &&
+            line.Contains("prefetch-hit=true", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// (b) Hover Ahri, then hover Jhin before the settle: the Ahri prefetch is
+    /// cancelled (its slow fetch is waited out before Jhin navigates the same
+    /// core), nothing is written for Ahri, and Jhin is fetched and written
+    /// after its own settle — each URL fetched exactly once.
+    /// </summary>
+    [Fact]
+    public async Task Hover_move_cancels_stale_prefetch_and_settles_new_champion()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            // Ahri's prefetch parks 300 ms WITHOUT observing cancellation, so
+            // the test proves the wait: Jhin must not navigate until Ahri's
+            // stale fetch finishes, even though it was cancelled.
+            AsyncWorker = (site, url) =>
+            {
+                if (url.ToString().Contains("ahri", StringComparison.OrdinalIgnoreCase))
+                    return Task.Delay(300).ContinueWith<string?>(_ =>
+                        site == CompanionTab.UGg ? AhriUggJson : AhriCoachlessJson);
+                return Task.FromResult<string?>(
+                    site == CompanionTab.UGg ? JhinUggJson : JhinCoachlessJson);
+            },
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink);
+
+        await service.OnSnapshotAsync(HoveredAhri(0));
+        await WaitForCallsAsync(executor, 2);
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("prefetching Ahri Mid on hover", StringComparison.Ordinal));
+
+        // Hover moves before Ahri settles. The stale prefetch is cancelled...
+        await service.OnSnapshotAsync(HoveredJhin(0.75));
+        // ...but Jhin must not navigate the same cores until Ahri's parked
+        // fetches finish: still only Ahri's two calls immediately after.
+        Assert.Equal(2, executor.Calls.Count);
+        // ...then Jhin's own prefetch lands (one per site), and nothing was
+        // written for either champion in the meantime.
+        await WaitForCallsAsync(executor, 4);
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("prefetch for Ahri Mid discarded (hover moved)", StringComparison.Ordinal));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("prefetching Jhin ADC on hover", StringComparison.Ordinal));
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Method == HttpMethod.Post || call.Method == HttpMethod.Put);
+
+        // Jhin settles on its own stamp (first seen 0.75 s): consumed, not
+        // refetched, and written — with no Ahri page anywhere.
+        await service.OnSnapshotAsync(HoveredJhin(0.75 + AutoImportCoordinator.HoverSettle.TotalSeconds));
+        Assert.Equal(4, executor.Calls.Count);
+        var puts = api.Calls.Where(call =>
+            call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(puts);
+        foreach (var put in puts)
+            Assert.DoesNotContain("Ahri", JsonSerializer.Serialize(put.Body), StringComparison.Ordinal);
+        var sets = LastPutSets(api);
+        Assert.Contains(sets.EnumerateArray(), set =>
+            (set.GetProperty("title").GetString() ?? string.Empty).Contains("Jhin", StringComparison.Ordinal));
+    }
+
+    /// <summary>(c) A prefetch never issues LCU writes before the settle.</summary>
+    [Fact]
+    public async Task Prefetch_never_writes_before_settle()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var service = NewService(executor, api, new FakeSink(), withRunes: true);
+
+        await service.OnSnapshotAsync(HoveredAhri(0));
+        await WaitForCallsAsync(executor, 2);
+        await service.OnSnapshotAsync(HoveredAhri(0.75));
+        await service.OnSnapshotAsync(HoveredAhri(1.5));
+
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Method == HttpMethod.Post || call.Method == HttpMethod.Put);
+    }
+
+    /// <summary>
+    /// (d) Champ-select end during a prefetch: no writes, workers released,
+    /// and the held payload is discarded — a later hover for the same champion
+    /// fetches fresh instead of reusing it across selects.
+    /// </summary>
+    [Fact]
+    public async Task Champ_select_end_during_prefetch_discards_and_releases()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(HoveredAhri(0));
+        await WaitForCallsAsync(executor, 2);
+
+        service.CancelPrefetchForChampSelectEnd();
+        await WaitForReleasesAsync(executor, 1);
+
+        Assert.DoesNotContain(api.Calls, call =>
+            call.Method == HttpMethod.Post || call.Method == HttpMethod.Put);
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("discarded (hover moved)", StringComparison.Ordinal));
+        Assert.False(service.HasPrefetch);
+
+        // Never reused across selects: hovering the same champion again (well
+        // past the settle, so the run is due) fetches everything fresh.
+        var calls = executor.Calls.Count;
+        await service.OnSnapshotAsync(HoveredAhri(10));
+        Assert.True(
+            executor.Calls.Count > calls,
+            $"a discarded prefetch must not satisfy a later champ select (calls stayed {calls})");
+    }
+
+    /// <summary>
+    /// (e) Lock-in with no prior hover still imports exactly as before — fresh
+    /// fetches, both pages, and a timing line marked as no prefetch hit.
+    /// </summary>
+    [Fact]
+    public async Task Lock_without_prior_hover_imports_without_prefetch_hit()
+    {
+        var api = new StubLcu();
+        var executor = new FakeExecutor
+        {
+            Worker = (site, _) => site == CompanionTab.UGg ? AhriUggRunesJson : AhriCoachlessJson,
+            Runes = _ => AhriCoachlessRunesJson,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+
+        await service.OnSnapshotAsync(LockedAhri());
+
+        Assert.Equal(
+            [$"runes:{AhriCoachlessRunesLink}",
+             $"worker:{CompanionTab.UGg}:{AhriUggDeepLink}",
+             $"worker:{CompanionTab.Coachless}:{AhriCoachlessDeepLink}"],
+            executor.Calls);
+        Assert.Equal(2, api.Calls.Count(call =>
+            call.Method == HttpMethod.Post && call.Path == "/lol-perks/v1/pages"));
+        Assert.Contains(sink.Logs, line =>
+            line.Contains("auto-import: timing", StringComparison.Ordinal) &&
+            line.Contains("prefetch-hit=false", StringComparison.Ordinal));
+        Assert.DoesNotContain(sink.Logs, line =>
+            line.Contains("prefetching", StringComparison.Ordinal));
     }
 
     // -- Service: the Coachless runes leg (2.1.0) -------------------------------
@@ -1430,7 +1683,7 @@ public sealed class SiteAutoImportTests
         Assert.Equal($"runes:{SiteDeepLink.CoachlessRunesUrl("Ahri", null)}", Assert.Single(runesCalls));
         Assert.Contains(sink.Logs, line =>
             line.Contains("(parallel)", StringComparison.Ordinal) &&
-            !line.Contains("refetch", StringComparison.Ordinal));
+            !line.Contains("+refetch", StringComparison.Ordinal));
     }
 
     /// <summary>
