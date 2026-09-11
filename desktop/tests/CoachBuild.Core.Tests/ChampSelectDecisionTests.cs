@@ -76,6 +76,27 @@ public sealed class ChampSelectDecisionTests
         Assert.Equal(22, decision.ChampionId);
     }
 
+    /// <summary>
+    /// 2.3.6 records a detach whenever the window closes. A window the user
+    /// then reopens from the tray follows again; that follow must count as
+    /// attached, or the next champ select adopts (and later tears down) the
+    /// window the user asked for.
+    /// </summary>
+    [Fact]
+    public void A_follow_after_a_detach_reattaches_even_when_the_detach_postdates_the_open()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var tracker = new FollowAttachmentTracker();
+        tracker.RecordOpened(FollowKind.Draft, now);
+        tracker.RecordDetach(FollowKind.Draft, now.AddSeconds(60));
+        Assert.False(tracker.IsAttached(FollowKind.Draft, now.AddSeconds(61)));
+
+        tracker.RecordFollow(FollowKind.Draft, now.AddSeconds(90));
+        var decision = new WindowDecisionService("session", attachments: tracker)
+            .OnChampSelectEntry(now.AddSeconds(100));
+        Assert.Equal(WindowDecisionKind.None, decision.Kind);
+    }
+
     [Fact]
     public void Fresh_follow_suppresses_open_but_detach_and_liveness_reopen_after_windows_expire()
     {

@@ -73,8 +73,12 @@ public sealed class FollowAttachmentTracker
         FollowAttachmentSnapshot current;
         lock (_gate) current = _items[kind];
 
-        // A detach after an open answers the open->attach race immediately.
-        if (current.OpenedAt is { } opened && current.DetachedAt is { } detached && detached > opened)
+        // A detach after an open answers the open->attach race immediately --
+        // unless the page has followed again since (RecordDetach clears
+        // FollowAt, so any FollowAt is newer): a window the user reopened from
+        // the tray after the game-start teardown is attached, not closed.
+        if (current.OpenedAt is { } opened && current.DetachedAt is { } detached && detached > opened &&
+            current.FollowAt is null)
             return false;
         if (current.OpenedAt is { } openedAt && currentTime - openedAt < grace &&
             (current.DetachedAt is null || current.DetachedAt <= openedAt))

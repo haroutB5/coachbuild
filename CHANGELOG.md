@@ -1,5 +1,14 @@
 # Changelog
 
+## Desktop 2.3.7 (2026-09-11)
+
+- A champ select that ends mid-import now waits for the Coachless runes page
+  to finish loading before closing the import browsers, so the next import
+  never starts on a browser that is still busy.
+- A CoachBuild window you reopen from the tray after a game is left alone at
+  the next champ select again, instead of being taken over and closed at
+  load-in.
+
 ## Desktop 2.3.6 (2026-09-11)
 
 - The CoachBuild window now reopens at every champ select after a game. When

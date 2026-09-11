@@ -639,6 +639,13 @@ public sealed class SiteAutoImportService
     /// </summary>
     private bool _fetchedThisRun;
     /// <summary>
+    /// The run's speculative Coachless runes flight, if one was started. A
+    /// cancelled or failed run can exit without awaiting it; the flight is
+    /// drained before the workers are released so a teardown (or the next
+    /// run) never lands on a core that flight is still navigating.
+    /// </summary>
+    private Task? _inFlightRunes;
+    /// <summary>
     /// The hover prefetch (2.3.5 part 2): worker fetches started on the FIRST
     /// hover tick, held in memory keyed by champion+role+site+url, consumed by
     /// the settled/locked run instead of fetching again. Guarded by
@@ -747,6 +754,7 @@ public sealed class SiteAutoImportService
             // success, typed failure or exception alike. Guarded by the flag
             // so the 750ms ticks that fetch NOTHING (the overwhelming
             // majority) do not churn a teardown call per tick.
+            await QuietlyAsync(Interlocked.Exchange(ref _inFlightRunes, null)).ConfigureAwait(false);
             if (_fetchedThisRun)
             {
                 try
@@ -1684,6 +1692,7 @@ public sealed class SiteAutoImportService
         _ = flight.Fetch.ContinueWith(
             task => _ = task.Exception,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+        _inFlightRunes = flight.Fetch;
         return flight;
     }
 

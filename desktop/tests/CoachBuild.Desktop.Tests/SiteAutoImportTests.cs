@@ -1285,6 +1285,44 @@ public sealed class SiteAutoImportTests
     }
 
     /// <summary>
+    /// A run cancelled (champ select ends) while its speculative Coachless
+    /// runes flight is still loading must not release the workers until that
+    /// flight is done: the teardown would land on the core it is navigating,
+    /// and the next run could start a second navigation there.
+    /// </summary>
+    [Fact]
+    public async Task Cancelled_run_waits_out_the_runes_flight_before_releasing_workers()
+    {
+        var api = new StubLcu();
+        var uggGate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runesGate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var executor = new FakeExecutor
+        {
+            AsyncWorker = (site, _) => site == CompanionTab.UGg
+                ? uggGate.Task
+                : Task.FromResult<string?>(AhriCoachlessJson),
+            AsyncRunes = _ => runesGate.Task,
+        };
+        var sink = new FakeSink();
+        var service = NewService(executor, api, sink, withRunes: true);
+        using var cts = new CancellationTokenSource();
+
+        var run = Task.Run(() => service.OnSnapshotAsync(LockedAhri(), cts.Token));
+        await WaitForCallsAsync(executor, 2);
+        cts.Cancel();
+        uggGate.SetResult(AhriUggRunesJson);
+
+        await Task.Delay(200);
+        Assert.False(run.IsCompleted, "the run released while the runes flight was still loading");
+        Assert.Equal(0, executor.ReleaseCount);
+
+        runesGate.SetResult(AhriCoachlessRunesJson);
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(executor.ReleaseCount >= 1);
+        Assert.Contains(sink.Logs, line => line.Contains("cancelled", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// A prefetch the settled run does NOT consume (the user opened the same
     /// u.gg page, so the run reads it in place) is still on the u.gg worker
     /// core. The run must not return, and so release the workers, until that
