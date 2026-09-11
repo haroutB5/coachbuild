@@ -1,5 +1,12 @@
 # Changelog
 
+## Desktop 2.3.6 (2026-09-11)
+
+- The CoachBuild window now reopens at every champ select after a game. When
+  the window closed at game start, its page's last check-in still counted as
+  an open window for 150 seconds, so a champ select soon after a short game
+  opened nothing and imported nothing. Closing the window now detaches it.
+
 ## Desktop 2.3.5 (2026-09-11)
 
 - Champ-select rune import is much faster. The Coachless runes fetch now starts

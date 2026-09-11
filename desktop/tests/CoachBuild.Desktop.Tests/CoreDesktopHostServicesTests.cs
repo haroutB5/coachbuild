@@ -66,6 +66,41 @@ public sealed class CoreDesktopHostServicesTests
     }
 
     /// <summary>
+    /// Field log 2026-09-11 10:41: the window closed at game start 68 s before
+    /// the next champ select. Its page's last follow was still inside the
+    /// 150 s attach window, so the decider saw an attached window, opened
+    /// nothing, and nothing was imported. Closing the window detaches it.
+    /// </summary>
+    [Fact]
+    public async Task Closing_the_window_lets_the_next_champ_select_open_one_again()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CoachBuild-HostTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            await using var host = new CoreDesktopHostServices(new string('a', 64), root);
+            var now = DateTimeOffset.UtcNow;
+            Assert.Equal(WindowDecisionKind.OpenDraft,
+                host.WindowDecisions.OnChampSelectEntry(Resolution(904, 0), now.AddSeconds(-100)).Kind);
+            host.State.FollowAttachments.RecordFollow(FollowKind.Draft, now.AddSeconds(-70));
+
+            // Still attached while the window is open: no second window.
+            Assert.Equal(WindowDecisionKind.None,
+                host.WindowDecisions.OnChampSelectEntry(Resolution(268, 2), now).Kind);
+
+            host.OnCompanionWindowClosed();
+
+            Assert.Equal(WindowDecisionKind.OpenDraft,
+                host.WindowDecisions.OnChampSelectEntry(Resolution(268, 2), now).Kind);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
     /// Spec §5's FIRST moment: app start. The other two (champ select entry,
     /// game end) are phase transitions and are proven in
     /// <c>RankCaptureTests</c> against the gameflow poller. App start is not a

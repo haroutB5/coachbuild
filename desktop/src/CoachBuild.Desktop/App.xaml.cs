@@ -954,6 +954,7 @@ public partial class App : WpfApplication
         {
             closed.Closed -= OnWebViewClosed;
             _webView = null;
+            (_services as CoreDesktopHostServices)?.OnCompanionWindowClosed();
             // The tray must not keep advertising the version of a window that
             // no longer exists (the game-start teardown closes it every match).
             _tray?.UpdateState(_trayState);
@@ -1598,6 +1599,20 @@ public sealed class CoreDesktopHostServices : IDesktopHostServices, IDesktopHost
     public IChampionDirectory ChampionDirectory => _champions;
 
     public WindowDecisionService WindowDecisions => _windowDecisions;
+
+    /// <summary>
+    /// The CoachBuild window closed (game-start teardown or the user). Its page
+    /// can no longer poll <c>/status</c>, so its last follow must stop counting
+    /// as an attached window. Without this, a champ select within
+    /// <see cref="CompanionWire.AttachWindowSeconds"/> of the close (a short
+    /// practice game, a remake) opened no window and so imported nothing
+    /// (field log 2026-09-11 10:41).
+    /// </summary>
+    public void OnCompanionWindowClosed()
+    {
+        _state.FollowAttachments.RecordDetach(FollowKind.Draft);
+        _state.FollowAttachments.RecordDetach(FollowKind.Builds);
+    }
 
     /// <summary>
     /// The Live Client Data workers. Exposed so a test can drive one tick
