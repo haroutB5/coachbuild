@@ -1,5 +1,15 @@
 # Changelog
 
+## Desktop 2.4.2 (2026-09-12)
+
+- Lane scores after ranked games are captured again. The end-of-game results
+  screen was being ignored because it names the queue as text (ranked solo or
+  flex) rather than a number, so capture relied on match history, which often
+  had not caught up yet. The results screen is now read directly, including
+  each player's detected position, so your lane opponent (bot lane too) is
+  filled in. Capture also keeps checking for about a minute instead of 15
+  seconds.
+
 ## Desktop 2.4.1 (2026-09-12)
 
 - Fixed u.gg and Coachless imports failing when you hover one champion and

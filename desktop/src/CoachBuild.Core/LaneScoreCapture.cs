@@ -48,7 +48,23 @@ public static class LaneScoreCapture
     /// historically used. All are probed; the winner is reported.
     /// </summary>
     private static readonly string[] PositionKeys =
-        ["teamPosition", "individualPosition", "selectedPosition", "position", "lane"];
+        ["teamPosition", "individualPosition", "detectedTeamPosition", "selectedPosition", "position", "lane"];
+
+    /// <summary>
+    /// The queue, numeric where the payload has one, else from the end-of-game
+    /// block's <c>queueType</c>. The REAL end-of-game block carries no numeric
+    /// queue id at all, only <c>queueType</c> and <c>ranked</c> (gaming PC,
+    /// ranked, 2026-09-11 23:58), so the ranked gate failed closed on it and
+    /// capture fell back to a match history that had not caught up yet. Only
+    /// the two ranked spellings map; anything else stays unknown.
+    /// </summary>
+    private static int? ReadQueueId(JsonElement root) =>
+        ReadInt(root, QueueIdKeys) ?? ReadString(root, ["queueType"])?.Trim().ToUpperInvariant() switch
+        {
+            "RANKED_SOLO_5X5" => RankedQueues.SoloDuo,
+            "RANKED_FLEX_SR" => RankedQueues.Flex,
+            _ => null,
+        };
 
     /// <summary>
     /// Where a participant's ROLE might live. This is the secondary
@@ -88,7 +104,7 @@ public static class LaneScoreCapture
 
         var root = UnwrapGame(payload);
 
-        var queueId = ReadInt(root, QueueIdKeys);
+        var queueId = ReadQueueId(root);
         // Ranked only, checked here so that a non-ranked game costs one integer
         // read and never touches the store.
         if (!RankedQueues.IsRanked(queueId)) return null;
@@ -579,7 +595,7 @@ public static class LaneScoreCapture
     {
         var root = UnwrapGame(payload);
         return root.ValueKind == JsonValueKind.Object
-            ? (ReadGameId(root), ReadInt(root, QueueIdKeys))
+            ? (ReadGameId(root), ReadQueueId(root))
             : (null, null);
     }
 

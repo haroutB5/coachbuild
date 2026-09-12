@@ -63,7 +63,10 @@ public sealed class LaneScoreService
         // an Action the host supplies rather than a window reference: nothing in
         // Core knows what a window is.
         Action? prompt = null,
-        int settleAttempts = 3,
+        // ~60 s at the 5 s default. Match history can lag the end of a game by
+        // well over the old 15 s window (field log 2026-09-11 23:58), and the
+        // end-of-game identity guard keeps a stale history row from being taken.
+        int settleAttempts = 12,
         TimeSpan? settleDelay = null,
         Func<TimeSpan, CancellationToken, Task>? delay = null)
     {

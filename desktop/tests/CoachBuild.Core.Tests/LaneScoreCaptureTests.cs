@@ -143,6 +143,60 @@ public sealed class LaneScoreCaptureTests
     }
 
     /// <summary>
+    /// The REAL end-of-game block (gaming PC, ranked, 2026-09-11 23:58): no
+    /// numeric queue id, only <c>queueType</c> and <c>ranked:true</c>, and
+    /// positions under <c>detectedTeamPosition</c>. It used to fail the ranked
+    /// gate, so nothing was captured while match history lagged.
+    /// </summary>
+    [Theory]
+    [InlineData("RANKED_SOLO_5x5", RankedQueues.SoloDuo)]
+    [InlineData("RANKED_FLEX_SR", RankedQueues.Flex)]
+    public void TheRealEndOfGameBlockWithoutAQueueIdIsRecordable(string queueType, int expectedQueue)
+    {
+        var payload = Json($$"""
+        {
+          "gameId": 7351234600, "queueType": "{{queueType}}", "ranked": true,
+          "teams": [
+            { "teamId": 100, "players": [
+                { "puuid": "{{MyPuuid}}", "championId": 222, "championName": "Jinx", "teamId": 100,
+                  "isLocalPlayer": true, "detectedTeamPosition": "BOTTOM", "selectedPosition": "BOTTOM" },
+                { "puuid": "ally", "championId": 412, "teamId": 100,
+                  "detectedTeamPosition": "UTILITY", "selectedPosition": "UTILITY" } ] },
+            { "teamId": 200, "players": [
+                { "puuid": "enemy-adc", "championId": 51, "championName": "Caitlyn", "teamId": 200,
+                  "detectedTeamPosition": "BOTTOM", "selectedPosition": "BOTTOM" },
+                { "puuid": "enemy-sup", "championId": 89, "teamId": 200,
+                  "detectedTeamPosition": "UTILITY", "selectedPosition": "UTILITY" } ] }
+          ]
+        }
+        """);
+
+        var game = LaneScoreCapture.TryBuild(payload, MyPuuid, Now);
+
+        Assert.NotNull(game);
+        Assert.Equal(expectedQueue, game.QueueId);
+        Assert.Equal("7351234600", game.MatchId);
+        Assert.Equal(51, game.OpponentChampionId);
+        Assert.Equal(LaneRoles.Bottom, game.RoleId);
+        Assert.Equal("detectedTeamPosition", game.PositionSource);
+    }
+
+    [Fact]
+    public void AnEndOfGameBlockFromANonRankedQueueIsNotRecorded()
+    {
+        var payload = Json($$"""
+        { "gameId": 1, "queueType": "NORMAL", "ranked": false,
+          "teams": [
+            { "teamId": 100, "players": [ { "puuid": "{{MyPuuid}}", "championId": 222, "teamId": 100,
+                "isLocalPlayer": true, "detectedTeamPosition": "TOP" } ] },
+            { "teamId": 200, "players": [ { "puuid": "e", "championId": 51, "teamId": 200,
+                "detectedTeamPosition": "TOP" } ] } ] }
+        """);
+
+        Assert.Null(LaneScoreCapture.TryBuild(payload, MyPuuid, Now));
+    }
+
+    /// <summary>
     /// No position data at all. The game is still worth capturing — we know who
     /// the five enemies were — but the opponent is null and the card will ask.
     /// </summary>
