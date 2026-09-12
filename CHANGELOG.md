@@ -1,5 +1,19 @@
 # Changelog
 
+## Desktop 2.5.0 (2026-09-12)
+
+- Redesigned CoachBuild to match the new mockups. New title bar with the app
+  logo, back/forward/refresh, a gold Draft tab and its own window buttons, and
+  a footer with Live setup, the Companion version and site profiles.
+- The Draft page is now a draft assistant: current role, both teams, Manual
+  draft and Reset to live, then "Counters vs {enemy}" with two tables (highest
+  lane gold advantage and lowest match win rates, top 7 with Show all), a
+  small-sample warning and a compact Automatic imports bar (u.gg, Coachless,
+  Pro).
+- Scoring your previous ranked lane opens from "Previous game · Review" in a
+  side panel; a gold dot shows when a game is waiting. Your lane history shows
+  under the tables once you have scored games against that champion.
+
 ## Desktop 2.4.3 (2026-09-12)
 
 - Item sets now have simple names in the shop, like "Galio Mid (Pro)",

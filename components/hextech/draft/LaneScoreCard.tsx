@@ -183,16 +183,20 @@ export default function LaneScoreCard({ champIcons, loadPending, submitScore, sk
                   size={76}
                   className="d25-matchimg"
                 />
-                <span className="d25-matchname">{myName}</span>
-                <span className="d25-matchsub">You · {role ?? "Unknown role"}</span>
+                <span className="d25-matchtext">
+                  <span className="d25-matchname">{myName}</span>
+                  <span className="d25-matchsub">You · {role ?? "Unknown role"}</span>
+                </span>
               </div>
               <span aria-hidden="true" className="d25-vs">VS</span>
               <div className="d25-matchside">
                 {opponentId === null ? (
                   <>
                     <span className="d25-matchimg d25-matchimg-empty" aria-hidden="true">?</span>
-                    <span className="d25-matchname">Unknown</span>
-                    <span className="d25-matchsub">Pick below</span>
+                    <span className="d25-matchtext">
+                      <span className="d25-matchname">Unknown</span>
+                      <span className="d25-matchsub">Pick below</span>
+                    </span>
                   </>
                 ) : (
                   <>
@@ -203,8 +207,10 @@ export default function LaneScoreCard({ champIcons, loadPending, submitScore, sk
                       size={76}
                       className="d25-matchimg"
                     />
-                    <span className="d25-matchname">{opponentName}</span>
-                    <span className="d25-matchsub">Opponent</span>
+                    <span className="d25-matchtext">
+                      <span className="d25-matchname">{opponentName}</span>
+                      <span className="d25-matchsub">Opponent</span>
+                    </span>
                   </>
                 )}
               </div>
@@ -215,8 +221,7 @@ export default function LaneScoreCard({ champIcons, loadPending, submitScore, sk
             <h3 className="d25-panel-h">Lane opponent</h3>
             {needsOpponent && (
               <p className="d25-panel-note">
-                We couldn&apos;t tell who you laned against. The League client did not give usable
-                position data for this game, so nothing is pre-selected. Pick your lane opponent below.
+                We couldn&apos;t tell who you laned against. Pick your opponent below.
               </p>
             )}
             <div role="group" aria-label="Pick your lane opponent" className="d25-tiles">
@@ -258,17 +263,20 @@ export default function LaneScoreCard({ champIcons, loadPending, submitScore, sk
             <div className="d25-prevrole">
               <label htmlFor="d25-prevrole-select" className="d25-prevrole-label">Previous role</label>
               {needsRole ? (
-                <select
-                  id="d25-prevrole-select"
-                  aria-label="Your role"
-                  value={draft.role ?? ""}
-                  disabled={busy}
-                  onChange={event => setDraft(prev => ({ ...prev, role: event.target.value === "" ? null : Number(event.target.value) as RoleId }))}
-                  className="d25-prevrole-select"
-                >
-                  <option value="">Choose your role</option>
-                  {Object.entries(ROLE_LABEL).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-                </select>
+                <span className="d25-selectwrap">
+                  <select
+                    id="d25-prevrole-select"
+                    aria-label="Your role"
+                    value={draft.role ?? ""}
+                    disabled={busy}
+                    onChange={event => setDraft(prev => ({ ...prev, role: event.target.value === "" ? null : Number(event.target.value) as RoleId }))}
+                    className="d25-prevrole-select"
+                  >
+                    <option value="">Choose your role</option>
+                    {Object.entries(ROLE_LABEL).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                  </select>
+                  <CaretDown size={14} weight="bold" className="d25-selectcaret" aria-hidden="true" />
+                </span>
               ) : (
                 <span className="d25-prevrole-value">{role}</span>
               )}
