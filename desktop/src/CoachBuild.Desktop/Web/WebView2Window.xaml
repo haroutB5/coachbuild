@@ -335,27 +335,34 @@
                             Background="{StaticResource DividerBrush}"
                             Margin="17,0,0,0"
                             VerticalAlignment="Center" />
+                    <!-- Icon glyphs carry their OWN FontFamily on the TextBlock:
+                         App.xaml's implicit TextBlock style (Segoe UI) beats an
+                         inherited Button FontFamily, and rendered every glyph
+                         as a missing-glyph box in the live app (2.5.0). -->
                     <Button x:Name="BackButton"
                             Style="{StaticResource NavButton}"
-                            Content="&#xE72B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"
                             ToolTip="Back"
                             AutomationProperties.Name="Back"
                             Margin="13,0,0,0"
-                            Click="OnBackClick" />
+                            Click="OnBackClick">
+                        <TextBlock Text="&#xE72B;" FontFamily="Segoe MDL2 Assets, Segoe Fluent Icons, Segoe UI Symbol" FontSize="16" />
+                    </Button>
                     <Button x:Name="ForwardButton"
                             Style="{StaticResource NavButton}"
-                            Content="&#xE72A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"
                             ToolTip="Forward"
                             AutomationProperties.Name="Forward"
                             Margin="8,0,0,0"
-                            Click="OnForwardClick" />
+                            Click="OnForwardClick">
+                        <TextBlock Text="&#xE72A;" FontFamily="Segoe MDL2 Assets, Segoe Fluent Icons, Segoe UI Symbol" FontSize="16" />
+                    </Button>
                     <Button x:Name="RefreshButton"
                             Style="{StaticResource NavButton}"
-                            Content="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"
                             ToolTip="Refresh"
                             AutomationProperties.Name="Refresh"
                             Margin="8,0,0,0"
-                            Click="OnRefreshClick" />
+                            Click="OnRefreshClick">
+                        <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets, Segoe Fluent Icons, Segoe UI Symbol" FontSize="16" />
+                    </Button>
                     <Button x:Name="CompanionTabButton"
                             Style="{StaticResource TabButton}"
                             AutomationProperties.Name="Draft"
@@ -425,25 +432,27 @@
                             Margin="0,0,16,0">
                     <Button x:Name="MinimizeButton"
                             Style="{StaticResource WindowControlButton}"
-                            Content="&#xE921;"
                             ToolTip="Minimise"
                             AutomationProperties.Name="Minimise"
-                            Click="OnMinimizeClick" />
+                            Click="OnMinimizeClick">
+                        <TextBlock Text="&#xE921;" FontFamily="Segoe MDL2 Assets, Segoe Fluent Icons, Segoe UI Symbol" />
+                    </Button>
                     <Button x:Name="MaximizeButton"
                             Style="{StaticResource WindowControlButton}"
                             ToolTip="Maximise"
                             AutomationProperties.Name="Maximise"
                             Margin="15,0,0,0"
                             Click="OnMaximizeClick">
-                        <TextBlock x:Name="MaximizeGlyph" Text="&#xE922;" />
+                        <TextBlock x:Name="MaximizeGlyph" Text="&#xE922;" FontFamily="Segoe MDL2 Assets, Segoe Fluent Icons, Segoe UI Symbol" />
                     </Button>
                     <Button x:Name="CloseButton"
                             Style="{StaticResource WindowCloseButton}"
-                            Content="&#xE8BB;"
                             ToolTip="Close"
                             AutomationProperties.Name="Close"
                             Margin="15,0,0,0"
-                            Click="OnCloseClick" />
+                            Click="OnCloseClick">
+                        <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets, Segoe Fluent Icons, Segoe UI Symbol" />
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>

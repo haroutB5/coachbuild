@@ -1,5 +1,12 @@
 # Changelog
 
+## Desktop 2.5.1 (2026-09-12)
+
+- Fixed the title bar icons (back, forward, refresh, minimise, maximise,
+  close) showing as empty boxes in the app.
+- At the default window size, Manual draft and Reset to live now sit in a row
+  under the teams instead of covering the last enemy slot.
+
 ## Desktop 2.5.0 (2026-09-12)
 
 - Redesigned CoachBuild to match the new mockups. New title bar with the app

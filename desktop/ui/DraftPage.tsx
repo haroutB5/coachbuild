@@ -213,6 +213,13 @@ const DRAFT_CSS = `
 .d25-livesetup { margin-top: 16px; background: #0E1A28; border: 1px solid #1D2C3F; border-radius: 10px; padding: 16px; }
 .d25-livesetup h2 { margin: 0; font-size: 18px; font-weight: 700; }
 .d25-livesetup p { font-size: 14px; color: #C6D2DF; }
+/* 2.5.1: below the mockup width the Manual draft / Reset to live column no
+   longer fits beside both teams (it overlapped the 5th enemy slot at the
+   default 1280 px window), so only it moves to a row under the teams. */
+@media (max-width: 1539px) {
+  .d25-teamcard { flex-wrap: wrap; row-gap: 12px; }
+  .d25-teambtns { margin-left: 0; padding-left: 0; flex: 1 1 100%; flex-direction: row; justify-content: flex-end; }
+}
 @media (max-width: 1199px) {
   .d25-tables { flex-direction: column; }
   .d25-teamcard { flex-wrap: wrap; row-gap: 16px; }
