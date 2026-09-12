@@ -95,17 +95,18 @@ const DRAFT_CSS = `
 .d25-tsub { margin: 3px 90px 0 10px; font-size: 17px; line-height: 21px; color: #AFC0D2; }
 .d25-badge { position: absolute; top: 12px; right: 17px; font-size: 15px; color: #C9D5E2;
   border: 1px solid #2B3D53; border-radius: 6px; padding: 4px 12px; white-space: nowrap; }
-.d25-thead { display: grid; grid-template-columns: 34px minmax(0,1fr) 110px 70px; align-items: center;
+.d25-thead { display: grid; grid-template-columns: 42px minmax(0,1fr) 110px 70px; align-items: center;
   background: #132236; border-radius: 4px; height: 24px; margin-top: 14px; padding: 0 12px 0 0;
   font-size: 15px; color: #C6D2DF; box-sizing: border-box; }
-.d25-h-idx { padding-left: 17px; }
+.d25-h-idx { text-align: center; }
 .d25-h-champ { padding-left: 0; }
 .d25-h-val, .d25-h-games { text-align: right; }
 .d25-tbody { list-style: none; margin: 2px 0 0; padding: 0; }
-.d25-trow { display: grid; grid-template-columns: 34px minmax(0,1fr) 110px 70px; align-items: center;
+.d25-trow { display: grid; grid-template-columns: 42px minmax(0,1fr) 110px 70px; align-items: center;
   height: 39px; padding-right: 12px; border-bottom: 1px solid #1A2A3D; box-sizing: border-box; }
 .d25-trow:last-child { border-bottom: 0; }
-.d25-idx { font-size: 17px; color: #E8EEF5; padding-left: 17px; }
+/* Centred in a 42px column so 10-15 clear the portrait (all rows show). */
+.d25-idx { font-size: 17px; color: #E8EEF5; text-align: center; }
 .d25-champ { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .d25-cicon { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; flex-shrink: 0; }
 .d25-cname { font-size: 17px; color: #E8EEF5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
