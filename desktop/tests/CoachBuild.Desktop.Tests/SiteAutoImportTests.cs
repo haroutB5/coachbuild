@@ -993,14 +993,14 @@ public sealed class SiteAutoImportTests
         Assert.Equal(2, puts.Count);
         using var first = JsonDocument.Parse(JsonSerializer.Serialize(puts[0].Body, JsonOptions.Wire));
         var firstSets = first.RootElement.GetProperty("itemSets");
-        Assert.Equal("CoachBuild import: Ahri Mid (u.gg)", Assert.Single(firstSets.EnumerateArray()).GetProperty("title").GetString());
+        Assert.Equal("Ahri Mid (u.gg)", Assert.Single(firstSets.EnumerateArray()).GetProperty("title").GetString());
         using var second = JsonDocument.Parse(JsonSerializer.Serialize(puts[1].Body, JsonOptions.Wire));
         var sets = second.RootElement.GetProperty("itemSets");
         Assert.Equal(2, sets.GetArrayLength());
         // Fresh first, cached carried after: the ORDER differs from the old
         // single write, so both titles are asserted as a set.
         Assert.Equal(
-            ["CoachBuild import: Ahri Mid (Coachless)", "CoachBuild import: Ahri Mid (u.gg)"],
+            ["Ahri Mid (Coachless)", "Ahri Mid (u.gg)"],
             sets.EnumerateArray().Select(set => set.GetProperty("title").GetString()).OrderBy(title => title));
         Assert.DoesNotContain(api.Calls, call => call.Path.Contains("perks", StringComparison.Ordinal));
         // Three verdicts for two writes: the second PUT re-batches the
@@ -1048,7 +1048,7 @@ public sealed class SiteAutoImportTests
         var only = Assert.Single(puts);
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(only.Body, JsonOptions.Wire));
         var sets = document.RootElement.GetProperty("itemSets");
-        Assert.Equal("CoachBuild import: Ahri Mid (u.gg)", Assert.Single(sets.EnumerateArray()).GetProperty("title").GetString());
+        Assert.Equal("Ahri Mid (u.gg)", Assert.Single(sets.EnumerateArray()).GetProperty("title").GetString());
         Assert.Contains(sink.Statuses, status =>
             status.Contains("Auto-imported", StringComparison.Ordinal) &&
             status.Contains("u.gg", StringComparison.Ordinal));
@@ -2139,7 +2139,7 @@ public sealed class SiteAutoImportTests
         var sets = document.RootElement.GetProperty("itemSets");
         Assert.Equal(2, sets.GetArrayLength());
         Assert.Equal("6653", sets[0].GetProperty("blocks")[0].GetProperty("items")[0].GetProperty("id").GetString());
-        Assert.Equal("CoachBuild import: Ahri Mid (Coachless)", sets[1].GetProperty("title").GetString());
+        Assert.Equal("Ahri Mid (Coachless)", sets[1].GetProperty("title").GetString());
     }
 
     [Fact]
@@ -2202,7 +2202,7 @@ public sealed class SiteAutoImportTests
         Assert.Equal([$"visible:{CompanionTab.Coachless}"], executor.Calls);
         var sets = PutSets(api);
         Assert.Equal(1, sets.GetArrayLength());
-        Assert.Equal("CoachBuild import: Wukong Jungle (Coachless)", sets[0].GetProperty("title").GetString());
+        Assert.Equal("Wukong Jungle (Coachless)", sets[0].GetProperty("title").GetString());
     }
 
     [Fact]
@@ -2534,7 +2534,7 @@ public sealed class SiteAutoImportTests
         var sets = LastPutSets(api);
         Assert.Equal(3, sets.GetArrayLength());
         Assert.Contains(sets.EnumerateArray(), set =>
-            set.GetProperty("title").GetString() == "CoachBuild import: Ahri Mid (Pro)");
+            set.GetProperty("title").GetString() == "Ahri Mid (Pro)");
         // The timing line names the Pro leg and the cold (no-prefetch) run.
         Assert.Contains(sink.Logs, line =>
             line.Contains("auto-import: timing", StringComparison.Ordinal) &&
@@ -2610,7 +2610,7 @@ public sealed class SiteAutoImportTests
             !line.Contains("(Mid)", StringComparison.Ordinal));
         var sets = LastPutSets(api);
         Assert.Contains(sets.EnumerateArray(), set =>
-            set.GetProperty("title").GetString() == "CoachBuild import: Ahri Mid (Pro)");
+            set.GetProperty("title").GetString() == "Ahri Mid (Pro)");
     }
 
     /// <summary>
@@ -2766,6 +2766,6 @@ public sealed class SiteAutoImportTests
         var sets = LastPutSets(api);
         Assert.Equal(3, sets.GetArrayLength());
         Assert.Contains(sets.EnumerateArray(), set =>
-            set.GetProperty("title").GetString() == "CoachBuild import: Ahri Mid (Pro)");
+            set.GetProperty("title").GetString() == "Ahri Mid (Pro)");
     }
 }

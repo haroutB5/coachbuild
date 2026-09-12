@@ -751,6 +751,18 @@ public static class SiteImportValidator
             : $"CoachBuild import: {championName} ({Label(source)})";
 
     /// <summary>
+    /// The item-set title the shop shows, e.g. <c>Galio Mid (Pro)</c> (2.4.3,
+    /// user request: "keep it simple"). Ownership of item sets no longer rides
+    /// on the title: every set CoachBuild writes carries a
+    /// <see cref="ApplyPayloadValidation.ItemSetUidPrefix"/> uid, which the
+    /// client round-trips (verified live 2026-09-12).
+    /// </summary>
+    public static string ItemSetTitle(string championName, string? role, SiteImportSource source) =>
+        RoleLabel(role) is { } label
+            ? $"{championName} {label} ({Label(source)})"
+            : $"{championName} ({Label(source)})";
+
+    /// <summary>
     /// Short automatic rune-page title. The role parameter is the assigned
     /// champ-select role, not a site's discovered default; roleless modes keep
     /// the requested <c>u.gg Jhin</c>/<c>Coachless Jhin</c> names.
@@ -854,7 +866,8 @@ public static class SiteImportValidator
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(
             new
             {
-                uid = $"coachbuild-import-{slug}-{roleToken}",
+                uid = $"{ApplyPayloadValidation.ItemSetUidPrefix}import-{slug}-{roleToken}-" +
+                    (source?.ToString().ToLowerInvariant() ?? "site"),
                 title = pageTitle,
                 type = "custom",
                 map = "any",
@@ -929,9 +942,10 @@ public static class SiteImportApplier
                 $"could not match \"{payload.ChampionSlug}\" to a champion -- nothing was imported");
 
         var title = SiteImportValidator.PageTitle(championName, payload.Role, payload.Source);
+        var itemTitle = SiteImportValidator.ItemSetTitle(championName, payload.Role, payload.Source);
         if (payload.Runes is null)
             return await ApplyItemsOnlyAsync(
-                payload, championId, title, items, cancellationToken).ConfigureAwait(false);
+                payload, championId, itemTitle, items, cancellationToken).ConfigureAwait(false);
 
         if (SiteImportValidator.ValidateRunes(payload.Runes) is { } runeError)
             return new SiteImportFailure("bad-runes", $"{runeError} -- nothing was imported");
@@ -942,7 +956,7 @@ public static class SiteImportApplier
         if (!ApplyPayloadValidation.TryValidateRunes(runeRequest, out var runeGate))
             return new SiteImportFailure(runeGate.Reason, $"{runeGate.Hint} -- nothing was imported");
         var itemRequest = SiteImportValidator.BuildItemSetRequest(
-            championId, title, payload.ChampionSlug, payload.Role, payload.ItemBlocks, payload.Source);
+            championId, itemTitle, payload.ChampionSlug, payload.Role, payload.ItemBlocks, payload.Source);
         if (!ApplyPayloadValidation.TryValidateItemSets(itemRequest, out var itemGate))
             return new SiteImportFailure(itemGate.Reason, $"{itemGate.Hint} -- nothing was imported");
 
@@ -1056,7 +1070,7 @@ public static class SiteImportApplier
                 results.Add(new SiteImportFailure("bad-items", $"{itemError} -- nothing was imported"));
                 continue;
             }
-            valid.Add((contribution, SiteImportValidator.PageTitle(
+            valid.Add((contribution, SiteImportValidator.ItemSetTitle(
                 contribution.ChampionName, payload.Role, payload.Source)));
         }
         if (valid.Count == 0) return results;

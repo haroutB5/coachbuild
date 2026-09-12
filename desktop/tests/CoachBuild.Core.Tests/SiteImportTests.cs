@@ -696,7 +696,8 @@ public sealed class SiteImportTests
         var sets = itemPut.Body!.Value.GetProperty("itemSets");
         Assert.Equal(1, sets.GetArrayLength());
         var set = sets[0];
-        Assert.Equal(title, set.GetProperty("title").GetString());
+        // 2.4.3: the item set is titled plainly; the rune page keeps its title.
+        Assert.Equal("Jhin ADC (u.gg)", set.GetProperty("title").GetString());
         Assert.Equal("custom", set.GetProperty("type").GetString());
         Assert.Equal(202, set.GetProperty("associatedChampions")[0].GetInt32());
         var items = set.GetProperty("blocks")[0].GetProperty("items");
@@ -820,7 +821,7 @@ public sealed class SiteImportTests
         var sets = itemPut.Body!.Value.GetProperty("itemSets");
         Assert.Equal(1, sets.GetArrayLength());
         var set = sets[0];
-        Assert.Equal("CoachBuild import: Jhin ADC (Coachless)", set.GetProperty("title").GetString());
+        Assert.Equal("Jhin ADC (Coachless)", set.GetProperty("title").GetString());
         Assert.Equal(202, set.GetProperty("associatedChampions")[0].GetInt32());
         Assert.Equal(1, set.GetProperty("blocks").GetArrayLength());
         Assert.Equal(6, set.GetProperty("blocks")[0].GetProperty("items").GetArrayLength());
@@ -1067,8 +1068,8 @@ public sealed class SiteImportTests
             call.Method == HttpMethod.Put && call.Path.Contains("item-sets", StringComparison.Ordinal));
         var sets = put.Body!.Value.GetProperty("itemSets");
         Assert.Equal(2, sets.GetArrayLength());
-        Assert.Equal("CoachBuild import: Jhin ADC (u.gg)", sets[0].GetProperty("title").GetString());
-        Assert.Equal("CoachBuild import: Jhin ADC (Coachless)", sets[1].GetProperty("title").GetString());
+        Assert.Equal("Jhin ADC (u.gg)", sets[0].GetProperty("title").GetString());
+        Assert.Equal("Jhin ADC (Coachless)", sets[1].GetProperty("title").GetString());
         Assert.Equal(1, sets[1].GetProperty("blocks").GetArrayLength());
         Assert.Equal(6, sets[1].GetProperty("blocks")[0].GetProperty("items").GetArrayLength());
     }
@@ -1164,7 +1165,9 @@ public sealed class SiteImportTests
         Assert.Equal(
             request.Sets![0].GetRawText(),
             element.GetRawText());
-        Assert.Equal($"coachbuild-import-jhin-adc", element.GetProperty("uid").GetString());
+        // 2.4.3: the uid carries the source ("site" when none is given), so the
+        // three per-source sets are distinct in the client.
+        Assert.Equal("coachbuild-import-jhin-adc-site", element.GetProperty("uid").GetString());
         Assert.Equal(202, element.GetProperty("associatedChampions")[0].GetInt32());
     }
 

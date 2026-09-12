@@ -10,6 +10,24 @@ public static class ApplyPayloadValidation
     public static bool IsValidReplacePrefix(string? replacePrefix) =>
         string.IsNullOrEmpty(replacePrefix) || IsCoachBuildTitle(replacePrefix);
 
+    /// <summary>
+    /// The uid prefix every item set CoachBuild writes carries (2.4.3). Item
+    /// set titles are plain ("Galio Mid (Pro)"), so ownership is the uid, or
+    /// the legacy CoachBuild title for sets written before 2.4.3.
+    /// </summary>
+    public const string ItemSetUidPrefix = "coachbuild-";
+
+    /// <summary>True for an item set CoachBuild owns: its uid, or a legacy CoachBuild title.</summary>
+    public static bool IsOwnedItemSet(string? title, string? uid) =>
+        IsCoachBuildTitle(title) ||
+        (!string.IsNullOrEmpty(uid) && uid.StartsWith(ItemSetUidPrefix, StringComparison.Ordinal));
+
+    public static string? ReadUid(JsonElement set) =>
+        set.ValueKind == JsonValueKind.Object && set.TryGetProperty("uid", out var uid) &&
+        uid.ValueKind == JsonValueKind.String
+            ? uid.GetString()
+            : null;
+
     public static bool TryValidateRunes(ApplyRunesRequest? request, out ApplyRunesFailure failure)
     {
         var reason = RuneRejection(request);
@@ -82,11 +100,11 @@ public static class ApplyPayloadValidation
         if (request is null || request.ChampionId <= 0 ||
             request.Sets is null || request.Sets.Count is < 1 or > 3 ||
             !IsValidReplacePrefix(request.ReplacePrefix) ||
-            request.Sets.Any(set => !TryReadTitle(set, out var title) || !IsCoachBuildTitle(title)))
+            request.Sets.Any(set => !TryReadTitle(set, out var title) || !IsOwnedItemSet(title, ReadUid(set))))
         {
             failure = new ApplyItemSetsFailure(
                 "invalid-sets",
-                "each set title (and replacePrefix, if given) must start with \"CoachBuild\" (1-3 sets)");
+                "each set needs a title and a CoachBuild uid (or a title starting with \"CoachBuild\") (1-3 sets)");
             return false;
         }
         failure = null!;

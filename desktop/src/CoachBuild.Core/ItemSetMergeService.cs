@@ -16,14 +16,12 @@ public static class ItemSetMergeService
         {
             foreach (var item in current)
             {
-                var titleNode = (item as JsonObject)?["title"];
-                var title = titleNode is JsonValue titleValue && titleValue.TryGetValue<string>(out var text)
-                    ? text
-                    : null;
-                // Only the literal generic prefix is ours. Foreign sets,
-                // including title-less entries, survive byte-for-byte.
-                if (!string.IsNullOrEmpty(title) &&
-                    title.StartsWith("CoachBuild", StringComparison.Ordinal))
+                var title = ReadString(item, "title");
+                var uid = ReadString(item, "uid");
+                // Ours: a CoachBuild uid (2.4.3+, plain titles) or the legacy
+                // CoachBuild title. Foreign sets, including title-less
+                // entries, survive byte-for-byte.
+                if (ApplyPayloadValidation.IsOwnedItemSet(title, uid))
                     continue;
                 kept.Add(item?.DeepClone());
             }
@@ -46,6 +44,11 @@ public static class ItemSetMergeService
         var node = JsonNode.Parse(existing.GetRawText()) as JsonObject;
         return node is null ? null : Merge(node, newSets, replacePrefix);
     }
+
+    private static string? ReadString(JsonNode? item, string property) =>
+        (item as JsonObject)?[property] is JsonValue value && value.TryGetValue<string>(out var text)
+            ? text
+            : null;
 
     public static int SerializedUtf8Length(JsonObject value) =>
         JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions.Wire).Length;

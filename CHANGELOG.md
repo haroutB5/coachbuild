@@ -1,5 +1,12 @@
 # Changelog
 
+## Desktop 2.4.3 (2026-09-12)
+
+- Item sets now have simple names in the shop, like "Galio Mid (Pro)",
+  "Galio Mid (u.gg)" and "Galio Mid (Coachless)", instead of
+  "CoachBuild import: ...". CoachBuild still recognises its own sets (old
+  names included) and never touches yours.
+
 ## Desktop 2.4.2 (2026-09-12)
 
 - Lane scores after ranked games are captured again. The end-of-game results
