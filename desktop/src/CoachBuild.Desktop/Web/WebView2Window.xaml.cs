@@ -141,6 +141,8 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
     private bool _showingFallback;
     private string? _fallbackMessage;
     private bool _disposed;
+    private readonly Thickness _restoredFrameThickness;
+    private readonly Thickness _restoredContentMargin;
     private bool _browserDisposed;
 
     public WebView2Window(
@@ -163,6 +165,8 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         _opGgProfileResolver = opGgProfileResolver;
         _preferences = preferences ?? CompanionTabsPreferences.Default;
         InitializeComponent();
+        _restoredFrameThickness = WindowFrame.BorderThickness;
+        _restoredContentMargin = ContentHost.Margin;
         Fallback.RepairRequested += OnRepairRequested;
         Closed += OnClosed;
         FooterVersionText.Text = $" \u00b7 Companion {CompanionWire.Version}";
@@ -1270,12 +1274,6 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         }
     }
 
-    private void OnProfilesClick(object sender, RoutedEventArgs e)
-    {
-        if (_disposed) return;
-        ProfilesPopup.IsOpen = true;
-    }
-
     /// <summary>
     /// Keeps the maximise glyph and the maximised padding honest. With a
     /// WindowChrome frame a maximised window would otherwise clip its chrome
@@ -1299,6 +1297,12 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         // so the two can never disagree about how far the chrome sits in.
         var pad = System.Windows.Shell.WindowChrome.GetWindowChrome(this)?.ResizeBorderThickness.Left ?? 6;
         RootGrid.Margin = maximized ? new Thickness(pad) : new Thickness(0);
+        // Restored, the edge, the content inset and the top grip keep the
+        // resize band grabbable (see the XAML). Maximised there is nothing to
+        // resize, and the caption buttons must reach the top of the screen.
+        WindowFrame.BorderThickness = maximized ? new Thickness(0) : _restoredFrameThickness;
+        ContentHost.Margin = maximized ? new Thickness(0) : _restoredContentMargin;
+        TopResizeGrip.Visibility = maximized ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// <summary>

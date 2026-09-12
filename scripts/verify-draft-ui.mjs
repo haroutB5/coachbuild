@@ -19,8 +19,8 @@ assert.ok(executablePath, 'Set BROWSER_PATH to a Chromium browser executable');
 assert.ok(existsSync(path.join(uiRoot, 'index.html')), 'Build the Draft UI first');
 const champions = JSON.parse(await fs.readFile(path.join(root,
   'desktop/tests/CoachBuild.Core.Tests/Fixtures/champions.live.json'), 'utf8'));
-// Ten ranked counter rows (ids all exist in the fixture roster) so the tables
-// render 7 rows by default with a "Show all 10" toggle. The last three rows
+// Ten ranked counter rows (ids all exist in the fixture roster); the tables
+// show every row, with no collapse. The last three rows
 // sit below the 20-game small-sample gate, which must surface the warning.
 const counterRows = [
   { champion_id: 266, win_rate: 30, gold_adv_15: -1500, matches: 1200, pick_rate: 5 },
@@ -219,23 +219,18 @@ try {
       matchId: 'fixture-ranked', score: 8, roleId: 4, opponentChampionId: 887, note: 'Good trades',
     }]);
   }, pendingGame);
-  await check('redesign: pill, both table cards with 7 rows, show-all, imports chips', async page => {
+  await check('redesign: pill, both table cards show every row, imports chips', async page => {
     await markFirstEnemy(page, 'Mark Aatrox as your lane opponent');
     assert.ok(await page.$('button::-p-text(Previous game)'), 'Previous game pill renders');
     for (const id of ['#d25-table-best', '#d25-table-worst']) {
-      assert.equal(await page.$$eval(`${id} .d25-trow`, rows => rows.length), 7, `${id} shows 7 rows by default`);
-      assert.ok(await page.$(`${id} .d25-showall`), `${id} has a Show all button`);
+      assert.equal(await page.$$eval(`${id} .d25-trow`, rows => rows.length), 10, `${id} shows all 10 rows`);
+      assert.equal(await page.$(`${id} button`), null, `${id} has no show-all toggle`);
     }
     assert.ok((await page.$eval('#d25-table-best .d25-badge', node => node.textContent)).includes('Top 10'));
     assert.ok((await page.$eval('#d25-table-worst .d25-badge', node => node.textContent)).includes('Bottom 10'));
     assert.ok(await page.$eval('.d25-warn', node => node.textContent.includes('Small samples')));
     const chips = await page.$$eval('#d25-imports .d25-chip', nodes => nodes.map(node => node.textContent));
     assert.deepEqual(chips, ['Uu.gg', 'CCoachless', 'PPro']);
-    // Show-all reveals every fixture row, then collapses back to 7.
-    await page.click('#d25-table-best .d25-showall');
-    assert.equal(await page.$$eval('#d25-table-best .d25-trow', rows => rows.length), 10, 'Show all reveals 10 rows');
-    await page.click('#d25-table-best .d25-showall');
-    assert.equal(await page.$$eval('#d25-table-best .d25-trow', rows => rows.length), 7, 'Show fewer collapses to 7');
   }, liveAatrox);
   await check('redesign: screenshots + pixel measurements at 1586x894', async page => {
     await markFirstEnemy(page, 'Mark Aatrox as your lane opponent');

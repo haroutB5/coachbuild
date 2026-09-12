@@ -1,5 +1,15 @@
 # Changelog
 
+## Desktop 2.5.2 (2026-09-12)
+
+- The counter tables always show every pick (all 15 and all 10); the Show all
+  button is gone.
+- Removed the settings icon and "Separate site profiles" from the footer;
+  neither did anything.
+- The window has a visible edge now, and resizes from every side. The left and
+  right sides were covered by the page and the top was covered by the tab and
+  window buttons, so only the corners resized.
+
 ## Desktop 2.5.1 (2026-09-12)
 
 - Fixed the title bar icons (back, forward, refresh, minimise, maximise,

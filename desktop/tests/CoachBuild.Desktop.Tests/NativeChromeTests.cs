@@ -96,24 +96,20 @@ public sealed class NativeChromeTests
     }
 
     [Fact]
-    public void The_footer_has_the_live_setup_link_version_and_profiles_note()
+    public void The_footer_has_the_live_setup_link_and_version_only()
     {
         var markup = ReadSource(WindowMarkup);
-        foreach (var name in new[]
-        {
-            "LiveSetupLink", "FooterVersionText", "StatusText",
-            "ProfilesButton", "ProfilesPopup",
-        })
+        foreach (var name in new[] { "LiveSetupLink", "FooterVersionText", "StatusText" })
         {
             Assert.Contains($"x:Name=\"{name}\"", markup, StringComparison.Ordinal);
         }
 
-        Assert.Contains("&#xE713;", markup, StringComparison.Ordinal);
-        Assert.Contains("Separate site profiles", markup, StringComparison.Ordinal);
-        Assert.Contains(
-            "Each site tab keeps its own sign-in, cookies and history. Nothing is shared between tabs or with your normal browser.",
-            markup,
-            StringComparison.Ordinal);
+        // 2.5.2: the gear and the separate-profiles note did nothing useful.
+        foreach (var gone in new[] { "FooterGear", "&#xE713;", "Separate site profiles", "ProfilesButton", "ProfilesPopup" })
+        {
+            Assert.DoesNotContain(gone, markup, StringComparison.Ordinal);
+        }
+
         Assert.DoesNotContain("Manual browsing", markup, StringComparison.Ordinal);
 
         // The footer note starts collapsed: an idle "Ready" hides next to the
@@ -126,6 +122,79 @@ public sealed class NativeChromeTests
         // The version the footer prints is the bridge version, not a literal.
         var source = ReadSource(WindowSource);
         Assert.Contains("FooterVersionText.Text = $\" \\u00b7 Companion {CompanionWire.Version}\"", source, StringComparison.Ordinal);
+    }
+
+    // -- Resize edges ----------------------------------------------------------
+
+    /// <summary>
+    /// 2.5.2 regression. WindowChrome only resizes where the WINDOW is asked
+    /// to hit-test: over the WebView2 HWND Windows asks Chromium instead
+    /// (HTCLIENT), and inside the chrome row a button that is
+    /// IsHitTestVisibleInChrome wins over the resize band. 2.5.1 lost the
+    /// left/right edges to the webview and the top edge to the full-height
+    /// caption buttons, measured live with WM_NCHITTEST drags. So: the
+    /// content host must start inside the band on both sides, and nothing
+    /// clickable may sit in the top band.
+    /// </summary>
+    [Fact]
+    public void The_resize_band_belongs_to_the_window_on_every_edge()
+    {
+        var problems = RunSta(() =>
+        {
+            const double width = 1586, height = 992;
+            var window = (WpfWindow)WpfXamlReader.Parse(ReadProofMarkup());
+            var band = System.Windows.Shell.WindowChrome.GetWindowChrome(window).ResizeBorderThickness;
+            var frame = (WpfElement)window.Content;
+            window.Content = null;
+            var host = new WpfGrid { Width = width, Height = height };
+            host.Children.Add(frame);
+            Layout(host, width, height);
+
+            var found = new List<string>();
+            var content = (WpfElement)window.FindName("ContentHost");
+            var left = content.TranslatePoint(new WpfPoint(0, 0), host).X;
+            var right = width - (left + content.ActualWidth);
+            if (left < band.Left) found.Add($"webview host starts {left:F1}px from the left edge, inside the {band.Left}px band");
+            if (right < band.Right) found.Add($"webview host ends {right:F1}px from the right edge, inside the {band.Right}px band");
+
+            for (var x = 0.5; x < width; x += 2)
+            {
+                for (var y = 0.5; y < band.Top; y += 1)
+                {
+                    if (HitAt(host, new WpfPoint(x, y)) is { } hit &&
+                        System.Windows.Shell.WindowChrome.GetIsHitTestVisibleInChrome(hit))
+                    {
+                        found.Add($"chrome-clickable {hit.GetType().Name} at ({x}, {y}) inside the top band");
+                        x = width; // one report per sweep is enough
+                        break;
+                    }
+                }
+            }
+
+            // Control: below the band the caption buttons still take clicks.
+            var close = (WpfElement)window.FindName("CloseButton");
+            var belowBand = close.TranslatePoint(new WpfPoint(close.ActualWidth / 2, band.Top + 2), host);
+            if (HitAt(host, belowBand) is not { } closeHit ||
+                !System.Windows.Shell.WindowChrome.GetIsHitTestVisibleInChrome(closeHit))
+                found.Add("the close button no longer takes clicks just below the band");
+            return found;
+        });
+
+        Assert.True(problems.Count == 0, string.Join(Environment.NewLine, problems));
+    }
+
+    /// <summary>
+    /// The element WindowChrome's own <c>InputHitTest</c> would find. That
+    /// call filters on IsVisible, which is false off-screen, so the test uses
+    /// the visual hit test (it still honours IsHitTestVisible and collapsed
+    /// elements) and walks up to the nearest UIElement.
+    /// </summary>
+    private static System.Windows.UIElement? HitAt(System.Windows.Media.Visual root, WpfPoint point)
+    {
+        System.Windows.DependencyObject? node = System.Windows.Media.VisualTreeHelper.HitTest(root, point)?.VisualHit;
+        while (node is not null and not System.Windows.UIElement)
+            node = System.Windows.Media.VisualTreeHelper.GetParent(node);
+        return node as System.Windows.UIElement;
     }
 
     // -- The 940px collapse ---------------------------------------------------
@@ -239,11 +308,8 @@ public sealed class NativeChromeTests
         Layout(statusHost, 1586, 44);
         Save(statusHost, 1586, 44, Path.Combine(evidenceDir, "native-footer.png"));
 
-        Check("gear x", 30, At((WpfElement)window.FindName("FooterGear"), status).X);
-        Check("footer text x", 80, At((WpfElement)window.FindName("FooterInfoText"), status).X);
-        var profiles = (WpfElement)window.FindName("ProfilesButton");
-        // The button carries 10px right padding, so the TEXT ends 10px inside.
-        Check("profiles text ends x", 1557, At(profiles, status).X + profiles.ActualWidth - 10);
+        // 2.5.2: the text takes the old gear's x now the gear is gone.
+        Check("footer text x", 30, At((WpfElement)window.FindName("FooterInfoText"), status).X);
 
         var table = "native chrome geometry (window 1586):\n" + string.Join("\n", lines);
         return new Proof(checks, table);

@@ -51,6 +51,7 @@
         <SolidColorBrush x:Key="DividerBrush" Color="#1D2C3F" />
         <SolidColorBrush x:Key="StatusMutedBrush" Color="#8FA3B8" />
         <SolidColorBrush x:Key="CloseHoverBrush" Color="#C42B1C" />
+        <SolidColorBrush x:Key="WindowEdgeBrush" Color="#36506C" />
 
         <Style x:Key="IconButton" TargetType="Button">
             <Setter Property="Background" Value="#122840" />
@@ -241,39 +242,6 @@
             </Setter>
         </Style>
 
-        <Style x:Key="FooterNoteButton" TargetType="Button">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Foreground" Value="{StaticResource ChromeTextBrush}" />
-            <Setter Property="FontFamily" Value="Segoe UI" />
-            <Setter Property="FontSize" Value="15" />
-            <Setter Property="Padding" Value="10,8" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="NoteChrome"
-                                Background="{TemplateBinding Background}"
-                                CornerRadius="6"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"
-                                              TextElement.Foreground="{TemplateBinding Foreground}" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="NoteChrome" Property="Background" Value="{StaticResource ChromeHoverBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="NoteChrome" Property="Background" Value="{StaticResource ChromePressedBrush}" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
         <Style x:Key="LiveSetupLinkStyle" TargetType="Hyperlink">
             <Setter Property="Foreground" Value="{StaticResource ChromeTextBrush}" />
             <Setter Property="TextDecorations" Value="{x:Null}" />
@@ -291,6 +259,13 @@
         </Style>
     </Window.Resources>
 
+    <!-- 2.5.2: a 1px edge so the dark window stands out from the desktop.
+         It is also the first pixel of the 6px resize band; ContentHost's side
+         margin supplies the other five (see there). Maximised, the edge goes
+         (UpdateWindowControls). -->
+    <Border x:Name="WindowFrame"
+            BorderBrush="{StaticResource WindowEdgeBrush}"
+            BorderThickness="1">
     <!-- When maximised the WindowChrome frame would clip the chrome against
          the screen edges; UpdateWindowControls pads the whole tree by the
          6px resize border instead (see OnStateChanged). -->
@@ -454,11 +429,27 @@
                         <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets, Segoe Fluent Icons, Segoe UI Symbol" />
                     </Button>
                 </StackPanel>
+                <!-- 2.5.2: WindowChrome lets an IsHitTestVisibleInChrome button
+                     win over the resize band, so the full-height caption
+                     buttons and the tab pills swallowed the top edge. This
+                     transparent strip sits above them and is NOT clickable in
+                     chrome, so the top 6px resizes everywhere. Collapsed when
+                     maximised, where the buttons must reach the screen edge. -->
+                <Border x:Name="TopResizeGrip"
+                        Height="6"
+                        VerticalAlignment="Top"
+                        Background="Transparent" />
             </Grid>
         </Border>
 
+        <!-- The side margin keeps the WebView2 HWND out of the resize band:
+             over that HWND Windows asks Chromium to hit-test, which answers
+             "client", so a webview touching the edge made the left and right
+             sides unresizable (2.5.1). 1px WindowFrame + 5px here = the 6px
+             ResizeBorderThickness. -->
         <Grid x:Name="ContentHost"
               Grid.Row="1"
+              Margin="5,0,5,0"
               Background="{StaticResource SiteCanvasBrush}">
             <Grid x:Name="BrowserHost" />
 
@@ -565,8 +556,9 @@
             </Grid>
         </Grid>
 
-        <!-- 44px footer: live-setup link + companion version, status notes,
-             and the separate-profiles note with its explanation popup. -->
+        <!-- 44px footer: live-setup link + companion version, status notes.
+             2.5.2 dropped the gear and the separate-profiles note: neither
+             did anything useful. -->
         <Border x:Name="StatusRow"
                 Grid.Row="2"
                 Background="{StaticResource FooterBrush}"
@@ -576,25 +568,15 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0"
                             Orientation="Horizontal"
                             VerticalAlignment="Center">
-                    <TextBlock x:Name="FooterGear"
-                               Text="&#xE713;"
-                               FontFamily="Segoe MDL2 Assets, Segoe Fluent Icons, Segoe UI Symbol"
-                               FontSize="22"
-                               Foreground="{StaticResource ChromeTextBrush}"
-                               Width="22"
-                               TextAlignment="Center"
-                               Margin="30,0,0,0"
-                               VerticalAlignment="Center" />
                     <TextBlock x:Name="FooterInfoText"
                                FontFamily="Segoe UI"
                                FontSize="15"
                                Foreground="{StaticResource ChromeTextBrush}"
-                               Margin="28,0,0,0"
+                               Margin="30,0,0,0"
                                VerticalAlignment="Center">
                         <Hyperlink x:Name="LiveSetupLink"
                                    Style="{StaticResource LiveSetupLinkStyle}"
@@ -612,37 +594,8 @@
                            VerticalAlignment="Center"
                            Margin="16,0,8,0"
                            TextTrimming="CharacterEllipsis" />
-                <Button x:Name="ProfilesButton"
-                        Grid.Column="2"
-                        Style="{StaticResource FooterNoteButton}"
-                        Content="Separate site profiles ›"
-                        ToolTip="Each site tab keeps its own sign-in, cookies and history. Nothing is shared between tabs or with your normal browser."
-                        AutomationProperties.Name="Separate site profiles. Show explanation."
-                        Margin="0,0,19,0"
-                        VerticalAlignment="Center"
-                        Click="OnProfilesClick" />
-                <Popup x:Name="ProfilesPopup"
-                       Grid.Column="2"
-                       PlacementTarget="{Binding ElementName=ProfilesButton}"
-                       Placement="Top"
-                       HorizontalOffset="-40"
-                       VerticalOffset="-8"
-                       StaysOpen="False"
-                       AllowsTransparency="True">
-                    <Border Background="{StaticResource GoldPillBgBrush}"
-                            BorderBrush="{StaticResource ChromeLineBrush}"
-                            BorderThickness="1"
-                            CornerRadius="8"
-                            Padding="12">
-                        <TextBlock Text="Each site tab keeps its own sign-in, cookies and history. Nothing is shared between tabs or with your normal browser."
-                                   FontFamily="Segoe UI"
-                                   FontSize="13"
-                                   Foreground="{StaticResource ChromeTextBrush}"
-                                   TextWrapping="Wrap"
-                                   MaxWidth="320" />
-                    </Border>
-                </Popup>
             </Grid>
         </Border>
     </Grid>
+    </Border>
 </Window>

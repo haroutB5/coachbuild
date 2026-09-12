@@ -118,11 +118,6 @@ const DRAFT_CSS = `
 .d25-trow-history .d25-games { font-size: 15px; }
 .d25-single { font-size: 12px; font-weight: 600; color: #C9D5E2; border: 1px solid #2B3D53; border-radius: 6px;
   padding: 2px 8px; text-align: right; justify-self: end; white-space: nowrap; }
-.d25-showall { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 34px;
-  margin-top: 6px; border-radius: 6px; border: 1px solid #2B3D53; background: #101E2E; color: #E8EEF5;
-  font-size: 15px; cursor: pointer; }
-.d25-showall:hover { border-color: #F2BE4F; }
-.d25-caret-up { transform: rotate(180deg); }
 .d25-tempty { font-size: 15px; color: #AFC0D2; margin: 12px 0 4px 10px; }
 .d25-footnote { margin: 11px 0 0; font-size: 14px; line-height: 16px; color: #AFC0D2; }
 .d25-history { margin-top: 16px; }

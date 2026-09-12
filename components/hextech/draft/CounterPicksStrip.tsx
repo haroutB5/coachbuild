@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CaretDown, WarningCircle } from "@phosphor-icons/react";
+import { WarningCircle } from "@phosphor-icons/react";
 import { LANE_TO_ROLE_ID, LANE_LABEL, type LaneId } from "@/components/hextech/heroContracts";
 import type { ChampionIconEntry } from "@/components/proAssets";
 import { IconWithFallback } from "@/components/IconWithFallback";
@@ -9,7 +9,6 @@ import type { DraftCountersParams, DraftCountersResponse, DraftCounterSuggestion
 
 type StripState = { status: "loading" } | { status: "ok"; data: DraftCountersResponse } | { status: "error" };
 
-const VISIBLE_ROWS = 7;
 /** Rows below this game count trigger the small-sample warning. */
 export const SMALL_SAMPLE_GAMES = 20;
 
@@ -18,13 +17,11 @@ function formatGold(value: number): string {
   return value > 0 ? `+${digits}` : value < 0 ? `-${digits}` : "0";
 }
 
-function CounterTable({ id, title, subtitle, badge, rows, metric, champIcons, expanded, onToggle }: {
+function CounterTable({ id, title, subtitle, badge, rows, metric, champIcons }: {
   id: string; title: string; subtitle: string; badge: string;
   rows: DraftCounterSuggestion[]; metric: "gold" | "wr";
   champIcons: Map<number, ChampionIconEntry>;
-  expanded: boolean; onToggle: () => void;
 }) {
-  const visible = expanded ? rows : rows.slice(0, VISIBLE_ROWS);
   return (
     <section id={id} aria-label={title} className="d25-tcard">
       <h3 className="d25-ttitle">{title}</h3>
@@ -41,7 +38,7 @@ function CounterTable({ id, title, subtitle, badge, rows, metric, champIcons, ex
             <span className="d25-h-games">Games</span>
           </div>
           <ol className="d25-tbody">
-            {visible.map((row, index) => (
+            {rows.map((row, index) => (
               <li key={row.champId} className="d25-trow">
                 <span className="d25-idx">{index + 1}</span>
                 <span className="d25-champ">
@@ -61,12 +58,6 @@ function CounterTable({ id, title, subtitle, badge, rows, metric, champIcons, ex
               </li>
             ))}
           </ol>
-          {rows.length > VISIBLE_ROWS && (
-            <button type="button" onClick={onToggle} aria-expanded={expanded} className="d25-showall">
-              {expanded ? "Show fewer" : `Show all ${rows.length}`}
-              <CaretDown size={14} className={expanded ? "d25-caret-up" : undefined} />
-            </button>
-          )}
         </>
       )}
     </section>
@@ -80,8 +71,6 @@ export default function CounterPicksStrip({ enemyId, enemyName, lane, champIcons
   laneOpponentId: number | null;
 }) {
   const [state, setState] = useState<StripState>({ status: "loading" });
-  const [expandedBest, setExpandedBest] = useState(false);
-  const [expandedWorst, setExpandedWorst] = useState(false);
   const reqId = useRef(0);
   useEffect(() => {
     if (enemyId === null) return;
@@ -89,8 +78,6 @@ export default function CounterPicksStrip({ enemyId, enemyName, lane, champIcons
     const controller = new AbortController();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset when the external matchup selection changes.
     setState({ status: "loading" });
-    setExpandedBest(false);
-    setExpandedWorst(false);
     loadCounters({ enemy: enemyId, lane: LANE_TO_ROLE_ID[lane] }, controller.signal).then(data => {
       if (!controller.signal.aborted && id === reqId.current) setState({ status: "ok", data });
     }).catch(() => {
@@ -156,8 +143,6 @@ export default function CounterPicksStrip({ enemyId, enemyName, lane, champIcons
             rows={state.data.bestLaneCounters}
             metric="gold"
             champIcons={champIcons}
-            expanded={expandedBest}
-            onToggle={() => setExpandedBest(value => !value)}
           />
           <CounterTable
             id="d25-table-worst"
@@ -167,8 +152,6 @@ export default function CounterPicksStrip({ enemyId, enemyName, lane, champIcons
             rows={state.data.worstPicks}
             metric="wr"
             champIcons={champIcons}
-            expanded={expandedWorst}
-            onToggle={() => setExpandedWorst(value => !value)}
           />
         </div>
       )}
