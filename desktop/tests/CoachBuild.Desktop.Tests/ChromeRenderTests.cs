@@ -132,8 +132,11 @@ public sealed class ChromeRenderTests
         }
 
         // The root Grid too: it is what shows through a collapsed row.
-        Assert.Contains(
-            "<Grid Background=\"{StaticResource CanvasBrush}\">", markup, StringComparison.Ordinal);
+        // 2.5.0: the root Grid carries x:Name="RootGrid" (maximised padding),
+        // so the pin matches its opening tag rather than an exact string.
+        var rootTag = Regex.Match(markup, @"<Grid\b[^>]*>");
+        Assert.True(rootTag.Success, "no root Grid in the window markup");
+        Assert.Contains("Background=\"{StaticResource CanvasBrush}\"", rootTag.Value, StringComparison.Ordinal);
     }
 
     /// <summary>

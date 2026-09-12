@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
@@ -164,6 +165,8 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         InitializeComponent();
         Fallback.RepairRequested += OnRepairRequested;
         Closed += OnClosed;
+        FooterVersionText.Text = $" \u00b7 Companion {CompanionWire.Version}";
+        UpdateWindowControls();
         UpdateChrome();
     }
 
@@ -843,6 +846,56 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
                 : $"Loading {CompanionTabs.LabelFor(state.Tab)}…");
     }
 
+    /// <summary>
+    /// The caption (whole ChromeRow) is draggable except its buttons; the
+    /// system menu no longer appears on right-click for free once the Win32
+    /// caption is gone, so it is shown by hand at the cursor.
+    /// </summary>
+    private void OnChromeRightButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (_disposed) return;
+        try
+        {
+            SystemCommands.ShowSystemMenu(this, PointToScreen(e.GetPosition(this)));
+        }
+        catch
+        {
+            // A menu is never worth a crash.
+        }
+    }
+
+    /// <summary>
+    /// The 940px collapse: the wordmark goes first, then the divider, and the
+    /// nav buttons + tab strip reflow left into the freed space. Pure policy
+    /// in <see cref="IsBrandVisible"/> / <see cref="IsDividerVisible"/>; this
+    /// is only the hands.
+    /// </summary>
+    private void OnChromeSizeChanged(object sender, SizeChangedEventArgs e) => UpdateChromeOverflow();
+
+    private void UpdateChromeOverflow()
+    {
+        if (_disposed) return;
+        var width = ChromeRow.ActualWidth;
+        if (width <= 0 || double.IsNaN(width)) return;
+        BrandText.Visibility = IsBrandVisible(width) ? Visibility.Visible : Visibility.Collapsed;
+        ChromeDivider.Visibility = IsDividerVisible(width) ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Which chrome pieces survive a narrow window. Thresholds come from the
+    /// measured strip: tabs end around x850 and the caption buttons take 168
+    /// (3x46 + 2x15 + 16 right margin), so below ~1040 the strip would run
+    /// under the buttons and the 147px wordmark (x66-213) is the first thing
+    /// worth spending; the 1px divider follows below ~960.
+    /// </summary>
+    internal const double BrandCollapseWidth = 1040;
+
+    internal const double DividerCollapseWidth = 960;
+
+    internal static bool IsBrandVisible(double chromeWidth) => chromeWidth >= BrandCollapseWidth;
+
+    internal static bool IsDividerVisible(double chromeWidth) => chromeWidth >= DividerCollapseWidth;
+
     private void OnFrameNavigationStarting(
         BrowserTabState state,
         CoreWebView2NavigationStartingEventArgs args)
@@ -875,12 +928,12 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
                 HideFallbackAndError();
                 if (_activeUpdateHint is not null)
                 {
-                    StatusText.Text = _activeUpdateHint;
+                    SetStatusText(_activeUpdateHint);
                     _paintedUpdateHint = _activeUpdateHint;
                 }
                 else
                 {
-                    StatusText.Text = $"{CompanionTabs.LabelFor(state.Tab)} ready";
+                    SetStatusText($"{CompanionTabs.LabelFor(state.Tab)} ready");
                     _paintedUpdateHint = null;
                 }
                 if (state.Core is not null)
@@ -1160,6 +1213,92 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
             NavigateHosted(state, new ReopenTarget(ReopenDestination.Home));
         else
             await NavigateSiteHome(state, _shutdownToken).ConfigureAwait(true);
+    }
+
+    private void OnMinimizeClick(object sender, RoutedEventArgs e)
+    {
+        if (_disposed) return;
+        SystemCommands.MinimizeWindow(this);
+    }
+
+    private void OnMaximizeClick(object sender, RoutedEventArgs e)
+    {
+        if (_disposed) return;
+        if (WindowState == WindowState.Maximized)
+            SystemCommands.RestoreWindow(this);
+        else
+            SystemCommands.MaximizeWindow(this);
+    }
+
+    private void OnCloseClick(object sender, RoutedEventArgs e)
+    {
+        if (_disposed) return;
+        SystemCommands.CloseWindow(this);
+    }
+
+    /// <summary>
+    /// The footer's "Live setup" link: back to the Draft tab with its old
+    /// live-setup section showing. That section renders only on the
+    /// <c>#live-setup</c> hash (part 1), so switching tabs is half the job —
+    /// <see cref="SetCompanionLiveSetupHashAsync"/> is the other half.
+    /// </summary>
+    private async void OnLiveSetupClick(object sender, RoutedEventArgs e)
+    {
+        await SwitchToTabAsync(CompanionTab.Companion).ConfigureAwait(true);
+        await SetCompanionLiveSetupHashAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Sets the Draft tab's location hash WITHOUT navigating it: the page is
+    /// already loaded (or loading) and a Navigate would reload the whole
+    /// draft. Companion core only — no site tab is ever scripted here, and
+    /// <c>SiteTabComplianceTests</c> pins exactly that scope.
+    /// </summary>
+    private async Task SetCompanionLiveSetupHashAsync()
+    {
+        if (_disposed) return;
+        var core = GetState(CompanionTab.Companion)?.Core;
+        if (core is null) return;
+        try
+        {
+            await core.ExecuteScriptAsync("location.hash='live-setup'").ConfigureAwait(true);
+        }
+        catch
+        {
+            // The hash is a hint on top of the tab switch above; the Draft
+            // tab stays usable without it.
+        }
+    }
+
+    private void OnProfilesClick(object sender, RoutedEventArgs e)
+    {
+        if (_disposed) return;
+        ProfilesPopup.IsOpen = true;
+    }
+
+    /// <summary>
+    /// Keeps the maximise glyph and the maximised padding honest. With a
+    /// WindowChrome frame a maximised window would otherwise clip its chrome
+    /// against the screen edges; the tree is padded by the 6px resize border
+    /// instead, and the caption button shows the restore glyph.
+    /// </summary>
+    protected override void OnStateChanged(EventArgs e)
+    {
+        base.OnStateChanged(e);
+        if (_disposed) return;
+        UpdateWindowControls();
+    }
+
+    private void UpdateWindowControls()
+    {
+        var maximized = WindowState == WindowState.Maximized;
+        MaximizeGlyph.Text = maximized ? "\uE923" : "\uE922";
+        MaximizeButton.ToolTip = maximized ? "Restore" : "Maximise";
+        AutomationProperties.SetName(MaximizeButton, maximized ? "Restore" : "Maximise");
+        // The pad tracks the frame declared in XAML, not the system metric,
+        // so the two can never disagree about how far the chrome sits in.
+        var pad = System.Windows.Shell.WindowChrome.GetWindowChrome(this)?.ResizeBorderThickness.Left ?? 6;
+        RootGrid.Margin = maximized ? new Thickness(pad) : new Thickness(0);
     }
 
     /// <summary>
@@ -2269,34 +2408,34 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (hasError && activeState?.Error is { } activeError)
             ErrorText.Text = activeError;
 
-        var label = CompanionTabs.LabelFor(ActiveTab);
-        TabStateText.Text = isLoading
-            ? $"{label}  •  loading"
-            : hasError
-                ? $"{label}  •  unavailable"
-                : activeState?.Initialized == true
-                    ? label
-                    : $"{label}  •  ready";
-
         BackButton.IsEnabled = activeState?.Browser?.CanGoBack == true;
         ForwardButton.IsEnabled = activeState?.Browser?.CanGoForward == true;
         RefreshButton.IsEnabled = activeState?.Initialized == true;
 
-        SetTabVisual(CompanionTabButton, CompanionTab.Companion);
-        SetTabVisual(UggTabButton, CompanionTab.UGg);
-        SetTabVisual(CoachlessTabButton, CompanionTab.Coachless);
-        SetTabVisual(OpGgTabButton, CompanionTab.OpGg);
+        // 2.5.0: no TabStateText — the gold pill on the tab strip itself says
+        // which tab is active.
+        SetTabVisual(CompanionTabButton, CompanionDiamond, CompanionTab.Companion);
+        SetTabVisual(UggTabButton, UggDiamond, CompanionTab.UGg);
+        SetTabVisual(CoachlessTabButton, CoachlessDiamond, CompanionTab.Coachless);
+        SetTabVisual(OpGgTabButton, OpGgDiamond, CompanionTab.OpGg);
     }
 
-    private void SetTabVisual(System.Windows.Controls.Button button, CompanionTab tab)
+    private void SetTabVisual(System.Windows.Controls.Button button, TextBlock diamond, CompanionTab tab)
     {
         var active = ActiveTab == tab;
         // Fully qualified: WinForms is enabled on this project, so the implicit
         // System.Drawing using makes a bare `Brushes` the GDI+ one.
         var transparent = System.Windows.Media.Brushes.Transparent;
-        button.Background = active ? (System.Windows.Media.Brush)FindResource("ChromeRaisedBrush") : transparent;
-        button.BorderBrush = active ? (System.Windows.Media.Brush)FindResource("GoldBrush") : transparent;
-        button.Foreground = active ? (System.Windows.Media.Brush)FindResource("TextBrush") : (System.Windows.Media.Brush)FindResource("MutedTextBrush");
+        button.Background = active ? (System.Windows.Media.Brush)FindResource("GoldPillBgBrush") : transparent;
+        // The border thickness stays 2px either way (see the TabButton style):
+        // only the brush changes, so activating a tab never reflows the strip.
+        button.BorderBrush = active ? (System.Windows.Media.Brush)FindResource("GoldPillBrush") : transparent;
+        button.Foreground = active ? (System.Windows.Media.Brush)FindResource("GoldPillBrush") : (System.Windows.Media.Brush)FindResource("ChromeTextBrush");
+        button.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
+        // Null Tag arms the style's hover trigger; "Active" disarms it so the
+        // hover fill can never paint over the gold pill.
+        button.Tag = active ? "Active" : null;
+        diamond.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>
@@ -2320,7 +2459,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         state.IsLoading = true;
         if (!IsActiveTab(state)) return;
         LoadingText.Text = message;
-        StatusText.Text = message;
+        SetStatusText(message);
         UpdateChrome();
     }
 
@@ -2330,7 +2469,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         state.Error = message;
         if (!IsActiveTab(state)) return;
         ErrorText.Text = message;
-        StatusText.Text = message;
+        SetStatusText(message);
         UpdateChrome();
     }
 
@@ -2340,7 +2479,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         _showingFallback = true;
         _fallbackMessage = message;
         Fallback.IsRepairEnabled = true;
-        StatusText.Text = message;
+        SetStatusText(message);
         UpdateChrome();
     }
 
@@ -2353,7 +2492,20 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
 
     private void SetStatus(string message)
     {
+        SetStatusText(message);
+    }
+
+    /// <summary>
+    /// The single writer for the footer note (2.5.0). The note sits after the
+    /// "Live setup · Companion {version}" text, and an idle "Ready" carries no
+    /// information next to it, so it collapses to make room for the version.
+    /// </summary>
+    private void SetStatusText(string message)
+    {
         StatusText.Text = message;
+        StatusText.Visibility = string.Equals(message, "Ready", StringComparison.Ordinal)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     /// <summary>
@@ -2369,7 +2521,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         {
             if (IsIdleStatusSlot(StatusText.Text, _paintedUpdateHint))
             {
-                StatusText.Text = _activeUpdateHint;
+                SetStatusText(_activeUpdateHint);
                 _paintedUpdateHint = _activeUpdateHint;
             }
 
@@ -2379,7 +2531,7 @@ public partial class WebView2Window : Window, ISiteAutoImportExecutor
         if (_paintedUpdateHint is not null
             && string.Equals(StatusText.Text, _paintedUpdateHint, StringComparison.Ordinal))
         {
-            StatusText.Text = IdleStatusText();
+            SetStatusText(IdleStatusText());
             _paintedUpdateHint = null;
         }
     }

@@ -17,7 +17,8 @@ public enum ChromeRenderMode
 /// The research window's WPF chrome painted BLANK WHITE while the WebView2
 /// content and the Win32 title bar painted correctly:
 /// <c>_evidence/live-2.1.0-pass2/01-champselect.png</c> shows the whole 56px
-/// chrome row AND the 35px status bar white, and
+/// chrome row AND the 35px status bar white (2.5.0 restyled them to 54px and
+/// 44px with a custom title bar, but the fault analysis is unchanged), and
 /// <c>_research/site-import/user-evidence/white-strip-gaming-pc.jpg</c> shows
 /// a partial band — the nav buttons and the tab strip painted, with white to
 /// the left of them (the COACHBUILD wordmark) and to the right (the tab-state
@@ -29,7 +30,7 @@ public enum ChromeRenderMode
 ///   <item>THE WHITE IS NOT IN THE XAML. No brush in
 ///   <c>WebView2Window.xaml</c> is white; every Grid row is covered by an
 ///   element with an explicit dark background, and the root Grid itself is
-///   <c>#081321</c>. There is no fixed-height leftover row and no default
+///   <c>#0A1420</c> (was <c>#081321</c> before the 2.5.0 restyle). There is no fixed-height leftover row and no default
 ///   brush that could produce it. A white pixel there is the window's
 ///   uninitialized backing surface, not a fill anyone asked for. Pinned by
 ///   <c>WebView2WindowChromeTests</c> so a future refactor cannot
@@ -60,8 +61,7 @@ public enum ChromeRenderMode
 /// <para>THE REMEDY. Software rendering removes the hardware present path the
 /// fault lives in. It is the default here rather than an opt-in because the
 /// cost in THIS app is close to nothing and the failure mode is an unreadable
-/// window: WPF paints only a 56px chrome row, a thin offer bar and a 35px
-/// status bar, while every page pixel belongs to the WebView2, whose own
+/// window: WPF paints only a 54px chrome row and a 44px status bar, while every page pixel belongs to the WebView2, whose own
 /// compositor is unaffected by <c>ProcessRenderMode</c>. The overlay is
 /// already effectively software — <c>AllowsTransparency="True"</c> makes it a
 /// layered window, which WPF does not hardware-compose in any case.</para>

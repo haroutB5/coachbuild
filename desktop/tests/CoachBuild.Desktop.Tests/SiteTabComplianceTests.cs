@@ -45,6 +45,12 @@ public sealed class SiteTabComplianceTests
     /// the loop may only ever execute its own <c>script</c> argument, and every
     /// caller of the loop must name a shipped const. An unnamed script cannot
     /// reach a page through either half.</para>
+    ///
+    /// <para>2.5.0 adds ONE sanctioned script outside that shape:
+    /// <c>SetCompanionLiveSetupHashAsync</c> sets
+    /// <c>location.hash='live-setup'</c> on the LOCAL Draft page only, behind
+    /// the footer's "Live setup" link. It is pinned below to the Companion
+    /// core and to that literal; anything broader fails here.</para>
     /// </summary>
     [Fact]
     public void Site_scripts_are_limited_to_automatic_reads_and_consent()
@@ -55,6 +61,7 @@ public sealed class SiteTabComplianceTests
                 "ExtractVisibleOnUiAsync", "FetchViaWorkerOnUiAsync",
                 "FetchCoachlessRunesOnUiAsync", "DismissConsentAsync",
                 "DismissMyStatsConsentAsync", "ReadItemsWithSettleAsync",
+                "SetCompanionLiveSetupHashAsync",
             ],
             StringComparer.Ordinal);
         foreach (var method in namedReads) Assert.Contains(method, source, StringComparison.Ordinal);
@@ -63,7 +70,7 @@ public sealed class SiteTabComplianceTests
 
         // Half one: who may call ExecuteScriptAsync at all, and with what.
         var runners = new HashSet<string>(
-            ["ReadWithSettleAsync", "DismissConsentAsync", "DismissMyStatsConsentAsync"],
+            ["ReadWithSettleAsync", "DismissConsentAsync", "DismissMyStatsConsentAsync", "SetCompanionLiveSetupHashAsync"],
             StringComparer.Ordinal);
         var invocations = Regex.Matches(source, @"\.\s*ExecuteScriptAsync\s*\(");
         Assert.True(invocations.Count >= runners.Count, $"{invocations.Count} ExecuteScriptAsync calls");
@@ -73,9 +80,12 @@ public sealed class SiteTabComplianceTests
             Assert.Contains(method, runners);
             var callText = source.Substring(invocation.Index, Math.Min(600, source.Length - invocation.Index));
             // The settle loop runs the script it was HANDED and never picks one.
+            // The live-setup link runs one literal hash assignment and nothing else.
             var allowed = method == "ReadWithSettleAsync"
                 ? callText.Contains("ExecuteScriptAsync(script)", StringComparison.Ordinal)
-                : callText.Contains("ConsentDismissScript", StringComparison.Ordinal);
+                : method == "SetCompanionLiveSetupHashAsync"
+                    ? callText.Contains("location.hash='live-setup'", StringComparison.Ordinal)
+                    : callText.Contains("ConsentDismissScript", StringComparison.Ordinal);
             Assert.True(allowed, method + " :: " + callText[..Math.Min(80, callText.Length)]);
         }
 
@@ -146,6 +156,35 @@ public sealed class SiteTabComplianceTests
         Assert.True(fetchStart > 0 && fetchEnd > fetchStart, "background fetch body not found");
         var fetchBody = source[fetchStart..fetchEnd];
         Assert.Contains("TouchTabActivity(site)", fetchBody, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 2.5.0: the footer's "Live setup" link may set the Draft tab's location
+    /// hash and NOTHING else. The hash setter reads the Companion core only,
+    /// runs one literal, never navigates, never reloads, and never names a
+    /// site-tab script — so a future edit cannot quietly turn the footer into
+    /// a fifth scrape path.
+    /// </summary>
+    [Fact]
+    public void The_live_setup_link_only_sets_the_companion_hash()
+    {
+        var source = ReadSource(WindowSource);
+        var start = source.IndexOf("private async Task SetCompanionLiveSetupHashAsync", StringComparison.Ordinal);
+        Assert.True(start > 0, "live-setup hash setter not found");
+        var end = source.IndexOf("\n    }", start, StringComparison.Ordinal);
+        Assert.True(end > start, "live-setup hash setter body not bounded");
+        var body = source[start..end];
+        Assert.Contains("GetState(CompanionTab.Companion)?.Core", body, StringComparison.Ordinal);
+        Assert.Contains("location.hash='live-setup'", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("UGgScript", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("CoachlessItemsScript", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("CoachlessRunesScript", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConsentDismissScript", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Navigate(", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Reload(", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("CompanionTab.UGg", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("CompanionTab.Coachless", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("CompanionTab.OpGg", body, StringComparison.Ordinal);
     }
 
     [Fact]
