@@ -1,5 +1,5 @@
 // Run after npm run build. Exercises the exported page in headless Chromium.
-// All CDN, bridge and native counter responses are fixtures; no League writes.
+// All CDN, bridge and native counter replies are fixtures; no League writes.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -9,6 +9,7 @@ import puppeteer from 'puppeteer-core';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const uiRoot = path.resolve(process.env.DRAFT_UI_ROOT ?? path.join(root, 'desktop/ui/out'));
+const evidenceDir = path.join(root, '_evidence/redesign-2.5.0');
 const executablePath = process.env.BROWSER_PATH ?? [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -18,14 +19,29 @@ assert.ok(executablePath, 'Set BROWSER_PATH to a Chromium browser executable');
 assert.ok(existsSync(path.join(uiRoot, 'index.html')), 'Build the Draft UI first');
 const champions = JSON.parse(await fs.readFile(path.join(root,
   'desktop/tests/CoachBuild.Core.Tests/Fixtures/champions.live.json'), 'utf8'));
+// Ten ranked counter rows (ids all exist in the fixture roster) so the tables
+// render 7 rows by default with a "Show all 10" toggle. The last three rows
+// sit below the 20-game small-sample gate, which must surface the warning.
+const counterRows = [
+  { champion_id: 266, win_rate: 30, gold_adv_15: -1500, matches: 1200, pick_rate: 5 },
+  { champion_id: 103, win_rate: 35, gold_adv_15: -1200, matches: 800, pick_rate: 4 },
+  { champion_id: 84, win_rate: 40, gold_adv_15: -900, matches: 450, pick_rate: 3 },
+  { champion_id: 12, win_rate: 42, gold_adv_15: -700, matches: 300, pick_rate: 2.5 },
+  { champion_id: 1, win_rate: 45, gold_adv_15: -500, matches: 150, pick_rate: 2 },
+  { champion_id: 22, win_rate: 48, gold_adv_15: -300, matches: 90, pick_rate: 1.8 },
+  { champion_id: 53, win_rate: 50, gold_adv_15: -100, matches: 45, pick_rate: 1.5 },
+  { champion_id: 63, win_rate: 55, gold_adv_15: 200, matches: 18, pick_rate: 1.2 },
+  { champion_id: 51, win_rate: 60, gold_adv_15: 400, matches: 12, pick_rate: 1.0 },
+  { champion_id: 164, win_rate: 65, gold_adv_15: 600, matches: 8, pick_rate: 0.9 },
+];
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.woff2': 'font/woff2', '.ico': 'image/x-icon' };
 const browser = await puppeteer.launch({ executablePath, headless: true });
 let failures = 0;
 
-async function openPage(overrides = {}) {
+async function openPage(overrides = {}, viewport = { width: 1280, height: 900 }) {
   const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 900 });
+  await page.setViewport(viewport);
   page.setDefaultTimeout(10000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -53,7 +69,7 @@ async function openPage(overrides = {}) {
       if (!request.isInterceptResolutionHandled()) await request.abort();
     });
   });
-  await page.evaluateOnNewDocument((roster, initial) => {
+  await page.evaluateOnNewDocument((roster, rows, initial) => {
     const state = window.__draftTest = {
       connected: true, historyFails: false, pending: null, submissions: [], counterRequests: [],
       phase: 'Lobby', champSelect: null, ...initial,
@@ -75,6 +91,8 @@ async function openPage(overrides = {}) {
         if (url.pathname === '/lane-scores/pending') return json({ pending: state.pending });
         if (url.pathname === '/lane-scores/recommendations') {
           if (state.historyFails) throw new TypeError('Fixture: temporary read failure');
+          if (state.historyEmpty) return json({ enemyChampionId: Number(url.searchParams.get('enemy')),
+            roleId: Number(url.searchParams.get('role')), totalGames: 0, best: [], worst: [] });
           return json({ enemyChampionId: Number(url.searchParams.get('enemy')),
             roleId: Number(url.searchParams.get('role')), totalGames: 1,
             best: [{ championId: 106, championName: 'Volibear', games: 1, mean: 8, lastPlayedAt: null }], worst: [] });
@@ -98,20 +116,20 @@ async function openPage(overrides = {}) {
         setTimeout(() => listeners.forEach(listener => listener({ data: {
           type: 'ugg-counters-result', id: request.id, patch: '16.18',
           sourceUrl: `https://u.gg/lol/champions/${request.slug}/counter`,
-          rows: [{ champion_id: 106, win_rate: 45, gold_adv_15: -200, matches: 100, pick_rate: 2 }],
+          rows,
         } })), 25);
       },
     };
-  }, champions, overrides);
+  }, champions, counterRows, overrides);
   await page.goto('https://coachbuild.local/index.html?session=fixture-session');
   await page.waitForFunction(() => document.body.innerText.includes('Companion test'));
   return { page, errors };
 }
 
-async function check(name, test, overrides) {
+async function check(name, test, overrides, viewport) {
   let page;
   try {
-    const opened = await openPage(overrides);
+    const opened = await openPage(overrides, viewport);
     page = opened.page;
     await test(page);
     assert.deepEqual(opened.errors, [], 'No browser errors or unexpected requests');
@@ -125,6 +143,20 @@ const live = { phase: 'ChampSelect', champSelect: {
   localPlayerCellId: 0, cellChampionId: 103, pickIntent: 103, actionChampionId: 103,
   roleId: 0, theirTeam: [887, 122], timerPhase: 'BAN_PICK',
 } };
+const pendingGame = { pending: { matchId: 'fixture-ranked', queueId: 420, myChampionId: 106,
+  myChampionName: 'Volibear', roleId: null, opponentChampionId: null, enemyChampionIds: [887, 24] } };
+// Aatrox-like live draft for the redesign screenshots: one marked enemy so the
+// tables, the gold lane-opponent frame and the small-sample warning all render.
+const liveAatrox = { historyEmpty: true, phase: 'ChampSelect', champSelect: {
+  localPlayerCellId: 0, cellChampionId: 103, pickIntent: 103, actionChampionId: 103,
+  roleId: 0, theirTeam: [266, 122], timerPhase: 'BAN_PICK',
+} };
+
+async function markFirstEnemy(page, label) {
+  await page.waitForSelector(`[aria-label="${label}"]`);
+  await page.click(`[aria-label="${label}"]`);
+  await page.waitForFunction(text => document.body.innerText.includes(text), {}, 'Counters vs');
+}
 
 try {
   await check('export loads, session is removed, desktop and narrow layouts fit', async page => {
@@ -172,10 +204,11 @@ try {
     await page.waitForFunction(() => document.body.innerText.includes('8.0/10 avg'));
   }, { ...live, historyFails: true });
   await check('unknown opponent and role require input; save submits once and clears card', async page => {
+    await page.locator('button::-p-text(Previous game)').click();
     const card = '[aria-label="Score your last ranked lane"]';
     await page.waitForSelector(card);
     await page.locator(`${card} button::-p-text(Save score)`).wait();
-    assert.equal(await page.$eval(`${card} button.bg-accent`, node => node.disabled), true);
+    assert.equal(await page.$eval(`${card} .d25-savebtn`, node => node.disabled), true);
     await page.click(`${card} [aria-label="Gwen"]`);
     await page.select(`${card} select`, '4');
     await page.click(`${card} [aria-label="Score 8 out of 10"]`);
@@ -185,7 +218,74 @@ try {
     assert.deepEqual(await page.evaluate(() => window.__draftTest.submissions), [{
       matchId: 'fixture-ranked', score: 8, roleId: 4, opponentChampionId: 887, note: 'Good trades',
     }]);
-  }, { pending: { matchId: 'fixture-ranked', queueId: 420, myChampionId: 106,
-    myChampionName: 'Volibear', roleId: null, opponentChampionId: null, enemyChampionIds: [887, 24] } });
+  }, pendingGame);
+  await check('redesign: pill, both table cards with 7 rows, show-all, imports chips', async page => {
+    await markFirstEnemy(page, 'Mark Aatrox as your lane opponent');
+    assert.ok(await page.$('button::-p-text(Previous game)'), 'Previous game pill renders');
+    for (const id of ['#d25-table-best', '#d25-table-worst']) {
+      assert.equal(await page.$$eval(`${id} .d25-trow`, rows => rows.length), 7, `${id} shows 7 rows by default`);
+      assert.ok(await page.$(`${id} .d25-showall`), `${id} has a Show all button`);
+    }
+    assert.ok((await page.$eval('#d25-table-best .d25-badge', node => node.textContent)).includes('Top 10'));
+    assert.ok((await page.$eval('#d25-table-worst .d25-badge', node => node.textContent)).includes('Bottom 10'));
+    assert.ok(await page.$eval('.d25-warn', node => node.textContent.includes('Small samples')));
+    const chips = await page.$$eval('#d25-imports .d25-chip', nodes => nodes.map(node => node.textContent));
+    assert.deepEqual(chips, ['Uu.gg', 'CCoachless', 'PPro']);
+    // Show-all reveals every fixture row, then collapses back to 7.
+    await page.click('#d25-table-best .d25-showall');
+    assert.equal(await page.$$eval('#d25-table-best .d25-trow', rows => rows.length), 10, 'Show all reveals 10 rows');
+    await page.click('#d25-table-best .d25-showall');
+    assert.equal(await page.$$eval('#d25-table-best .d25-trow', rows => rows.length), 7, 'Show fewer collapses to 7');
+  }, liveAatrox);
+  await check('redesign: screenshots + pixel measurements at 1586x894', async page => {
+    await markFirstEnemy(page, 'Mark Aatrox as your lane opponent');
+    await fs.mkdir(evidenceDir, { recursive: true });
+    const boxes = await page.evaluate(() => {
+      const rect = selector => {
+        const node = document.querySelector(selector);
+        if (!node) return null;
+        const r = node.getBoundingClientRect();
+        return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+      };
+      return {
+        heading: rect('.d25-title'),
+        pill: rect('#d25-pill'),
+        teamStrip: rect('#d25-teamstrip'),
+        youSlot: rect('#d25-you-slot-0 .d25-slot'),
+        enemySlot: rect('#d25-enemy-slot-0 .d25-slot'),
+        chead: rect('.d25-chead'),
+        warn: rect('.d25-warn'),
+        bestCard: rect('#d25-table-best'),
+        worstCard: rect('#d25-table-worst'),
+        footnote: rect('.d25-footnote'),
+        imports: rect('#d25-imports'),
+      };
+    });
+    console.log(`MEASURE ${JSON.stringify(boxes)}`);
+    await page.screenshot({ path: path.join(evidenceDir, 'web-draft.png') });
+    assert.ok(existsSync(path.join(evidenceDir, 'web-draft.png')), 'draft screenshot written');
+  }, liveAatrox, { width: 1586, height: 894 });
+  await check('redesign: previous-game panel screenshot', async page => {
+    await page.locator('button::-p-text(Previous game)').click();
+    await page.waitForSelector('[aria-label="Score your last ranked lane"]');
+    await fs.mkdir(evidenceDir, { recursive: true });
+    await page.screenshot({ path: path.join(evidenceDir, 'web-previous-game.png') });
+    assert.ok(existsSync(path.join(evidenceDir, 'web-previous-game.png')), 'panel screenshot written');
+    // Escape closes the panel without scoring.
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('[aria-label="Score your last ranked lane"]', { hidden: true });
+  }, pendingGame, { width: 1586, height: 894 });
+  await check('redesign: narrow screenshots stack without scrolling', async page => {
+    await markFirstEnemy(page, 'Mark Aatrox as your lane opponent');
+    await fs.mkdir(evidenceDir, { recursive: true });
+    await page.setViewport({ width: 1280, height: 806 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: path.join(evidenceDir, 'web-draft-1280.png') });
+    await page.setViewport({ width: 940, height: 566 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: path.join(evidenceDir, 'web-draft-940.png') });
+    assert.ok(existsSync(path.join(evidenceDir, 'web-draft-1280.png')), '1280 screenshot written');
+    assert.ok(existsSync(path.join(evidenceDir, 'web-draft-940.png')), '940 screenshot written');
+  }, liveAatrox);
 } finally { await browser.close(); }
 process.exitCode = failures ? 1 : 0;

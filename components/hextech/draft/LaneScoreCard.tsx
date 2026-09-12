@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CaretDown, Check, Clock } from "@phosphor-icons/react";
 import type { ChampionIconEntry } from "@/components/proAssets";
 import { IconWithFallback } from "@/components/IconWithFallback";
 import {
@@ -18,31 +19,28 @@ function champName(id: number, champIcons: Map<number, ChampionIconEntry>, fallb
   return champIcons.get(id)?.name ?? fallback ?? `Champion #${id}`;
 }
 
-function ChampionTile({ id, name, champIcons }: { id: number; name: string; champIcons: Map<number, ChampionIconEntry> }) {
-  return <span className="h-8 w-8 shrink-0 overflow-hidden rounded">
-    <IconWithFallback src={champIcons.get(id)?.icon ?? ""} alt={name} fallbackGlyph={name} size={32}
-      className="h-full w-full object-cover" />
-  </span>;
-}
-
 /**
- * "How did your lane go?" — the post-game scoring card.
+ * "Previous game" review panel — the post-game scoring card re-skinned as a
+ * right-side overlay. Opens only via the header pill (never auto-opens) and
+ * closes with Escape, the close button, or after Save score / Skip game.
  *
- * Renders NOTHING (null) unless the companion reports a pending ranked game,
- * so it never reserves space in champ select. The 1-10 ends are labelled on
- * the card itself (not in a tooltip) because these scores are compared across
- * months and an unlabelled scale drifts.
+ * Data flow is unchanged: polls fetchPendingLaneScore, saves via submitScore,
+ * skips via skipScore. Renders NOTHING (null) unless `open` — and when open
+ * with nothing pending, shows the header plus an explicit empty line.
  *
  * When the companion could not determine the lane opponent the card refuses to
  * guess: it says so plainly and makes the user pick from the five enemy
  * champions before a score can be saved. Skip stays available either way.
  */
-export default function LaneScoreCard({ champIcons, loadPending, submitScore, skipScore, onResolved }: {
+export default function LaneScoreCard({ champIcons, loadPending, submitScore, skipScore, onResolved, open, onClose, onPendingChange }: {
   champIcons: Map<number, ChampionIconEntry>;
   loadPending: (signal: AbortSignal) => Promise<PendingLaneScore | null>;
   submitScore: (submission: LaneScoreSubmission, signal?: AbortSignal) => Promise<LaneScoreResult>;
   skipScore: (matchId: string, signal?: AbortSignal) => Promise<LaneScoreResult>;
   onResolved?: () => void;
+  open: boolean;
+  onClose: () => void;
+  onPendingChange?: (hasPending: boolean) => void;
 }) {
   const [pending, setPending] = useState<PendingLaneScore | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -79,16 +77,32 @@ export default function LaneScoreCard({ champIcons, loadPending, submitScore, sk
     return () => { stopped = true; clearTimeout(timer); controller.abort(); };
   }, [loadPending, apply]);
 
-  if (!pending) return null;
+  useEffect(() => {
+    onPendingChange?.(pending !== null);
+  }, [pending, onPendingChange]);
 
-  const needsOpponent = pending.opponentChampionId === null;
-  const opponentId = pending.opponentChampionId ?? draft.opponent;
-  const myName = champName(pending.myChampionId, champIcons, pending.myChampionName);
-  const opponentName = opponentId === null ? null : champName(opponentId, champIcons, pending.opponentChampionName);
-  const role = roleLabel(pending.roleId);
-  const needsRole = role === null;
-  const queue = RANKED_QUEUE_LABEL[pending.queueId] ?? null;
-  const canSubmit = !busy && draft.score !== null && (!needsOpponent || draft.opponent !== null)
+  useEffect(() => {
+    if (!open) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const needsOpponent = pending !== null && pending.opponentChampionId === null;
+  const opponentId = pending === null ? null : (pending.opponentChampionId ?? draft.opponent);
+  const myName = pending === null ? "" : champName(pending.myChampionId, champIcons, pending.myChampionName);
+  const opponentName = opponentId === null || pending === null
+    ? null
+    : champName(opponentId, champIcons, pending.opponentChampionName);
+  const role = pending === null ? null : roleLabel(pending.roleId);
+  const needsRole = pending !== null && role === null;
+  const queue = pending === null ? null : (RANKED_QUEUE_LABEL[pending.queueId] ?? "Ranked");
+  const canSubmit = pending !== null && !busy && draft.score !== null
+    && (!needsOpponent || draft.opponent !== null)
     && (!needsRole || draft.role !== null);
 
   function finish(result: LaneScoreResult, matchId: string) {
@@ -98,6 +112,7 @@ export default function LaneScoreCard({ champIcons, loadPending, submitScore, sk
       setDraft(EMPTY_DRAFT);
       setError(null);
       onResolved?.();
+      onClose();
       return;
     }
     setError(result.message);
@@ -138,101 +153,181 @@ export default function LaneScoreCard({ champIcons, loadPending, submitScore, sk
     }
   }
 
-  return <section aria-label="Score your last ranked lane" className="rounded-lg bg-panel p-4">
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 className="text-sm font-semibold text-txt">How did your lane go?</h2>
-        <p className="mt-1 text-xs text-mut">
-          Your own record, stored on this PC only.{queue ? ` · ${queue}` : ""}{role ? ` · ${role}` : ""}
-        </p>
-      </div>
-      <button type="button" onClick={handleSkip} disabled={busy}
-        className="rounded border border-line px-3 py-1.5 text-xs font-semibold text-mut disabled:opacity-50">
-        Skip this game
-      </button>
+  return (
+    <div className="d25-panelroot">
+      <div className="d25-backdrop" aria-hidden="true" onClick={onClose} />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label="Previous game"
+        className="d25-panel"
+      >
+        <div className="d25-panel-head">
+          <Clock size={26} color="#E8EEF5" aria-hidden="true" />
+          <h2 className="d25-panel-title">Previous game</h2>
+          <span className="d25-qpill">{queue ?? "Ranked"}<CaretDown size={14} aria-hidden="true" /></span>
+          <button type="button" onClick={onClose} aria-label="Close previous game panel" className="d25-panel-close">×</button>
+        </div>
+
+        {pending === null ? (
+          <p className="d25-panel-empty">No ranked game waiting to be scored.</p>
+        ) : (
+          <div aria-label="Score your last ranked lane">
+            <h3 className="d25-panel-h">How did your lane go?</h3>
+            <div className="d25-matchup">
+              <div className="d25-matchside">
+                <IconWithFallback
+                  src={champIcons.get(pending.myChampionId)?.icon ?? ""}
+                  alt={myName}
+                  fallbackGlyph={myName}
+                  size={76}
+                  className="d25-matchimg"
+                />
+                <span className="d25-matchname">{myName}</span>
+                <span className="d25-matchsub">You · {role ?? "Unknown role"}</span>
+              </div>
+              <span aria-hidden="true" className="d25-vs">VS</span>
+              <div className="d25-matchside">
+                {opponentId === null ? (
+                  <>
+                    <span className="d25-matchimg d25-matchimg-empty" aria-hidden="true">?</span>
+                    <span className="d25-matchname">Unknown</span>
+                    <span className="d25-matchsub">Pick below</span>
+                  </>
+                ) : (
+                  <>
+                    <IconWithFallback
+                      src={champIcons.get(opponentId)?.icon ?? ""}
+                      alt={opponentName ?? ""}
+                      fallbackGlyph={opponentName ?? ""}
+                      size={76}
+                      className="d25-matchimg"
+                    />
+                    <span className="d25-matchname">{opponentName}</span>
+                    <span className="d25-matchsub">Opponent</span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <hr className="d25-hr" />
+
+            <h3 className="d25-panel-h">Lane opponent</h3>
+            {needsOpponent && (
+              <p className="d25-panel-note">
+                We couldn&apos;t tell who you laned against. The League client did not give usable
+                position data for this game, so nothing is pre-selected. Pick your lane opponent below.
+              </p>
+            )}
+            <div role="group" aria-label="Pick your lane opponent" className="d25-tiles">
+              {pending.enemyChampionIds.map(id => {
+                const name = champName(id, champIcons);
+                const selected = (pending.opponentChampionId ?? draft.opponent) === id;
+                return (
+                  <div key={id} className="d25-tilewrap">
+                    <button
+                      type="button"
+                      disabled={busy || pending.opponentChampionId !== null}
+                      aria-pressed={selected}
+                      aria-label={name}
+                      title={name}
+                      onClick={() => setDraft(prev => ({ ...prev, opponent: selected ? null : id }))}
+                      className={`d25-tile${selected ? " d25-tile-sel" : ""}`}
+                    >
+                      <IconWithFallback
+                        src={champIcons.get(id)?.icon ?? ""}
+                        alt=""
+                        fallbackGlyph={name}
+                        size={64}
+                        className="d25-tileimg"
+                      />
+                      {selected && (
+                        <span className="d25-check" aria-hidden="true">
+                          <Check size={14} weight="bold" color="#1A1405" />
+                        </span>
+                      )}
+                    </button>
+                    <span className="d25-tilename">{name}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <hr className="d25-hr" />
+
+            <div className="d25-prevrole">
+              <label htmlFor="d25-prevrole-select" className="d25-prevrole-label">Previous role</label>
+              {needsRole ? (
+                <select
+                  id="d25-prevrole-select"
+                  aria-label="Your role"
+                  value={draft.role ?? ""}
+                  disabled={busy}
+                  onChange={event => setDraft(prev => ({ ...prev, role: event.target.value === "" ? null : Number(event.target.value) as RoleId }))}
+                  className="d25-prevrole-select"
+                >
+                  <option value="">Choose your role</option>
+                  {Object.entries(ROLE_LABEL).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                </select>
+              ) : (
+                <span className="d25-prevrole-value">{role}</span>
+              )}
+            </div>
+
+            <h3 className="d25-panel-h">How easy was your lane?</h3>
+            <div role="group" aria-label="Lane score from 1 to 10" className="d25-scores">
+              {SCORES.map(value => {
+                const selected = draft.score === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    disabled={busy}
+                    aria-pressed={selected}
+                    aria-label={`Score ${value} out of 10`}
+                    onClick={() => setDraft(prev => ({ ...prev, score: selected ? null : value }))}
+                    className={`d25-scorebtn${selected ? " d25-scorebtn-sel" : ""}`}
+                  >
+                    {value}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="d25-scalelabels" aria-hidden="true">
+              <span>1 · Unplayable</span><span>10 · Free lane</span>
+            </div>
+
+            <label className="d25-notelabel" htmlFor="d25-note">
+              Note (optional)
+            </label>
+            <textarea
+              id="d25-note"
+              value={draft.note}
+              maxLength={MAX_LANE_NOTE_LENGTH}
+              rows={2}
+              disabled={busy}
+              onChange={event => setDraft(prev => ({ ...prev, note: event.target.value }))}
+              placeholder="What decided the lane?"
+              className="d25-note"
+            />
+            <span className="d25-counter">{draft.note.length}/{MAX_LANE_NOTE_LENGTH}</span>
+
+            {needsOpponent && draft.opponent === null && pending.opponentChampionId === null &&
+              <p className="d25-panel-note">Pick the opponent above to save a score. Skip works without picking.</p>}
+            {error && <p role="alert" className="d25-panel-error">{error}</p>}
+
+            <div className="d25-panel-actions">
+              <button type="button" onClick={handleSave} disabled={!canSubmit} className="d25-savebtn">
+                {busy ? "Saving…" : "Save score"}
+              </button>
+              <button type="button" onClick={handleSkip} disabled={busy} className="d25-skipbtn">
+                Skip game
+              </button>
+            </div>
+            <p className="d25-stored">Your ratings are stored on this PC.</p>
+          </div>
+        )}
+      </aside>
     </div>
-
-    <div className="mt-4 flex flex-wrap items-center gap-4">
-      <div className="flex items-center gap-2">
-        <ChampionTile id={pending.myChampionId} name={myName} champIcons={champIcons} />
-        <span className="text-sm"><span className="block font-semibold text-txt">{myName}</span>
-          <span className="block text-[11px] uppercase tracking-wide text-mut">You</span></span>
-      </div>
-      <span aria-hidden="true" className="text-xs font-semibold text-mut">vs</span>
-      {opponentId === null
-        ? <span className="text-sm text-mut">Opponent not identified</span>
-        : <div className="flex items-center gap-2">
-            <ChampionTile id={opponentId} name={opponentName ?? ""} champIcons={champIcons} />
-            <span className="text-sm"><span className="block font-semibold text-txt">{opponentName}</span>
-              <span className="block text-[11px] uppercase tracking-wide text-mut">Opponent</span></span>
-          </div>}
-    </div>
-
-    {needsOpponent && <div className="mt-4 rounded-lg bg-panel2 p-3">
-      <p className="text-sm text-txt">We couldn&apos;t tell who you laned against.</p>
-      <p className="mt-1 text-xs text-mut">
-        The League client did not give usable position data for this game, so nothing is pre-selected. Pick your lane
-        opponent from the enemy team, or skip the game.
-      </p>
-      <div role="group" aria-label="Pick your lane opponent" className="mt-3 flex flex-wrap gap-2">
-        {pending.enemyChampionIds.map(id => {
-          const name = champName(id, champIcons);
-          const selected = draft.opponent === id;
-          return <button key={id} type="button" disabled={busy} aria-pressed={selected} aria-label={name} title={name}
-            onClick={() => setDraft(prev => ({ ...prev, opponent: selected ? null : id }))}
-            className={`h-9 w-9 overflow-hidden rounded ring-2 ${selected ? "ring-accent" : "ring-transparent"}`}>
-            <IconWithFallback src={champIcons.get(id)?.icon ?? ""} alt="" fallbackGlyph={name} size={32}
-              className="h-full w-full object-cover" />
-          </button>;
-        })}
-      </div>
-    </div>}
-
-    {needsRole && <label className="mt-4 block text-sm text-txt">
-      Which role did you play?
-      <select aria-label="Your role" value={draft.role ?? ""} disabled={busy}
-        onChange={event => setDraft(prev => ({ ...prev, role: event.target.value === "" ? null : Number(event.target.value) as RoleId }))}
-        className="mt-1 block rounded bg-panel2 p-2 text-sm text-txt">
-        <option value="">Choose your role</option>
-        {Object.entries(ROLE_LABEL).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-      </select>
-    </label>}
-
-    <div role="group" aria-label="Lane score from 1 to 10" className="mt-4 flex flex-wrap gap-1.5">
-      {SCORES.map(value => {
-        const selected = draft.score === value;
-        return <button key={value} type="button" disabled={busy} aria-pressed={selected} aria-label={`Score ${value} out of 10`}
-          onClick={() => setDraft(prev => ({ ...prev, score: selected ? null : value }))}
-          className={`h-9 w-9 rounded font-semibold tabular-nums ${selected ? "bg-accent text-bg" : "bg-panel2 text-txt"}`}>
-          {value}
-        </button>;
-      })}
-    </div>
-    <div className="mt-1.5 flex justify-between text-[11px] text-mut">
-      <span>1 = unplayable</span><span>10 = free lane</span>
-    </div>
-
-    <label className="mt-4 block">
-      <span className="text-xs text-mut">Note (optional)</span>
-      <textarea value={draft.note} maxLength={MAX_LANE_NOTE_LENGTH} rows={2} disabled={busy}
-        onChange={event => setDraft(prev => ({ ...prev, note: event.target.value }))}
-        placeholder="What decided the lane?"
-        className="mt-1 w-full rounded bg-panel2 p-2 text-sm text-txt placeholder:text-mut" />
-      <span className="block text-right text-[11px] tabular-nums text-mut">
-        {draft.note.length}/{MAX_LANE_NOTE_LENGTH}
-      </span>
-    </label>
-
-    {needsOpponent && draft.opponent === null &&
-      <p className="mt-2 text-xs text-mut">Pick the opponent above to save a score. Skip works without picking.</p>}
-    {error && <p role="alert" className="mt-2 text-sm text-bad">{error}</p>}
-
-    <div className="mt-3 flex items-center gap-2">
-      <button type="button" onClick={handleSave} disabled={!canSubmit}
-        className="rounded bg-accent px-4 py-2 text-sm font-semibold text-bg disabled:opacity-50">
-        {busy ? "Saving…" : "Save score"}
-      </button>
-      {draft.score !== null && <span className="text-xs text-mut">Saving {draft.score}/10</span>}
-    </div>
-  </section>;
+  );
 }
