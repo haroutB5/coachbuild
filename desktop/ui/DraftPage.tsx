@@ -214,6 +214,12 @@ const DRAFT_CSS = `
    default 1280 px window), so only it moves to a row under the teams. */
 @media (max-width: 1539px) {
   .d25-teamcard { flex-wrap: wrap; row-gap: 12px; }
+  /* Tighter team spacing keeps both teams on one row down to the 1199px
+     stack: the default 1280 window gives the page only 1268px (2.5.2 edge
+     + resize inset), and the mockup spacing needs 1275. */
+  .d25-div2 { margin-left: 48px; }
+  .d25-teamblock-enemy { margin-left: 40px; }
+  .d25-slots-enemy { gap: 10px; }
   .d25-teambtns { margin-left: 0; padding-left: 0; flex: 1 1 100%; flex-direction: row; justify-content: flex-end; }
 }
 @media (max-width: 1199px) {

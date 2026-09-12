@@ -1,5 +1,11 @@
 # Changelog
 
+## Desktop 2.5.3 (2026-09-12)
+
+- At the default window size both teams sit on one row again (2.5.2's new
+  window edge left the page slightly too narrow, which pushed Enemy team onto
+  a second line).
+
 ## Desktop 2.5.2 (2026-09-12)
 
 - The counter tables always show every pick (all 15 and all 10); the Show all

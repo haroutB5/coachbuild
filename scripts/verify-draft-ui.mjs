@@ -273,6 +273,14 @@ try {
   await check('redesign: narrow screenshots stack without scrolling', async page => {
     await markFirstEnemy(page, 'Mark Aatrox as your lane opponent');
     await fs.mkdir(evidenceDir, { recursive: true });
+    // 1268 = the page width inside the default 1280 window (1px edge + 5px
+    // resize inset per side). Both teams must share one row there.
+    for (const width of [1268, 1210]) {
+      await page.setViewport({ width, height: 806 });
+      const [you, enemy] = await page.evaluate(() => ['#d25-you-slot-0', '#d25-enemy-slot-0']
+        .map(id => Math.round(document.querySelector(`${id} .d25-slot`).getBoundingClientRect().top)));
+      assert.equal(enemy, you, `enemy team shares the row with your team at ${width}px`);
+    }
     await page.setViewport({ width: 1280, height: 806 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: path.join(evidenceDir, 'web-draft-1280.png') });
