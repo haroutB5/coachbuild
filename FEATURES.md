@@ -1,4 +1,4 @@
-# CoachBuild — features (desktop 2.3.2, 2026-09-10)
+# CoachBuild — features (desktop 2.5.3, 2026-09-15)
 
 Personal League of Legends coaching companion. **One Windows desktop app.** No
 website, no account, no ads, no tracking, no server, no database. It reads your
@@ -27,6 +27,17 @@ automatically when champ select starts.
 | **u.gg** | the real site — also the source of counters and skill order |
 | **Coachless** | the real site |
 | **MyStats** | op.gg, opened on your own profile |
+
+**The window is CoachBuild's own design (2.5.0).**
+- **Title bar:** the logo, back / forward / refresh, the tabs (the active one
+  wears a gold pill), and minimise / maximise / close. Drag it to move the
+  window, double-click it to maximise, and right-click it for the system menu.
+- **Footer:** "Live setup · Companion {version}".
+- **Edge and resizing:** a thin light edge keeps the dark window visible
+  against a dark desktop. You can resize from every side and every corner
+  (2.5.2; before that, only the corners worked).
+- **Reopening:** the window reopens by itself at every champ select, including
+  right after a short game (2.3.6).
 
 Each tab loads lazily the first time you visit it, and each keeps its own browser
 profile, so a Cloudflare check or a cookie banner you clear on one site stays
@@ -67,18 +78,25 @@ actually up against.
   filling in after you tag one — and the tag clears itself if that champion
   leaves the enemy list. (This was a real bug: tagging at three-of-five enemies
   froze the page, so picks four and five never arrived.)
-- **Counter picks come from u.gg.** For the selected enemy and lane, at World
-  Emerald+ Ranked Solo on the current patch, the strip shows **Best Lane
-  Counters** — the fifteen champions with the largest gold lead at 15 minutes
-  against them — and **Worst Picks**, the ten with the lowest win rate into them.
-  It follows u.gg's own 0.5% matchup pick-rate threshold, and names its source
-  and patch on the card. Results are cached for an hour.
+- **Counter picks come from u.gg.** Mark an enemy as your lane opponent to get
+  **"Counters vs {enemy}"**, using World Emerald+ Ranked Solo data on the
+  current patch. It shows two tables, always in full, with no "Show all":
+  - **Highest lane gold advantage:** the fifteen champions with the largest
+    gold lead at 15 minutes against that enemy.
+  - **Lowest match win rates:** the ten champions with the lowest win rate
+    into that enemy.
+
+  Every row shows its game count. A warning appears when any row rests on
+  fewer than 20 games. The tables follow u.gg's own 0.5% matchup pick-rate
+  threshold and name their source and patch. Results are cached for an hour.
+- **Automatic imports** is a bar under the tables. It shows the three sources
+  (u.gg, Coachless, Pro) and the import status for the current champion.
 - **Your champion pool comes from the client.** Your top 20 champions by mastery,
   read live. In v1 this was approximated from your recorded match history; it is
   now the real thing.
-- **Live setup** is a section at the bottom of the same page: whether the
-  companion is running, whether the client is connected, and what phase you are
-  in. There is no separate pairing page and no pairing step — the app is the
+- **Live setup** is a section at the bottom of the same page, and the footer
+  link jumps straight to it. It shows whether the companion is running,
+  whether the client is connected, and what phase you are in. There is no separate pairing page and no pairing step — the app is the
   companion.
 
 **Limitations, plainly.** The counters list is u.gg's data ranked by u.gg's own
@@ -94,14 +112,18 @@ anywhere else shows an explicit message rather than blank cards.
 
 The counters strip is thousands of strangers' games. This is yours.
 
-**After a ranked game**, the companion window shows a card: *How did your lane
-go?* — your champion against the enemy laner, scored **1 to 10**, where 1 is
-unplayable and 10 is a free lane. There is an optional note ("what decided the
-lane?") and a **Skip this game** button. The card never steals focus and never
-pulls you off a tab you are reading; if you ignore it, the game is saved and the
-card is waiting next time.
+**After a ranked game**, the **Previous game · Review** pill at the top of Draft
+gets a gold dot. It opens a side panel that shows your champion against the
+enemy laner, scored **1 to 10**: 1 is unplayable and 10 is a free lane. The
+panel has an optional note ("what decided the lane?") and a **Skip this game**
+button. Nothing steals focus. If you ignore it, the game stays saved and waits
+for you. Escape closes the panel without scoring.
 
-**In champ select**, once an enemy is selected, a panel appears next to the
+The game is read from the client's own end-of-game results screen, including
+each player's detected position. Capture keeps trying for about a minute
+(2.4.2).
+
+**In champ select**, once an enemy is selected, a panel appears under the
 counters: **"Your lane history vs {Enemy}"**. It lists up to three of your best
 champions into that enemy and up to three of your worst, each with its mean score
 **and the number of your games behind it**. It is labelled unmistakably as your
@@ -110,9 +132,9 @@ own games, so it can never be mistaken for the global data beside it.
 ### How to use it
 
 1. Play a ranked game (solo/duo or flex).
-2. When the game ends, the Research window offers the card. Score the lane, or
-   skip it. If the app could not work out who you laned against, it asks you to
-   tap one of the five enemy champions first.
+2. When the game ends, open **Previous game · Review** in Draft. Score the
+   lane or skip it. If the app could not work out who you laned against, or
+   which role you played, it asks you first.
 3. Next time that champion is on the enemy team in champ select, your history
    with them shows up in Draft.
 
@@ -160,17 +182,25 @@ data out of your real history.
 
 - **Item sets import themselves.** When you hover a champion long enough to look
   deliberate, when you lock in, and again if you move the build page you are
-  looking at, the app fetches both u.gg's and Coachless's item set for your
-  champion and role in the background and writes them into the client **in one
-  go**, so both appear in the shop's set list together as
-  `CoachBuild import: {Champion} {Role} (u.gg)` and `(Coachless)`. It never
+  looking at, the app fetches item sets for your champion and role from
+  **three sources**: u.gg, Coachless and **Pro** (probuildstats.com, 2.4.0).
+  All three are written into the client **in one go**, so they appear in the
+  shop together under plain names like `Galio Mid (u.gg)`,
+  `Galio Mid (Coachless)` and `Galio Mid (Pro)` (2.4.3). The import never
   touches the tab you are reading.
-- **Runes import themselves too — there is no button any more.** Every lock or
-  build-page change writes both source pages into the client, named
-  `u.gg {Champion}` and `Coachless {Champion}` (with the role in brackets when
-  champ select has assigned you one). If only one rune slot is free, u.gg wins.
-  Neither page is selected for you unless a page the app owns was already
-  current.
+- **Runes import themselves too, with no button.** Every lock or build-page
+  change writes one page per source: `u.gg {Champion}`,
+  `Coachless {Champion}` and `Pro build {Champion}`, with the role in brackets
+  when champ select has assigned you one.
+  - The app keeps up to three pages of its own. If slots run short, u.gg wins
+    first, and the log names which sources wrote.
+  - None of them is selected for you unless a page the app owns was already
+    current.
+  - The u.gg and Coachless fetches run in parallel and start on hover. The
+    u.gg page is written the moment it is ready (2.3.5).
+  - Pro is a plain web request that runs alongside them and never holds them
+    up. It picks the most recent pro game on the current patch that uses the
+    most common rune set.
 - **Coachless items are read as the site presents them.** The top-WPA row per
   build slot — starter, first through fifth item (a sixth for ADC), and boots
   after the first full item — with the purchase sequence shown as one Build order
@@ -178,11 +208,18 @@ data out of your real history.
   dims are excluded; a slot the page does not fill is reported as missing rather
   than filled with an invented item.
 - **It never touches anything that is not ours.** The app will not delete or
-  overwrite a rune page or item set it does not own. Ownership is a name prefix:
-  `u.gg `, `Coachless ` or the legacy `CoachBuild`. Applying a rune page by hand
+  overwrite a rune page or item set it does not own.
+  - **Rune pages:** ownership is a name prefix: `u.gg `, `Coachless `,
+    `Pro build ` or the legacy `CoachBuild`. A page of yours called
+    "Pro Yasuo" is not ours.
+  - **Item sets:** ownership is a hidden `coachbuild-` id the client keeps
+    with each set, or the legacy "CoachBuild…" title. That is why the visible
+    names can be plain.
+
+  Applying a rune page by hand
   is the one exception, because a free account has two rune slots and a real
   click is real consent.
-- **Exactly one set per champion and role.** Re-importing replaces it in place
+- **Exactly one set per champion, role and source.** Re-importing replaces it in place
   rather than accumulating. The client stores all your item sets as one document
   that is written whole and rejected whole, so an unbounded pile of old sets is
   not a tidiness problem, it is how every one of your own sets stops saving.
@@ -239,6 +276,8 @@ depending on the champion, and the overlay cannot see the screen to find it.
 
 - Counter picks, builds, runes, item sets and skill order: **u.gg** and
   **coachless.gg**, read as the sites themselves.
+- Pro rune pages and item sets: **probuildstats.com**, the pro-builds site run
+  by u.gg's owner, read over plain HTTP.
 - Champion data and icons: **ddragon** (Riot's public CDN).
 - Your own profile page: **op.gg**.
 - Everything about your own client: the **League Client API** and the in-game
@@ -269,8 +308,10 @@ overlay, the tray and the updater.
 
 **New since 2.0.0:** automatic rune pages from both sites with no button (2.2.0),
 ad blocking on the site tabs (2.2.0), u.gg counters (2.2.4), faster and less
-obstructive updates (2.2.5), skill order restored from u.gg (2.2.7), and **lane
-scores** (2.3.0–2.3.2).
+obstructive updates (2.2.5), skill order restored from u.gg (2.2.7), **lane
+scores** (2.3.0–2.3.2), much faster rune import (2.3.5), updates that restart
+the app on their own (2.3.8), a third import source, **Pro** (2.4.0), plain
+item-set names (2.4.3), and the **redesign** (2.5.0–2.5.3).
 
 **Better:** your champion pool is read from the client instead of estimated; the
 draft page can no longer be a different version from the app it is running in,

@@ -162,8 +162,22 @@ broken config passed it. Mutating `content` to `[]` now fails the test.
   cancellable, 1 h in-process cache bounded at 30 entries. `rankUggCounters`
   (`lib/ugg/counters.ts`) does the ranking; the patch is read off the page title
   and the response is rejected outright if patch or source URL is missing.
+- **Layout (2.5.0 redesign, pixel-matched to the user's mockups).** Every
+  style is scoped under `.d25-*` in `DraftPage.tsx`: the header, the
+  "Previous game · Review" pill, the team strip (role, your team, enemy team,
+  Manual draft / Reset to live), "Counters vs {enemy}" as two table cards
+  (best: gold @15, worst: win rate), a small-sample warning (under 20 games),
+  and the Automatic imports bar (u.gg / Coachless / Pro). **The tables show
+  every row (2.5.2), with no collapse.** Media queries at 1539px (team buttons
+  wrap under the teams, tighter team spacing) and 1199px (stack). The page
+  inside the default 1280 window is only 1268px wide; see the window-chrome
+  section. `scripts/verify-draft-ui.mjs` (`npm run test:ui`) pins the layout
+  in headless Chrome and writes `_evidence/redesign-2.5.0/`.
 - **Lane history / lane scores** via `LaneHistoryPanel` and `LaneScoreCard`
   (2.3.0, below), both talking to the bridge through `desktop/ui/localBridge.ts`.
+  Since 2.5.0 the score card lives in the Previous-game side panel (opened
+  from the pill, which shows a gold dot when a game is waiting). It is no
+  longer inline.
 - **Champion pool** from the bridge's new `/draft/pool`.
 - **Live setup** collapsed into a status section at the bottom of the same page —
   the old `/live-setup` route is gone, and the header link is an in-page anchor.
@@ -527,11 +541,54 @@ Three properties worth not breaking:
 - **Every fetch logs one line**: `skill-order: u.gg {Champ} {role} {Status}; N
   levels, M games`.
 
+## The window chrome (2.5.x)
+
+`Web/WebView2Window.xaml` is borderless: `WindowStyle="None"` + `WindowChrome`
+(CaptionHeight 54, ResizeBorderThickness 6, GlassFrameThickness 0). It has:
+
+- one 54px chrome row: logo, wordmark, back/forward/refresh, tab pills, and
+  46×54 caption buttons
+- a 44px footer: "Live setup · Companion {ver}" plus status text
+
+The gear and "Separate site profiles" were removed in 2.5.2. Four traps only
+showed up on the live window; every render test was green:
+
+1. **Icon glyphs.** App.xaml's implicit `TextBlock` style (Segoe UI) beats an
+   inherited Button FontFamily, so every MDL2 glyph must be a `TextBlock` with
+   a local FontFamily (`IconGlyphFontTests`).
+2. **Side resize.** Over the WebView2 child HWND, Windows asks Chromium to
+   hit-test, and it answers HTCLIENT, so a webview that touches the edge kills
+   resize. `WindowFrame` (1px `WindowEdgeBrush` edge) plus `ContentHost`
+   `Margin="5,0,5,0"` keep the HWND out of the 6px band.
+3. **Top resize.** WindowChrome gives `IsHitTestVisibleInChrome` elements
+   priority over the resize band. The transparent `TopResizeGrip` (6px, last
+   child of the chrome row) sits above the tabs and caption buttons.
+   `UpdateWindowControls` drops the edge, the inset and the grip when the
+   window is maximised, so the caption buttons reach the screen edge.
+   Items 2 and 3 are pinned by
+   `NativeChromeTests.The_resize_band_belongs_to_the_window_on_every_edge`.
+   Use `VisualTreeHelper.HitTest` there, because `InputHitTest` filters on
+   IsVisible and finds nothing off-screen.
+4. **Page width.** The inset makes the default 1280 window a 1268px page.
+   Keep the Draft layout fitting at 1268 (`verify-draft-ui` checks 1268 and
+   1210).
+
+**Verify chrome changes live** (dev box at 200% DPI). `%TEMP%\cb-dragtest.ps1`
+runs a WM_NCHITTEST sweep plus real edge drags; drag outward, because the
+window sits at its minimum size. `%TEMP%\cb-cap2.ps1` takes a PrintWindow
+capture.
+
 ## HARD RULES (do not violate without a new explicit user directive)
 
 1. **Never delete or overwrite an LCU rune page or item set the app does not own.**
-   Rune ownership is `u.gg `, `Coachless ` or legacy `CoachBuild`; item-set
-   ownership remains `CoachBuild`. One legacy carve-out remains: a **manual** rune apply does
+   Rune ownership is `u.gg `, `Coachless `, `Pro build ` (2.4.0, deliberately
+   not `Pro `) or legacy `CoachBuild`; `MaxOwnedPages` = 3.
+   Item-set ownership (2.4.3) is
+   `ApplyPayloadValidation.IsOwnedItemSet`: a `coachbuild-` uid prefix, or a
+   legacy `CoachBuild…` title. Import titles are plain (`Galio Mid (Pro)`,
+   `SiteImport.ItemSetTitle`), and uids are
+   `coachbuild-import-{slug}-{role}-{source}`. The client round-trips uids
+   (verified live 2026-09-12). One legacy carve-out remains: a **manual** rune apply does
    GET → DELETE → POST regardless of title, because a real click is real consent
    and a free account with two rune slots would otherwise have nowhere to put the
    page. The rule is absolute for the automatic path and for item sets.
