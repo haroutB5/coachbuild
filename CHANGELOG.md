@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Next.js 16.3.4 -> 16.3.8 (security patch line; the embedded UI is a static
+  export, so the server-side advisories do not apply). Ships with the next
+  desktop release.
+
 ## Desktop 2.5.3 (2026-09-12)
 
 - At the default window size both teams sit on one row again (2.5.2's new
