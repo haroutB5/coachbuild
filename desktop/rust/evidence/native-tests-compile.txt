@@ -1,0 +1,6 @@
+heavy-job: pid 12876: cpu=BelowNormal io=VeryLow mem=VeryLow :: optimizer coachbuild-core C:/Claude/AI/coachbuild
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+  Executable unittests src\lib.rs (C:\Claude\AI\_wt\coachbuild-rust-core\desktop\rust\coachbuild-core\target\debug\deps\coachbuild_core-df93a9e31bd75a2d.exe)
+  Executable unittests src\main.rs (C:\Claude\AI\_wt\coachbuild-rust-core\desktop\rust\coachbuild-core\target\debug\deps\coachbuild_core-e4e1ff2cc47f3502.exe)
+  Executable tests\merge.rs (C:\Claude\AI\_wt\coachbuild-rust-core\desktop\rust\coachbuild-core\target\debug\deps\merge-368fe8812e33f7e6.exe)
+heavy-job: exit 0 after 0 s :: optimizer coachbuild-core C:/Claude/AI/coachbuild

@@ -1,0 +1,9 @@
+heavy-job: waiting for another heavy job to finish: {"label":"frontend matchday final vitest 020314","pid":28516,"workDir":"C:/Claude/AI/matchday","startedAt":"2026-10-24T15:19:48.2901078+01:00"}
+heavy-job: pid 25124: cpu=BelowNormal io=VeryLow mem=VeryLow :: optimizer coachbuild-core C:/Claude/AI/coachbuild
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:00.89
+heavy-job: exit 0 after 2 s :: optimizer coachbuild-core C:/Claude/AI/coachbuild
