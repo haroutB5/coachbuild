@@ -30,7 +30,7 @@ if ([string]::IsNullOrWhiteSpace($PreviewProject)) {
     $PreviewProject = Join-Path $desktopRoot 'tools\CompanionTabsPreview\CompanionTabsPreview.csproj'
 }
 if ([string]::IsNullOrWhiteSpace($ApplicationPath)) {
-    $ApplicationPath = Join-Path $desktopRoot "src\CoachBuild.Desktop\bin\$Configuration\net8.0-windows\CoachBuild.Desktop.exe"
+    $ApplicationPath = Join-Path $desktopRoot "src\CoachBuild.Desktop\bin\$Configuration\net10.0-windows\CoachBuild.Desktop.exe"
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
@@ -337,7 +337,7 @@ function Invoke-Capture {
     }
     Add-Check 'CompanionTabsPreview project' $true 'uses the production WPF window and a caller-owned temp WebView2 profile'
 
-    $previewDll = Join-Path (Split-Path -Parent $PreviewProject) "bin\$Configuration\net8.0-windows\CompanionTabsPreview.dll"
+    $previewDll = Join-Path (Split-Path -Parent $PreviewProject) "bin\$Configuration\net10.0-windows\CompanionTabsPreview.dll"
     if (-not (Test-Path -LiteralPath $previewDll)) {
         Add-Check 'CompanionTabsPreview output' $false "Preview output not found: $previewDll"
         $risks.Add('Preview output is missing; screenshot capture was skipped.')

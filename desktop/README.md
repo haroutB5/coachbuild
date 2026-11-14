@@ -1,6 +1,6 @@
 # CoachBuild Desktop
 
-CoachBuild Desktop is a per-user .NET 8 WPF host for the parts a browser
+CoachBuild Desktop is a per-user .NET 10 WPF host for the parts a browser
 cannot own: the Windows tray, fullscreen click-through overlay, League/LCU
 polling, loopback bridge, WebView2 windows, and updates. It ships its own local
 Draft page. There is no hosted CoachBuild site or backend.

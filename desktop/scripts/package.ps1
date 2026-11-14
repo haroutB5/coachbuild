@@ -73,8 +73,14 @@ if (-not (Test-Path $bootstrapper)) {
     }
 }
 
+# The app is framework-dependent, so the installer and the updater must make
+# sure the .NET 10 Desktop Runtime is on the PC. Update.exe checks this list
+# before it applies a package and offers to install what is missing; without
+# it, a PC that only has .NET 8 would apply 2.6.0 and then fail to start it.
+$runtimeArch = $Runtime.Split('-')[-1]
 & $Vpk pack `
     --packId CoachBuild.Desktop `
+    --framework "net10.0-$runtimeArch-desktop" `
     --packVersion $Version `
     --packDir $publishDirectory `
     --mainExe CoachBuild.Desktop.exe `

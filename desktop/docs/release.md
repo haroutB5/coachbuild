@@ -2,7 +2,7 @@
 
 ## Release identity
 
-Native releases are .NET 8 Windows x64 per-user packages produced by Velopack.
+Native releases are .NET 10 Windows x64 per-user packages produced by Velopack.
 They are independent of the Electron version and feed. The only native release
 repository is:
 
@@ -15,7 +15,7 @@ machine-wide Program Files install is required.
 
 ## Package
 
-From a Windows machine with the .NET 8 SDK and `vpk` available:
+From a Windows machine with the .NET 10 SDK (pinned in `global.json`) and `vpk` available:
 
 ```powershell
 powershell -File desktop/scripts/package.ps1 -Version 2.3.4

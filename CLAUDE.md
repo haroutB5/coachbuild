@@ -28,7 +28,7 @@ preserved verbatim at **`docs/archive/CLAUDE-v1-web.md`**. Go there to recover a
 ## The shape of the thing
 
 ```
-CoachBuild.Desktop (WPF, net8.0-windows, Velopack-installed, per-user)
+CoachBuild.Desktop (WPF, net10.0-windows, Velopack-installed, per-user)
 ├── tray                     status, reopen, calibrate, quit
 ├── overlay                  in-game skill-order overlay (native, DirectComposition)
 ├── LCU bridge               CompanionHttpServer on 127.0.0.1:{48291,48292,48293}

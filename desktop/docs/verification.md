@@ -1,6 +1,6 @@
 # Desktop verification matrix
 
-The native solution is verified in a Windows environment with the .NET 8 SDK:
+The native solution is verified in a Windows environment with the .NET 10 SDK (pinned in `global.json`):
 
 ```powershell
 dotnet restore desktop/CoachBuild.Desktop.sln
