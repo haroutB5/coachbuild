@@ -1,10 +1,16 @@
 # Changelog
 
-## Unreleased
+## Desktop 2.6.0 (unreleased)
 
+- CoachBuild now runs on .NET 10, the current long-term support release.
+  .NET 8 stopped getting security fixes on 10 November 2026.
+- When this update installs, Windows may ask to install the .NET 10 Desktop
+  Runtime first if the PC does not have it. Say yes: the app needs it to
+  start.
+- Updated the built-in browser component (WebView2 SDK 1.0.4314.35) and the
+  Draft page's libraries, including Next.js 16.4.5 and security fixes.
 - Next.js 16.3.4 -> 16.3.8 (security patch line; the embedded UI is a static
-  export, so the server-side advisories do not apply). Ships with the next
-  desktop release.
+  export, so the server-side advisories do not apply).
 
 ## Desktop 2.5.3 (2026-09-12)
 
