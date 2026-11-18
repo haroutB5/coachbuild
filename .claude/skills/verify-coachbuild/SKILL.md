@@ -1,6 +1,6 @@
 ---
 name: verify-coachbuild
-description: "Builds the real CoachBuild Draft UI (the Next static export the Windows desktop app embeds) from an empty state, loads it in a real browser under the app's own origin, drives the Draft tab's lane-opponent counters and keeps screenshots and a log as proof. Use before committing any change to desktop/ui, components/hextech/draft, components/live, lib/ugg or the counter tables."
+description: "Builds the real CoachBuild Draft UI (the Next static export the Windows desktop app embeds), loads it in a real browser under the app's own origin and drives one journey: live champ select, mark an enemy as the lane opponent (pill and crosshair on that slot only), read the two u.gg counter tables (every row visible), switch to the other enemy. Keeps screenshots and a log as proof. Use before committing a change to the Draft lane-opponent counters: components/hextech/draft/CounterPicksStrip.tsx, the enemy slots in components/hextech/draft/DraftControls.tsx, lib/ugg, desktop/ui/localCounters.ts, the counter styles in desktop/ui/DraftPage.tsx. Does not drive LaneScoreCard, LaneHistoryPanel, laneScoresClient or manual picks, so do not use it to check a change to those."
 ---
 
 # Verify CoachBuild
@@ -25,7 +25,7 @@ VERIFY_WRAP='env -u NODE_ENV bash /home/harout/Claude/AI/dev-team/tools/heavy-jo
 
 It proves the web UI: the export builds, the Draft page renders from the same files the app ships, live champion select data shows as picks, the first visible enemy's counters load with no mark, marking an enemy as the lane opponent adds the pill, switching enemy asks the native u.gg reader for the right slug and lane, and `rankUggCounters` plus `CounterPicksStrip` turn the rows into the two tables (order, flip, pick-rate cut, dedupe, small-sample warning).
 
-It does **not** prove: the WPF shell, the tray, the overlay, the League client bridge (`CompanionHttpServer`), the u.gg page reader, item-set or rune-page writes, Velopack updates, or WebView2 behaviour. Those are the two .NET suites and in-game checks on the gaming PC (`ssh gamingpc`, `desktop/scripts/run-gates.ps1`). The three things outside the page (bridge on `127.0.0.1`, ddragon JSON, `window.chrome.webview`) are fixtures installed by the drive script. Do not use this skill to claim a bridge route, an import or an item-set write works.
+It does **not** prove: the previous-game score card (`LaneScoreCard`), your lane history (`LaneHistoryPanel`), the lane-score client (`components/live/laneScoresClient.ts`) and its `/lane-scores` routes, and manual picks (picking your champion or an enemy by hand, Reset to live). A change to any of those gets a green run that says nothing about it: map them in `features/` and script them first. It also does not prove: the WPF shell, the tray, the overlay, the League client bridge (`CompanionHttpServer`), the u.gg page reader, item-set or rune-page writes, Velopack updates, or WebView2 behaviour. Those are the two .NET suites and in-game checks on the gaming PC (`ssh gamingpc`, `desktop/scripts/run-gates.ps1`). The three things outside the page (bridge on `127.0.0.1`, ddragon JSON, `window.chrome.webview`) are fixtures installed by the drive script. Do not use this skill to claim a bridge route, an import or an item-set write works.
 
 ## Launch
 
@@ -52,6 +52,7 @@ node .claude/skills/verify-coachbuild/scripts/drive-draft-counters.mjs --ui desk
 
 Handles it uses, all from this repo:
 - `[aria-label="Change your champion from Ahri"]` (live own pick), `[aria-label="Mark Aatrox as your lane opponent"]`, `[aria-label="Aatrox is your lane opponent"]`.
+- `.d25-oppbadge` (the crosshair, inside `.d25-slotwrap`), `.d25-slot-laneopp` (highlight), `aria-pressed` on the slot's toggle.
 - `#d25-table-best` and `#d25-table-worst`, each `.d25-trow` with `.d25-cname`, `.d25-val-gold` or `.d25-val-wr`, `.d25-games`; `.d25-badge`, `.d25-warn`.
 - `.d25-chead-title` (`Counters vs Aatrox`), `.d25-pill-laneopp` (`Lane opponent`, present only after a mark), `.d25-meta` (`Patch 16.18`), `.d25-warn`.
 - Champion icons are a 1 px fixture image (ddragon PNGs are stubbed), so portraits show white squares in screenshots.
@@ -66,7 +67,7 @@ The fixture rows are synthetic, one set per enemy and different from each other 
 - `drive.log` (each step, both tables as read, the u.gg requests) and `drive.json` (u.gg requests, bridge calls, lane-score submissions, blocked external requests, page errors).
 - `run.log`, `build.log`, `npm-ci.log`.
 
-Proof standard: the action and the state it caused. The drive clicks the real lane-opponent button and reads what the user sees: each table must be a visible box that nothing covers, and rows are read from visible rows as `innerText`, so a table hidden by CSS fails even though its rows are in the DOM. Visually hidden text is never asserted. It also reads what the page sent outward: the native u.gg request list (slug, lane, enemy id) and the bridge call list, which must hold no POST, PUT or DELETE. Do not set React state or `window.__draftTest` yourself and call that a UI proof.
+Proof standard: the action and the state it caused. The drive clicks the real lane-opponent button and reads what the user sees: each table must be a visible box that nothing covers, and every expected row must lie inside every clipping ancestor (`overflow` hidden, clip, auto, scroll) and be the element the browser hit-tests at its centre, so a table hidden or cut down by CSS fails even though its rows are in the DOM. After each mark the gold crosshair (`.d25-oppbadge`) must render inside the marked enemy slot only, with `aria-pressed` and the highlight agreeing. Visually hidden text is never asserted. It also reads what the page sent outward: the native u.gg request list (slug, lane, enemy id) and the bridge call list, which must hold no POST, PUT or DELETE. Do not set React state or `window.__draftTest` yourself and call that a UI proof.
 
 ## Cleanup
 

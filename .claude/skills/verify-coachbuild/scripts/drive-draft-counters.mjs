@@ -177,15 +177,54 @@ const onTop = (selector) => page.$eval(selector, (el) => {
   const hit = document.elementFromPoint(r.left + r.width / 2, r.top + Math.min(r.height / 2, 60))
   return !!hit && el.contains(hit)
 }).catch(() => false)
-const tableRows = (id) => page.$$eval(`#${id} .d25-trow`, (rs) => rs
-  .filter((r) => r.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && r.getBoundingClientRect().height > 0)
-  .map((r) => [r.querySelector('.d25-cname')?.innerText, r.querySelector('.d25-val-gold,.d25-val-wr')?.innerText, r.querySelector('.d25-games')?.innerText]))
+// Rows are read only when the user can see them. A row inside a table that a parent clips (overflow hidden/clip/auto/scroll)
+// keeps a non-zero box and passes checkVisibility, so two checks run per row: its box must lie inside the box of every clipping
+// ancestor, and what the browser hit-tests at the row's centre must be that row. Neither check scrolls a clipping ancestor
+// (scrollIntoView would scroll an overflow:hidden box and hide the clip). The page itself is scrolled with window.scrollBy.
+// Returns { rows, clipped } with clipped = the rows an ancestor cuts off or something covers, and why.
+const readRows = (id) => page.$$eval(`#${id} .d25-trow`, (rs) => {
+  const rows = [], clipped = []
+  const label = (r) => r.querySelector('.d25-cname')?.innerText ?? '(no name)'
+  for (const r of rs) {
+    if (!r.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) || r.getBoundingClientRect().height <= 0) { clipped.push(`${label(r)}: not rendered`); continue }
+    let b = r.getBoundingClientRect()
+    let why = ''
+    for (let a = r.parentElement; a && a !== document.body && a !== document.documentElement && !why; a = a.parentElement) {
+      const cs = getComputedStyle(a)
+      const yClip = cs.overflowY !== 'visible', xClip = cs.overflowX !== 'visible'
+      if (!yClip && !xClip) continue
+      // A scroller the user can scroll (auto or scroll) is scrolled to the row, as a user would. hidden and clip cannot be scrolled by a user.
+      if (['auto', 'scroll'].includes(cs.overflowY) && a.scrollHeight > a.clientHeight) { const q = a.getBoundingClientRect(); a.scrollTop += (r.getBoundingClientRect().top + b.height / 2) - (q.top + q.height / 2) }
+      const b2 = r.getBoundingClientRect()
+      const c = a.getBoundingClientRect()
+      const box = { top: c.top + a.clientTop, bottom: c.top + a.clientTop + a.clientHeight, left: c.left + a.clientLeft, right: c.left + a.clientLeft + a.clientWidth }
+      if ((yClip && (b2.top < box.top - 1 || b2.bottom > box.bottom + 1)) || (xClip && (b2.left < box.left - 1 || b2.right > box.right + 1))) {
+        why = `cut off by ${a.tagName.toLowerCase()}.${String(a.className).split(' ')[0]} (row ${Math.round(b2.top)} to ${Math.round(b2.bottom)} px, visible ${Math.round(box.top)} to ${Math.round(box.bottom)} px)`
+      }
+    }
+    if (!why) {
+      b = r.getBoundingClientRect()
+      window.scrollBy(0, b.top + b.height / 2 - innerHeight / 2)
+      const n = r.getBoundingClientRect()
+      const hit = document.elementFromPoint(n.left + n.width / 2, n.top + n.height / 2)
+      if (!hit || !r.contains(hit)) why = `covered or off screen at its centre (hit ${hit ? hit.tagName.toLowerCase() + '.' + String(hit.className).split(' ')[0] : 'nothing'})`
+    }
+    if (why) clipped.push(`${label(r)}: ${why}`)
+    else rows.push([r.querySelector('.d25-cname')?.innerText, r.querySelector('.d25-val-gold,.d25-val-wr')?.innerText, r.querySelector('.d25-games')?.innerText])
+  }
+  return { rows, clipped }
+})
+const tableRows = async (id, label, who) => {
+  const { rows, clipped } = await readRows(id)
+  if (clipped.length) await fail(`${clipped.length} row(s) of the "${label}" table for ${who} are not visible to the user: ${clipped.slice(0, 4).join('; ')}`)
+  return rows
+}
 const readTables = async (who, expected) => {
   for (const [id, label] of [['d25-table-best', 'Highest lane gold advantage'], ['d25-table-worst', 'Lowest match win rates']]) {
     await must(() => shown(`#${id}`, 100, 40), `the "${label}" table is not visible to the user for ${who} (hidden, collapsed or zero size)`)
     await must(() => onTop(`#${id}`), `the "${label}" table for ${who} is covered by another element`)
   }
-  const best = await tableRows('d25-table-best'), worst = await tableRows('d25-table-worst')
+  const best = await tableRows('d25-table-best', 'Highest lane gold advantage', who), worst = await tableRows('d25-table-worst', 'Lowest match win rates', who)
   say(`best (${who}) ${JSON.stringify(best)}`)
   say(`worst (${who}) ${JSON.stringify(worst)}`)
   await must(async () => same(best, expected.best), `Highest lane gold advantage rows for ${who} differ from the hand-derived expectation`)
@@ -196,6 +235,35 @@ const readTables = async (who, expected) => {
   await must(async () => warn === expected.warn, expected.warn ? `no visible small-sample warning for ${who} although rows have under 20 games` : `a small-sample warning shows for ${who} although every row has 20 games or more`)
   if (expected.warn) await must(async () => (await page.$eval('.d25-warn', (n) => n.innerText)).includes('Small samples'), 'the small-sample warning has the wrong text')
   await page.$eval('.d25-counters', (n) => n.scrollIntoView({ block: 'start' }))
+}
+// The crosshair on the portrait: after a mark, the gold crosshair badge (.d25-oppbadge) must render inside the marked enemy's
+// slot and nowhere else, and the toggle states must agree (marked pressed, the other not). Read from the rendered page.
+const readSlots = (marked, other) => page.evaluate((marked, other) => {
+  const slotOf = (sel) => document.querySelector(sel)?.closest('.d25-slotwrap') ?? null
+  const markedSlot = slotOf(`[aria-label="${marked} is your lane opponent"]`)
+  const otherSlot = slotOf(`[aria-label="Mark ${other} as your lane opponent"]`)
+  const badges = [...document.querySelectorAll('.d25-oppbadge')].filter((b) => b.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && b.getBoundingClientRect().width >= 12)
+  const inside = (slot, b) => { if (!slot) return false; const s = slot.getBoundingClientRect(), r = b.getBoundingClientRect()
+    return slot.contains(b) && r.left >= s.left - 1 && r.right <= s.right + 1 && r.top >= s.top - 1 && r.bottom <= s.bottom + 1 }
+  return {
+    found: !!markedSlot && !!otherSlot,
+    total: badges.length,
+    inMarked: markedSlot ? badges.filter((b) => inside(markedSlot, b)).length : 0,
+    inOther: otherSlot ? badges.filter((b) => otherSlot.contains(b)).length : 0,
+    markedPressed: markedSlot?.querySelector('button[aria-pressed]')?.getAttribute('aria-pressed') ?? null,
+    otherPressed: otherSlot?.querySelector('button[aria-pressed]')?.getAttribute('aria-pressed') ?? null,
+    markedRing: markedSlot?.querySelector('.d25-slot')?.classList.contains('d25-slot-laneopp') ?? false,
+    otherRing: otherSlot?.querySelector('.d25-slot')?.classList.contains('d25-slot-laneopp') ?? false,
+  }
+}, marked, other)
+const checkCrosshair = async (marked, other) => {
+  const c = await readSlots(marked, other)
+  say(`crosshair after marking ${marked}: ${JSON.stringify(c)}`)
+  await must(async () => c.found, `could not find the ${marked} and ${other} enemy slots`)
+  await must(async () => c.inMarked === 1, `the lane-opponent crosshair is not visible on the ${marked} slot (${c.inMarked} badges inside it)`)
+  await must(async () => c.inOther === 0 && c.total === 1, `the lane-opponent crosshair also shows elsewhere: ${c.inOther} on ${other}, ${c.total} on the page`)
+  await must(async () => c.markedPressed === 'true' && c.otherPressed === 'false', `the lane-opponent toggles disagree: ${marked} aria-pressed=${c.markedPressed}, ${other} aria-pressed=${c.otherPressed}`)
+  await must(async () => c.markedRing && !c.otherRing, `the lane-opponent highlight is on the wrong slot (${marked}: ${c.markedRing}, ${other}: ${c.otherRing})`)
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 
@@ -211,6 +279,7 @@ try {
   await must(() => shown('.d25-chead-title'), 'the "Counters vs Aatrox" heading is not visible')
   await must(async () => !(await page.$('.d25-pill-laneopp')), 'precondition: the Lane opponent pill shows before any mark')
   await must(() => shown('[aria-label="Mark Aatrox as your lane opponent"]'), 'the button to mark Aatrox is not visible')
+  await must(async () => (await readSlots('Aatrox', 'Darius')).total === 0, 'precondition: a lane-opponent crosshair shows before any mark')
   await shot('01-draft-live.png')
 
   stepStart('mark Aatrox as the lane opponent')
@@ -219,6 +288,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.d25-pill-laneopp')?.innerText === 'Lane opponent')
     .catch(() => fail('the Lane opponent pill never appeared next to the heading'))
   await must(() => shown('.d25-pill-laneopp'), 'the Lane opponent pill is not visible')
+  await checkCrosshair('Aatrox', 'Darius')
   await page.waitForSelector('#d25-table-best .d25-trow').catch(() => fail('the counter tables never rendered'))
   await page.waitForFunction(() => document.querySelector('.d25-meta')?.innerText.includes('Patch 16.18')).catch(() => fail('the visible subtitle never showed Patch 16.18'))
   const t = await page.evaluate(() => window.__draftTest)
@@ -244,6 +314,7 @@ try {
   await must(async () => same(t2.counterRequests.map((r) => r.slug), ['aatrox', 'darius']), 'u.gg was not asked for darius after the second mark')
   await must(async () => !!(await page.$('[aria-label="Darius is your lane opponent"]')), 'Darius is not shown as the lane opponent')
   await must(() => shown('.d25-pill-laneopp'), 'the Lane opponent pill is not visible after marking Darius')
+  await checkCrosshair('Darius', 'Aatrox')
   await readTables('Darius', EXPECT.darius)
   await shot('03-counters-darius.png')
 
