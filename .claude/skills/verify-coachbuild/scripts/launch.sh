@@ -3,7 +3,7 @@
 # no .env file, no secrets, no League client, no network at run time. There is no server to start:
 # the app serves desktop/ui/out/ under https://coachbuild.local through a WebView2 virtual host with no
 # server behind it, and the drive script serves the same folder under the same origin.
-# Usage: bash launch.sh        Optional: VERIFY_WRAP='bash /path/heavy-job.sh --label coachbuild-verify --'
+# Usage: bash launch.sh        Optional: VERIFY_WRAP='env -u NODE_ENV bash /path/heavy-job.sh --label coachbuild-verify --'
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)
 S="$ROOT/.scratch/verify-coachbuild"

@@ -18,7 +18,7 @@ It builds, runs the doctor, drives feature 1, copies the evidence, and always cl
 On this team, run the build through the heavy-job gate:
 
 ```bash
-VERIFY_WRAP='bash /home/harout/Claude/AI/dev-team/tools/heavy-job.sh --label coachbuild-verify --' bash .claude/skills/verify-coachbuild/scripts/verify.sh
+VERIFY_WRAP='env -u NODE_ENV bash /home/harout/Claude/AI/dev-team/tools/heavy-job.sh --label coachbuild-verify --' bash .claude/skills/verify-coachbuild/scripts/verify.sh
 ```
 
 ## What this proves and what it does not
@@ -53,10 +53,10 @@ node .claude/skills/verify-coachbuild/scripts/drive-draft-counters.mjs --ui desk
 Handles it uses, all from this repo:
 - `[aria-label="Change your champion from Ahri"]` (live own pick), `[aria-label="Mark Aatrox as your lane opponent"]`, `[aria-label="Aatrox is your lane opponent"]`.
 - `#d25-table-best` and `#d25-table-worst`, each `.d25-trow` with `.d25-cname`, `.d25-val-gold` or `.d25-val-wr`, `.d25-games`; `.d25-badge`, `.d25-warn`.
-- Text `Counters vs Aatrox`, `Lane opponent`, `Patch 16.18`, `Without a mark, counters use the first visible enemy.`
+- `.d25-chead-title` (`Counters vs Aatrox`), `.d25-pill-laneopp` (`Lane opponent`, present only after a mark), `.d25-meta` (`Patch 16.18`), `.d25-warn`.
 - Champion icons are a 1 px fixture image (ddragon PNGs are stubbed), so portraits show white squares in screenshots.
 
-The fixture rows are synthetic and the expected tables are written into the script by hand from the rules in `lib/ugg/counters.ts`, not computed by the app. Other features in `features/` are mapped but not yet scripted. Add a drive script per feature there and call it from `verify.sh`.
+The fixture rows are synthetic, one set per enemy and different from each other (Aatrox ten rows with a small-sample warning, Darius twelve rows without), and the expected tables are written into the script by hand from the rules in `lib/ugg/counters.ts`, not computed by the app. Other features in `features/` are mapped but not yet scripted. Add a drive script per feature there and call it from `verify.sh`.
 
 ## Evidence
 
@@ -66,7 +66,7 @@ The fixture rows are synthetic and the expected tables are written into the scri
 - `drive.log` (each step, both tables as read, the u.gg requests) and `drive.json` (u.gg requests, bridge calls, lane-score submissions, blocked external requests, page errors).
 - `run.log`, `build.log`, `npm-ci.log`.
 
-Proof standard: the action and the state it caused. The drive clicks the real lane-opponent button, reads the tables from the DOM, and also reads what the page sent outward: the native u.gg request list (slug, lane, enemy id) and the bridge call list, which must hold no POST, PUT or DELETE. Do not set React state or `window.__draftTest` yourself and call that a UI proof.
+Proof standard: the action and the state it caused. The drive clicks the real lane-opponent button and reads what the user sees: each table must be a visible box that nothing covers, and rows are read from visible rows as `innerText`, so a table hidden by CSS fails even though its rows are in the DOM. Visually hidden text is never asserted. It also reads what the page sent outward: the native u.gg request list (slug, lane, enemy id) and the bridge call list, which must hold no POST, PUT or DELETE. Do not set React state or `window.__draftTest` yourself and call that a UI proof.
 
 ## Cleanup
 

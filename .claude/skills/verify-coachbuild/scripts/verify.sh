@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One command: launch, doctor, drive feature 1, keep evidence, always clean up.
 # Usage: bash verify.sh            Exit 0 = PASS, 1 = the feature failed, 2 = launch or doctor failed.
-# Optional: VERIFY_WRAP='bash /path/heavy-job.sh --label coachbuild-verify --' for the npm and build steps.
+# Optional: VERIFY_WRAP='env -u NODE_ENV bash /path/heavy-job.sh --label coachbuild-verify --' for the npm and build steps.
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$HERE/../../../.." && pwd)
