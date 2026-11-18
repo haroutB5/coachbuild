@@ -79,7 +79,7 @@ page.on('request', (request) => {
 })
 // Everything outside the page: bridge, ddragon json, native u.gg reader. Installed before any app script runs.
 await page.evaluateOnNewDocument((roster, rows, initial) => {
-  const state = window.__draftTest = { connected: true, pending: null, submissions: [], counterRequests: [], bridgeCalls: [], ...initial }
+  const state = window.__draftTest = { connected: true, pending: null, submissions: [], counterRequests: [], counterReplies: 0, bridgeCalls: [], ...initial }
   localStorage.setItem('coachbuild:companion:port', '48291')
   const originalFetch = window.fetch
   window.fetch = async (input, init) => {
@@ -105,7 +105,7 @@ await page.evaluateOnNewDocument((roster, rows, initial) => {
     postMessage: (request) => {
       if (request.type !== 'ugg-counters') return
       state.counterRequests.push({ slug: request.slug, lane: request.lane, enemy: request.enemy })
-      setTimeout(() => listeners.forEach((l) => l({ data: { type: 'ugg-counters-result', id: request.id, patch: '16.18', sourceUrl: `https://u.gg/lol/champions/${request.slug}/counter`, rows } })), 25)
+      setTimeout(() => { state.counterReplies++; listeners.forEach((l) => l({ data: { type: 'ugg-counters-result', id: request.id, patch: '16.18', sourceUrl: `https://u.gg/lol/champions/${request.slug}/counter`, rows } })) }, 25)
     },
   }
 }, roster, rows, LIVE)
@@ -170,12 +170,19 @@ try {
   stepStart('mark Darius, the matchup changes and u.gg is asked again')
   await page.click('[aria-label="Mark Darius as your lane opponent"]')
   await waitText('Counters vs Darius')
-  await page.waitForSelector('#d25-table-best .d25-trow')
+  // The heading and subtitle switch to Darius at once, over the previous matchup's rows, and the page drops the tables for a
+  // moment ("Loading u.gg matchups") before it renders the reply. Request count alone races that: wait for the second reply
+  // to have been delivered (it is sent 25 ms after the request, well after the loading render) and for the tables to be back.
+  await page.waitForFunction(() => window.__draftTest.counterReplies === 2 && !document.querySelector('.d25-loading')
+    && document.querySelector('#d25-table-best .d25-tsub')?.textContent.includes('Vs Darius') && document.querySelector('#d25-table-best .d25-trow'))
+    .catch(() => fail('the tables never came back for the Vs Darius matchup'))
   const t2 = await page.evaluate(() => window.__draftTest)
   say(`counter requests: ${JSON.stringify(t2.counterRequests)}`)
   await must(async () => same(t2.counterRequests.map((r) => r.slug), ['aatrox', 'darius']), 'u.gg was not asked for darius after the second mark')
   await must(async () => !!(await page.$('[aria-label="Darius is your lane opponent"]')), 'Darius is not shown as the lane opponent')
-  await must(async () => same(await tableRows('d25-table-best'), EXPECT_BEST), 'tables for Darius differ from the expectation')
+  const bestD = await tableRows('d25-table-best')
+  say(`best (Darius) ${JSON.stringify(bestD)}`)
+  await must(async () => same(bestD, EXPECT_BEST), 'tables for Darius differ from the expectation')
   await shot('03-counters-darius.png')
 
   stepStart('side effects: nothing written to the League client, no stray network, no page errors')
