@@ -72,3 +72,6 @@ scripts/.bench-*.png
 
 # Response cache for scripts/sweep-forthisgame.mts (production /api/build bodies)
 scripts/.sweep-*.json
+
+# verification skill scratch (evidence, logs, browser profile)
+.scratch/
