@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Dependency and security update (26 Nov 2026), embedded UI only: Next.js
+  16.4.3 -> 16.4.6 (clears the Next advisory that now stops `next build`),
+  React 19.3.1, zod and minimatch advisories fixed (`npm audit` 0, was 3 high
+  and 11 moderate, all build or test tooling), Vitest 5.1, TypeScript 6.0.3,
+  Tailwind 3.4.19, PostCSS 8.5.33. Ships with the next desktop release. Not
+  done here (needs the Windows PC): the NuGet packages and the move off
+  .NET 8, which reached end of support on 10 Nov 2026.
 - Next.js 16.3.4 -> 16.3.8 (security patch line; the embedded UI is a static
   export, so the server-side advisories do not apply). Ships with the next
   desktop release.
